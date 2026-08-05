@@ -15,9 +15,14 @@
         <Platforms>AnyCPU</Platforms>
         <Configurations>Debug;Release;DebugWithLuaJIT</Configurations>
     </PropertyGroup>
-    <PropertyGroup Condition=" '$(OS)' != 'Windows_NT' ">
-        <TargetFrameworks>netstandard1.4;netstandard2.0;netcoreapp2.1;netcoreapp2.2</TargetFrameworks>
-    </PropertyGroup>
+    <!-- Здесь было условие '$(OS)' != 'Windows_NT', подменявшее TargetFramework
+         на netstandard1.4;netstandard2.0;netcoreapp2.1;netcoreapp2.2. Это
+         наследство исходной библиотеки progaudi/msgpack.spec, где такая матрица
+         собиралась на Linux-CI. При вендоринге условие осталось и ломало сборку
+         везде, кроме Windows: net10.0 в списке нет, поэтому ссылающийся
+         Platform.Network не находил цель, а снятые с поддержки netcoreapp2.x
+         тянули пакеты с известными уязвимостями. На Windows поведение не
+         меняется — там и раньше собиралась net10.0 из TargetFramework выше. -->
     <PropertyGroup>
         <Version>1.0.0</Version>
 
