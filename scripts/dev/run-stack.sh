@@ -50,7 +50,13 @@ Cleanup() {
     done
     wait 2>/dev/null || true
 }
-trap Cleanup EXIT INT TERM
+
+# DETACH=1 — серверы остаются работать после выхода скрипта. Нужно для
+# автоматических прогонов, где оболочка завершается сразу и по обычному
+# сценарию утащила бы связку за собой. Останавливать тогда через stop-stack.sh.
+if [[ "${DETACH:-0}" != "1" ]]; then
+    trap Cleanup EXIT INT TERM
+fi
 
 # Ждёт, пока порт начнёт принимать соединения. Без этого следующий сервер
 # стартует раньше зависимости и уходит в цикл переподключений.
@@ -68,14 +74,40 @@ WaitForPort() {
     echo "  ✓ ${name} слушает ${port} (${waited} с)"
 }
 
+# Запускает процесс, перенаправив вывод в лог.
+#
+# В отвязанном режиме процесс уходит в новый сеанс, иначе он остаётся в группе
+# процессов скрипта и погибает вместе с оболочкой, из которой тот запущен.
+# setsid в macOS нет, поэтому новый сеанс заводится через start_new_session в
+# Python — он есть в системе по умолчанию.
+Spawn() {
+    local log="$1"
+    shift
+    if [[ "${DETACH:-0}" == "1" ]]; then
+        python3 -c '
+import subprocess, sys
+with open(sys.argv[1], "w") as log:
+    subprocess.Popen(sys.argv[2:], stdout=log, stderr=subprocess.STDOUT,
+                     stdin=subprocess.DEVNULL, start_new_session=True)
+' "${log}" "$@"
+    else
+        "$@" >"${log}" 2>&1 &
+        pids+=("$!")
+    fi
+}
+
 StartDotnet() {
     local name="$1" project="$2" port="$3"
     echo "→ ${name}"
-    # --no-build обязателен: иначе dotnet run сперва компилирует, и ожидание
-    # порта истекает на сборке, а не на запуске. Сборка — отдельный шаг ниже.
-    "${DOTNET}" run --project "${REPO_ROOT}/${project}" --configuration Release --no-build \
-        >"${LOG_DIR}/${name}.log" 2>&1 &
-    pids+=("$!")
+    # Запуск собранной сборки напрямую, а не через dotnet run: тот добавляет
+    # процесс-обёртку, вместе с которой сервер уходит при закрытии оболочки.
+    # Сборка — отдельный шаг ниже.
+    local dll="${REPO_ROOT}/${project}/bin/Release/net10.0/$(basename "${project}").dll"
+    if [[ ! -f "${dll}" ]]; then
+        echo "  ✗ ${name}: не собрано — ${dll}"
+        return 1
+    fi
+    Spawn "${LOG_DIR}/${name}.log" "${DOTNET}" "${dll}"
     WaitForPort "${name}" "${port}"
 }
 
@@ -102,14 +134,20 @@ StartDotnet Account sources/Dotnet/Servers/Account/Corsairs.AccountServer 1978
 StartDotnet Group   sources/Dotnet/Servers/Group/Corsairs.GroupServer     1975
 StartDotnet Gate    sources/Dotnet/Servers/Gate/Corsairs.GateServer       1973
 
+# GameServer ищет конфигурацию, ресурсы и gamedata.sqlite по путям
+# относительно текущего каталога, поэтому запускается из своего рабочего.
 echo "→ GameServer"
-(
-    cd "${REPO_ROOT}/server/GameServer"
-    exec "${REPO_ROOT}/sources/Server/GameServer/build-posix/GameServer"
-) >"${LOG_DIR}/GameServer.log" 2>&1 &
-pids+=("$!")
+pushd "${REPO_ROOT}/server/GameServer" >/dev/null
+Spawn "${LOG_DIR}/GameServer.log" "${REPO_ROOT}/sources/Server/GameServer/build-posix/GameServer"
+popd >/dev/null
 
 echo ""
 echo "Связка поднята. Клиентский порт: 1973. Логи: ${LOG_DIR}"
+
+if [[ "${DETACH:-0}" == "1" ]]; then
+    echo "Отвязанный режим. Остановить: ./scripts/dev/stop-stack.sh"
+    exit 0
+fi
+
 echo "Ctrl+C — остановить."
 wait
