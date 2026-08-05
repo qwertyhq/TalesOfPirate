@@ -80,9 +80,14 @@ def EditorIsOpen() -> bool:
         return False
 
     for line in output.splitlines():
-        if "UnrealEditor-Cmd" in line:
+        parts = line.split(None, 1)
+        if len(parts) < 2:
             continue
-        if "UnrealEditor" in line:
+        binary = os.path.basename(parts[1].split()[0])
+        # Совпадение по точному имени двоичного файла. Поиск по подстроке
+        # ловил и UnrealEditor-Cmd, под которым идёт сам скрипт, и системную
+        # службу UnrealEditorServices, живущую независимо от редактора.
+        if binary == "UnrealEditor":
             return True
     return False
 
