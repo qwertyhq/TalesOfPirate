@@ -5,6 +5,9 @@
 #include "Corsairs/Tools/AssetConverter/LabParser.h"
 #include "Corsairs/Tools/AssetConverter/LgoParser.h"
 #include "Corsairs/Tools/AssetConverter/LmoParser.h"
+#include "Corsairs/Tools/AssetConverter/MapParser.h"
+#include "Corsairs/Tools/AssetConverter/MapWriter.h"
+#include "Corsairs/Tools/AssetConverter/SceneObjParser.h"
 
 #include <cctype>
 #include <filesystem>
@@ -27,6 +30,73 @@ void PrintUsage() {
         "  .lab — скелет и анимационная дорожка.\n"
         "Результат сохраняется с той же относительной структурой каталогов.\n"
         "Код возврата: 0 — все файлы обработаны, 1 — есть ошибки, 2 — неверные аргументы.\n";
+}
+
+// Конвертирует террейн .map в набор сырых карт плюс метаданные.
+bool ConvertTerrain(const std::filesystem::path& input, const std::filesystem::path& output,
+                    std::string_view relative, AC::ConversionReport& report) {
+    const auto bytes = AC::ReadWholeFile(input);
+    if (!bytes) {
+        report.AddFailure(relative, "FILE_READ_FAILED", "файл не открылся");
+        return false;
+    }
+
+    AC::MapDiagnostics diag;
+    const auto terrain = AC::ParseMap(*bytes, diag);
+    if (!terrain) {
+        report.AddFailure(relative, AC::ToString(diag.Status), diag.Detail);
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(output.parent_path(), ec);
+    if (ec) {
+        report.AddFailure(relative, "OUTPUT_DIR_FAILED", ec.message());
+        return false;
+    }
+
+    std::string detail;
+    if (AC::WriteTerrain(*terrain, output, detail) != AC::MapWriteStatus::OK) {
+        report.AddFailure(relative, "WRITE_FAILED", detail);
+        return false;
+    }
+
+    report.AddSuccess(relative, AC::ToString(diag.Status));
+    return true;
+}
+
+// Конвертирует объекты сцены .obj в JSON-манифест.
+bool ConvertSceneObjects(const std::filesystem::path& input,
+                         const std::filesystem::path& output,
+                         std::string_view relative, AC::ConversionReport& report) {
+    const auto bytes = AC::ReadWholeFile(input);
+    if (!bytes) {
+        report.AddFailure(relative, "FILE_READ_FAILED", "файл не открылся");
+        return false;
+    }
+
+    AC::SceneObjDiagnostics diag;
+    const auto scene = AC::ParseSceneObj(*bytes, diag);
+    if (!scene) {
+        report.AddFailure(relative, AC::ToString(diag.Status), diag.Detail);
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(output.parent_path(), ec);
+    if (ec) {
+        report.AddFailure(relative, "OUTPUT_DIR_FAILED", ec.message());
+        return false;
+    }
+
+    std::string detail;
+    if (AC::WriteSceneManifest(*scene, output, detail) != AC::MapWriteStatus::OK) {
+        report.AddFailure(relative, "WRITE_FAILED", detail);
+        return false;
+    }
+
+    report.AddSuccess(relative, AC::ToString(diag.Status));
+    return true;
 }
 
 // Конвертирует один .lmo — модель из нескольких геометрических объектов.
@@ -200,23 +270,41 @@ int main(int argc, char** argv) {
         const bool isGeometry = extension == ".lgo";
         const bool isAnimation = extension == ".lab";
         const bool isModel = extension == ".lmo";
-        if (!isGeometry && !isAnimation && !isModel) {
+        const bool isTerrain = extension == ".map";
+        const bool isSceneObjects = extension == ".obj";
+        if (!isGeometry && !isAnimation && !isModel && !isTerrain && !isSceneObjects) {
             continue;
         }
 
         const std::filesystem::path relative =
             std::filesystem::relative(entry.path(), inputRoot);
+        const std::string relativeText = relative.generic_string();
+
+        // Террейн и объекты сцены пишутся набором файлов с суффиксами, поэтому
+        // им передаётся путь без расширения.
+        if (isTerrain || isSceneObjects) {
+            std::filesystem::path base = outputRoot / relative;
+            base.replace_extension();
+            if (isTerrain) {
+                ConvertTerrain(entry.path(), base, relativeText, report);
+            }
+            else {
+                ConvertSceneObjects(entry.path(), base, relativeText, report);
+            }
+            continue;
+        }
+
         std::filesystem::path output = outputRoot / relative;
         output.replace_extension(".gltf");
 
         if (isGeometry) {
-            ConvertOne(entry.path(), output, relative.generic_string(), report);
+            ConvertOne(entry.path(), output, relativeText, report);
         }
         else if (isModel) {
-            ConvertModel(entry.path(), output, relative.generic_string(), report);
+            ConvertModel(entry.path(), output, relativeText, report);
         }
         else {
-            ConvertAnimation(entry.path(), output, relative.generic_string(), report);
+            ConvertAnimation(entry.path(), output, relativeText, report);
         }
     }
 

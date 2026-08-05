@@ -12,6 +12,9 @@ add_library(AssetConverterLib STATIC
     src/LgoParser.cpp
     src/LabParser.cpp
     src/LmoParser.cpp
+    src/MapParser.cpp
+    src/SceneObjParser.cpp
+    src/MapWriter.cpp
     src/JsonWriter.cpp
     src/GltfWriter.cpp
     src/GltfSkeletonWriter.cpp
@@ -41,6 +44,7 @@ add_executable(AssetConverterTests
     tests/TestLabParser.cpp
     tests/TestGltfSkeletonWriter.cpp
     tests/TestLmoParser.cpp
+    tests/TestMapParser.cpp
 )
 target_link_libraries(AssetConverterTests PRIVATE AssetConverterLib)
 target_include_directories(AssetConverterTests PRIVATE tests)
