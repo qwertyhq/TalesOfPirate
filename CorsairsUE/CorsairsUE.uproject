@@ -2,7 +2,7 @@
 	"FileVersion": 3,
 	"EngineAssociation": "5.8",
 	"Category": "",
-	"Description": "Клиент Tales of Pirate на Unreal Engine",
+	"Description": "Tales of Pirate client on Unreal Engine",
 	"Modules": [
 		{
 			"Name": "CorsairsNet",
@@ -32,7 +32,12 @@
 		},
 		{
 			"Name": "InterchangeEditor",
-			"Enabled": true
+			"Enabled": true,
+			"SupportedTargetPlatforms": [
+				"Win64",
+				"Linux",
+				"Mac"
+			]
 		},
 		{
 			"Name": "EnhancedInput",

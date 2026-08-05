@@ -17,7 +17,30 @@ public class CorsairsNet : ModuleRules
 		// проявилось бы как рассинхрон раскладки байтов в рантайме.
 		string LibrariesRoot = Path.GetFullPath(
 			Path.Combine(ModuleDirectory, "..", "..", "..", "sources", "Libraries"));
+		// Только корень: добавлять сюда CorsairsNet/include нельзя. Там лежит
+		// свой CorsairsNet.h, который перекрыл бы одноимённый публичный
+		// заголовок этого модуля и заодно втянул бы транспорт на сырых сокетах.
+		// По той же причине все включения идут полным путём от корня:
+		// Packet.h в короткой форме разрешался в чужой заголовок движка.
 		PublicIncludePaths.Add(LibrariesRoot);
+
+		// Реализации из sources/Libraries включают свои заголовки короткими
+		// именами ("Packet.h", "Crypto/Blake2s.h"), поэтому их каталоги нужны
+		// на приватном пути. Наружу они не отдаются: публичные заголовки этого
+		// модуля включают всё полным путём от корня Libraries.
+		//
+		// Публичный заголовок модуля называется CorsairsNetModule.h, а не
+		// CorsairsNet.h: последний есть и в библиотеке, и совпадение имён
+		// приводило к тому, что вместо нашего подключался её заголовок,
+		// втягивая транспорт на сырых сокетах.
+		PrivateIncludePaths.Add(Path.Combine(LibrariesRoot, "CorsairsNet", "include"));
+		PrivateIncludePaths.Add(Path.Combine(LibrariesRoot, "common", "src"));
+
+		// Реализации протокола втягиваются тонкими файлами Private/Protocol_*.cpp и
+		// Private/Mpack_*.cpp — каждый включает один .cpp из sources/Libraries.
+		// Порознь, потому что собранные в одну единицу трансляции исходники mpack
+		// конфликтуют на MPACK_EMIT_INLINE_DEFS.
+		
 
 		// CommandMessages.h бросает исключения при разборе испорченных пакетов.
 		// В модулях UE исключения выключены по умолчанию, поэтому включаем их

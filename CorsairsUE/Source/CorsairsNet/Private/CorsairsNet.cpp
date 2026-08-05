@@ -1,4 +1,4 @@
-#include "CorsairsNet.h"
+#include "CorsairsNetModule.h"
 
 #include "Modules/ModuleManager.h"
 #include "ProtocolBridge.h"
