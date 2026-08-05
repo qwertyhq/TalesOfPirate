@@ -77,6 +77,121 @@ bool ParseMaterialBlock(BinaryReader& reader, std::uint32_t mtlSize,
     return true;
 }
 
+// Читает vector<T> длиной count. false — данные за границей буфера.
+template <typename T>
+bool ReadVector(BinaryReader& reader, std::vector<T>& out, std::uint32_t count) {
+    if (count == 0) {
+        return true;
+    }
+    out.resize(count);
+    return reader.ReadArray(out.data(), count);
+}
+
+// Разбирает блок геометрии для version >= 0x1004 и проверяет, что потрачено
+// ровно meshSize байт. Порядок массивов задан LgoLoader::LoadMeshInfo
+// (sources/Engine/Asset/AssetLoaders.cpp) и обязателен к соблюдению.
+bool ParseMeshBlock(BinaryReader& reader, std::uint32_t meshSize, LgoMesh& mesh,
+                    LgoDiagnostics& diag) {
+    const std::size_t blockStart = reader.Offset();
+
+    if (!reader.Read(mesh.Header)) {
+        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+        diag.Detail = "не прочитан MeshInfoHeader";
+        return false;
+    }
+
+    const std::uint32_t vertexNum = mesh.Header.VertexNum;
+
+    if (!ReadVector(reader, mesh.VertexElements, mesh.Header.VertexElementNum)) {
+        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+        diag.Detail = "не прочитан VertexElements";
+        return false;
+    }
+
+    if (!ReadVector(reader, mesh.Positions, vertexNum)) {
+        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+        diag.Detail = "не прочитаны позиции вершин";
+        return false;
+    }
+
+    if (HasFvf(mesh.Header.Fvf, FvfFlag::NORMAL)) {
+        if (!ReadVector(reader, mesh.Normals, vertexNum)) {
+            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+            diag.Detail = "не прочитаны нормали";
+            return false;
+        }
+    }
+
+    // Порядок проверок повторяет цепочку if/else if движка: TEX1 проверяется
+    // первым, поэтому набор с четырьмя UV имеет флаг TEX4 и не совпадает с TEX1.
+    std::uint32_t texcoordSets = 0;
+    if (HasFvf(mesh.Header.Fvf, FvfFlag::TEX1)) {
+        texcoordSets = 1;
+    }
+    else if (HasFvf(mesh.Header.Fvf, FvfFlag::TEX2)) {
+        texcoordSets = 2;
+    }
+    else if (HasFvf(mesh.Header.Fvf, FvfFlag::TEX3)) {
+        texcoordSets = 3;
+    }
+    else if (HasFvf(mesh.Header.Fvf, FvfFlag::TEX4)) {
+        texcoordSets = 4;
+    }
+
+    for (std::uint32_t set = 0; set < texcoordSets; ++set) {
+        if (!ReadVector(reader, mesh.Texcoords[set], vertexNum)) {
+            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+            diag.Detail = std::format("не прочитан UV-набор {}", set);
+            return false;
+        }
+    }
+
+    if (HasFvf(mesh.Header.Fvf, FvfFlag::DIFFUSE)) {
+        if (!ReadVector(reader, mesh.VertexColors, vertexNum)) {
+            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+            diag.Detail = "не прочитаны цвета вершин";
+            return false;
+        }
+    }
+
+    if (mesh.Header.BoneIndexNum > 0) {
+        if (!ReadVector(reader, mesh.Blends, vertexNum)) {
+            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+            diag.Detail = "не прочитаны веса скиннинга";
+            return false;
+        }
+        if (!ReadVector(reader, mesh.BoneIndices, mesh.Header.BoneIndexNum)) {
+            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+            diag.Detail = "не прочитаны индексы костей";
+            return false;
+        }
+    }
+
+    if (!ReadVector(reader, mesh.Indices, mesh.Header.IndexNum)) {
+        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+        diag.Detail = "не прочитан индексный буфер";
+        return false;
+    }
+
+    if (!ReadVector(reader, mesh.Subsets, mesh.Header.SubsetNum)) {
+        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+        diag.Detail = "не прочитаны подсеты";
+        return false;
+    }
+
+    const std::size_t consumed = reader.Offset() - blockStart;
+    if (consumed != meshSize) {
+        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+        diag.Detail = std::format(
+            "прочитано {} байт, заголовок объявил MeshSize={} (fvf=0x{:08X}, "
+            "vertexNum={}, indexNum={}, subsetNum={}, boneIndexNum={})",
+            consumed, meshSize, mesh.Header.Fvf, mesh.Header.VertexNum,
+            mesh.Header.IndexNum, mesh.Header.SubsetNum, mesh.Header.BoneIndexNum);
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 std::optional<LgoGeomObj> ParseLgo(std::span<const std::uint8_t> bytes,
@@ -136,12 +251,10 @@ std::optional<LgoGeomObj> ParseLgo(std::span<const std::uint8_t> bytes,
         }
     }
 
-    // Блок геометрии наполняется в Task 4; пока пропускается по объявленному
-    // размеру, чтобы проверка целостности файла работала уже сейчас.
-    if (obj.Header.MeshSize > 0 && !reader.Skip(obj.Header.MeshSize)) {
-        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-        diag.Detail = "блок геометрии выходит за границы файла";
-        return std::nullopt;
+    if (obj.Header.MeshSize > 0) {
+        if (!ParseMeshBlock(reader, obj.Header.MeshSize, obj.Mesh, diag)) {
+            return std::nullopt;
+        }
     }
 
     if (obj.Header.HelperSize > 0 && !reader.Skip(obj.Header.HelperSize)) {

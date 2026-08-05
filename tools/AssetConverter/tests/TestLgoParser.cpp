@@ -107,4 +107,70 @@ CORSAIRS_TEST(LgoParser_RejectsBlockSizesLargerThanFile) {
                static_cast<std::uint32_t>(AC::LgoStatus::BLOCK_SIZES_INCONSISTENT));
 }
 
+CORSAIRS_TEST(LgoParser_ParsesMeshBlockOfRealFile) {
+    const auto bytes = AC::ReadWholeFile(SampleLgoPath());
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+
+    const AC::LgoMesh& mesh = obj->Mesh;
+    REQUIRE(mesh.Header.VertexNum > 0u);
+    REQUIRE(mesh.Header.IndexNum > 0u);
+    REQUIRE(mesh.Header.SubsetNum > 0u);
+
+    REQUIRE_EQ(mesh.Positions.size(), static_cast<std::size_t>(mesh.Header.VertexNum));
+    REQUIRE_EQ(mesh.Indices.size(), static_cast<std::size_t>(mesh.Header.IndexNum));
+    REQUIRE_EQ(mesh.Subsets.size(), static_cast<std::size_t>(mesh.Header.SubsetNum));
+}
+
+CORSAIRS_TEST(LgoParser_MeshNormalsPresentWhenFvfSaysSo) {
+    const auto bytes = AC::ReadWholeFile(SampleLgoPath());
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+
+    const AC::LgoMesh& mesh = obj->Mesh;
+    if (AC::HasFvf(mesh.Header.Fvf, AC::FvfFlag::NORMAL)) {
+        REQUIRE_EQ(mesh.Normals.size(), static_cast<std::size_t>(mesh.Header.VertexNum));
+    }
+    else {
+        REQUIRE(mesh.Normals.empty());
+    }
+}
+
+CORSAIRS_TEST(LgoParser_MeshIndicesStayInVertexRange) {
+    const auto bytes = AC::ReadWholeFile(SampleLgoPath());
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+
+    const AC::LgoMesh& mesh = obj->Mesh;
+    for (std::uint32_t index : mesh.Indices) {
+        REQUIRE(index < mesh.Header.VertexNum);
+    }
+}
+
+CORSAIRS_TEST(LgoParser_SubsetsCoverIndexBuffer) {
+    const auto bytes = AC::ReadWholeFile(SampleLgoPath());
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+
+    const AC::LgoMesh& mesh = obj->Mesh;
+    for (const AC::SubsetInfo& subset : mesh.Subsets) {
+        const std::uint64_t last =
+            static_cast<std::uint64_t>(subset.StartIndex) +
+            static_cast<std::uint64_t>(subset.PrimitiveNum) * 3ull;
+        REQUIRE(last <= static_cast<std::uint64_t>(mesh.Header.IndexNum));
+    }
+}
+
 } // namespace
