@@ -1211,12 +1211,36 @@ bool CTableBoat::ReadCabin(CCharacter& Boat) {
 bool CGameDB::Init() {
 	m_bInitOK = false;
 
-	static const char* s_szDsn =
-		"DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=gamedb;Trusted_Connection=Yes;";
-	ToLogService("db", "Connecting database [{}]...", s_szDsn);
+	// Строка подключения собирается из конфигурации, а не захардкожена.
+	//
+	// Раньше здесь стояло
+	//   DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=gamedb;
+	//   Trusted_Connection=Yes;
+	// то есть секция [Database] конфига читалась, но не использовалась вовсе, а
+	// аутентификация шла через Windows-логин. Вне Windows такой способ не
+	// работает в принципе: Trusted_Connection опирается на SSPI.
+	//
+	// Имя драйвера тоже вынесено в конфиг (`db_driver`): на Windows это
+	// «ODBC Driver 17 for SQL Server», на macOS и Linux Microsoft поставляет
+	// «ODBC Driver 18 for SQL Server». Восемнадцатый по умолчанию требует
+	// шифрования и доверенного сертификата, поэтому для локальной разработки
+	// добавляются TrustServerCertificate=Yes и Encrypt=Optional.
+	const std::string dsn = std::format(
+		"DRIVER={{{}}};SERVER={};DATABASE={};UID={};PWD={};"
+		"TrustServerCertificate=Yes;Encrypt=Optional;",
+		g_Config.m_szDBDriver,
+		g_Config.m_szDBIP,
+		g_Config.m_szDBName,
+		g_Config.m_szDBUsr,
+		g_Config.m_szDBPass);
+
+	// Пароль в лог не пишем.
+	ToLogService("db", "Connecting database [{}@{}/{}] via [{}]...",
+				 g_Config.m_szDBUsr, g_Config.m_szDBIP, g_Config.m_szDBName,
+				 g_Config.m_szDBDriver);
 
 	try {
-		_db.Open(s_szDsn);
+		_db.Open(dsn.c_str());
 		ToLogService("db", "Corsairs::Util::OdbcDatabase connected");
 	}
 	catch (const Corsairs::Util::OdbcException& e) {

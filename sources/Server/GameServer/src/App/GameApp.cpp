@@ -346,6 +346,14 @@ const char* GetResPath(const char* pszRes) {
 		str += "/";
 	}
 	str += pszRes;
+
+	// Единая точка нормализации разделителей. Вызывающие передают пути с
+	// обратными слэшами ("script\\calculate\\skilleffect.lua") — наследие
+	// Windows. Вне Windows обратный слэш это обычный символ имени файла, и
+	// открытие такого пути молча не находит файл: именно так терялись
+	// Lua-скрипты (hook.lua, exp_and_level.lua).
+	str = Corsairs::Util::NormalizePath(str);
+
 	strcpy(g_szTableName, str.c_str());
 	return g_szTableName;
 }

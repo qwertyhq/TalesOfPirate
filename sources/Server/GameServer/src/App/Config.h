@@ -69,6 +69,10 @@ public:
 	std::vector<std::string> m_fogOfWarMaps; // [Large map switch].fog_maps — карты с fog-of-war
 	char m_szEqument[MAX_MAPNAME_LENGTH]; //
 	char m_szName[64]; //
+	// Имя ODBC-драйвера. На Windows «ODBC Driver 17 for SQL Server»,
+	// на macOS и Linux Microsoft поставляет 18-й. Задаётся ключом
+	// db_driver в секции [Database].
+	char m_szDBDriver[64];
 	char m_szDBIP[64]; // DB IP
 	char m_szDBUsr[32]; // DB
 	char m_szDBPass[32]; // DB

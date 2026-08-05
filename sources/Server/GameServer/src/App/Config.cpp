@@ -24,6 +24,13 @@ void CGameConfig::SetDefault()
 	m_mapList.clear();
 	m_mapOK.clear();
 	m_loadAllMaps = false;
+	// Драйвер по умолчанию зависит от платформы: на Windows исторически
+	// стоит 17-й, вне Windows Microsoft поставляет 18-й.
+#ifdef _WIN32
+	strcpy(m_szDBDriver, "ODBC Driver 17 for SQL Server");
+#else
+	strcpy(m_szDBDriver, "ODBC Driver 18 for SQL Server");
+#endif
 	strcpy(m_szDBIP,  "192.168.1.233");
 	strcpy(m_szDBUsr,  "usr");
 	strcpy(m_szDBPass, "22222");
@@ -102,6 +109,7 @@ bool CGameConfig::Load(char *pszFileName)
 
 	// [Database]
 	auto& db = cfg["Database"];
+	strncpy_s(m_szDBDriver, sizeof(m_szDBDriver), db.GetString("db_driver", m_szDBDriver).c_str(), _TRUNCATE);
 	strncpy_s(m_szDBName, sizeof(m_szDBName), db.GetString("db_name", m_szDBName).c_str(), _TRUNCATE);
 	strncpy_s(m_szDBIP, sizeof(m_szDBIP), db.GetString("db_ip", m_szDBIP).c_str(), _TRUNCATE);
 	strncpy_s(m_szDBUsr, sizeof(m_szDBUsr), db.GetString("db_usr", m_szDBUsr).c_str(), _TRUNCATE);

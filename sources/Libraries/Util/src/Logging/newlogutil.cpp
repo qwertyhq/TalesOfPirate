@@ -152,10 +152,14 @@ namespace Corsairs::Util {
 		}
 	}
 
-	void LogManager::InitLogger(const std::string& filePath) {
+	void LogManager::InitLogger(const std::string& rawFilePath) {
 		if (!_channels.empty()) {
 			throw std::logic_error("Logger is already init!");
 		}
+
+		// Вызывающий код передаёт путь с обратными слэшами ("log\\game_server").
+		// Вне Windows это один каталог с таким именем, а не вложенные два.
+		const std::string filePath = Corsairs::Util::NormalizePath(rawFilePath);
 
 		if (!std::filesystem::exists(filePath)) {
 			std::filesystem::create_directories(filePath);

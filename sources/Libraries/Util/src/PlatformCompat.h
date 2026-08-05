@@ -780,3 +780,28 @@ inline LRESULT DispatchMessage(const MSG* /*msg*/) {
 }
 
 #endif // _WIN32
+
+// --- Пути ------------------------------------------------------------------
+
+namespace Corsairs::Util {
+
+// Приводит разделители пути к принятым на платформе.
+//
+// В коде проекта пути собираются с обратными слэшами ("script\\calculate\\x.lua",
+// "log\\game_server") — наследие Windows. На POSIX обратный слэш это обычный
+// символ имени файла, а не разделитель: открытие такого пути молча не находит
+// файл, а create_directories создаёт один каталог со слэшем в имени.
+//
+// На Windows функция ничего не меняет: там оба разделителя равноправны.
+[[nodiscard]] inline std::string NormalizePath(std::string path) {
+#ifndef _WIN32
+    for (char& c : path) {
+        if (c == '\\') {
+            c = '/';
+        }
+    }
+#endif
+    return path;
+}
+
+} // namespace Corsairs::Util
