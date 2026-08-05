@@ -135,8 +135,8 @@ module DirectConnection =
 
 module DirectPacketExchange =
 
-    /// Поднять пару server+client, вернуть каналы.
-    let private setup () = task {
+    /// Одна попытка поднять пару server+client.
+    let private setupOnce () = task {
         let port = freePort ()
         let cts = new CancellationTokenSource(10000)
         let serverConnected = TaskCompletionSource<TestChannel>()
@@ -154,6 +154,32 @@ module DirectPacketExchange =
         let! clientCh = client.ConnectAsync(IPEndPoint(IPAddress.Loopback, port), cts.Token)
         let! serverCh = awaitTimeout serverConnected 5000
         return (server, client, serverCh, clientCh, cts)
+    }
+
+    /// Поднять пару server+client, вернуть каналы.
+    ///
+    /// Попытки повторяются: freePort освобождает порт до того, как его займёт
+    /// сервер, и в этот промежуток порт может достаться другому процессу. Гонка
+    /// заложена в самом способе выбора порта — операционная система не умеет
+    /// зарезервировать его, не заняв. Повтор с новым портом надёжнее
+    /// увеличенного таймаута, который лишь маскировал бы отказ.
+    let private setup () = task {
+        let mutable attempt = 0
+        let mutable result = ValueNone
+        let mutable lastError : exn = null
+
+        while result.IsNone && attempt < 5 do
+            attempt <- attempt + 1
+            try
+                let! setupResult = setupOnce ()
+                result <- ValueSome setupResult
+            with ex ->
+                lastError <- ex
+
+        match result with
+        | ValueSome value -> return value
+        | ValueNone ->
+            return failwith $"Не удалось поднять пару за {attempt} попыток: {lastError.Message}"
     }
 
     [<Fact>]
