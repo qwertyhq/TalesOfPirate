@@ -180,6 +180,11 @@ CORSAIRS_TEST(GltfWriter_EmitsSkinningForCharacterMesh) {
     // Имена суставов несут глобальные id костей: (3, 0, 6, 1, 7, 4, 5, 2).
     REQUIRE(text.find(R"("bone_3")") != std::string::npos);
     REQUIRE(text.find(R"("bone_2")") != std::string::npos);
+
+    // Суставы обязаны быть в списке узлов сцены, иначе Interchange в UE
+    // падает на ensure(SkeletonNodeUid). Узлов всего 1 (меш) + 0 (dummy) +
+    // 8 (суставы), значит сцена перечисляет индексы 0..8.
+    REQUIRE(text.find(R"("scenes":[{"nodes":[0,1,2,3,4,5,6,7,8]}])") != std::string::npos);
 }
 
 CORSAIRS_TEST(GltfWriter_SkipsSkinningForStaticMesh) {

@@ -1,0 +1,12 @@
+# Артефакты сборки и генерации Unreal Engine.
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+*.xcodeproj/
+*.xcworkspace/
+
+# Контент: результат конвертации, сотни мегабайт бинарных .uasset.
+# Пересоздаётся из Client/* через tools/AssetConverter и скрипты импорта.
+Content/

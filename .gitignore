@@ -15,3 +15,11 @@
 *.sqlite-wal
 *.sqlite-shm
 tools/AssetConverter/build/
+
+# Unreal Engine
+CorsairsUE/Binaries/
+CorsairsUE/Build/
+CorsairsUE/DerivedDataCache/
+CorsairsUE/Intermediate/
+CorsairsUE/Saved/
+CorsairsUE/Content/

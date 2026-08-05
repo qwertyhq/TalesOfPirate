@@ -3,6 +3,7 @@
 #include "Corsairs/Tools/AssetConverter/GltfWriter.h"
 #include "Corsairs/Tools/AssetConverter/JsonWriter.h"
 
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -14,6 +15,8 @@ namespace Corsairs::Tools::AssetConverter {
 namespace {
 
 constexpr std::int64_t kComponentTypeFloat = 5126;
+constexpr std::int64_t kComponentTypeUnsignedInt = 5125;
+constexpr std::int64_t kComponentTypeUnsignedByte = 5121;
 
 struct BufferView {
     std::size_t ByteOffset;
@@ -222,6 +225,51 @@ GltfSkeletonStatus WriteSkeletonGltf(const LabAnimation& anim,
     views.push_back(AppendToBuffer(buffer, inverseBind.data(),
                                    inverseBind.size() * sizeof(float)));
 
+    // Меш-заглушка: вырожденный треугольник, целиком привязанный к первому
+    // суставу.
+    //
+    // Зачем он нужен. Interchange в Unreal Engine не импортирует glTF без
+    // единого меша: пайплайн ищет, из чего создать ассет, не находит геометрии
+    // и возвращает пустой результат — скелет с анимацией сами по себе для него
+    // не импортируемая сущность. Импортёр Blender в той же ситуации
+    // подставляет собственную заглушку автоматически.
+    //
+    // С заглушкой UE создаёт SkeletalMesh, Skeleton и AnimSequence; сам меш
+    // после импорта не нужен и удаляется, ценность — в скелете и дорожке.
+    // Треугольник намеренно НЕ вырожденный: при трёх совпадающих вершинах UE
+    // предупреждает «ограничительная область меньше порогового значения» и
+    // схлопывает вершины. Один сантиметр даёт корректный bounding box и не
+    // мешает — меш всё равно удаляется после импорта.
+    constexpr float kProxySize = 0.01f;
+    const std::array<float, 9> proxyPositions{
+        0.0f,       0.0f, 0.0f,
+        kProxySize, 0.0f, 0.0f,
+        0.0f, kProxySize, 0.0f,
+    };
+    const std::array<std::uint8_t, 12> proxyJoints{
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+    };
+    const std::array<float, 12> proxyWeights{
+        1.0f, 0.0f, 0.0f, 0.0f,
+        1.0f, 0.0f, 0.0f, 0.0f,
+        1.0f, 0.0f, 0.0f, 0.0f,
+    };
+    const std::array<std::uint32_t, 3> proxyIndices{0, 1, 2};
+
+    const std::int64_t proxyPositionView = static_cast<std::int64_t>(views.size());
+    views.push_back(AppendToBuffer(buffer, proxyPositions.data(),
+                                   proxyPositions.size() * sizeof(float)));
+    const std::int64_t proxyJointsView = static_cast<std::int64_t>(views.size());
+    views.push_back(AppendToBuffer(buffer, proxyJoints.data(), proxyJoints.size()));
+    const std::int64_t proxyWeightsView = static_cast<std::int64_t>(views.size());
+    views.push_back(AppendToBuffer(buffer, proxyWeights.data(),
+                                   proxyWeights.size() * sizeof(float)));
+    const std::int64_t proxyIndexView = static_cast<std::int64_t>(views.size());
+    views.push_back(AppendToBuffer(buffer, proxyIndices.data(),
+                                   proxyIndices.size() * sizeof(std::uint32_t)));
+
     std::filesystem::path binPath = gltfPath;
     binPath.replace_extension(".bin");
     if (!WriteFile(binPath, buffer.data(), buffer.size())) {
@@ -323,6 +371,91 @@ GltfSkeletonStatus WriteSkeletonGltf(const LabAnimation& anim,
     json.Key("type");
     json.Value("MAT4");
     json.EndObject();
+
+    // Аккессоры меша-заглушки: позиции, суставы, веса, индексы.
+    const std::int64_t proxyPositionAccessor = inverseBindAccessor + 1;
+
+    json.BeginObject();
+    json.Key("bufferView");
+    json.Value(proxyPositionView);
+    json.Key("componentType");
+    json.Value(kComponentTypeFloat);
+    json.Key("count");
+    json.Value(static_cast<std::int64_t>(3));
+    json.Key("type");
+    json.Value("VEC3");
+    json.Key("min");
+    json.BeginArray();
+    json.Value(0.0);
+    json.Value(0.0);
+    json.Value(0.0);
+    json.EndArray();
+    json.Key("max");
+    json.BeginArray();
+    json.Value(static_cast<double>(kProxySize));
+    json.Value(static_cast<double>(kProxySize));
+    json.Value(0.0);
+    json.EndArray();
+    json.EndObject();
+
+    json.BeginObject();
+    json.Key("bufferView");
+    json.Value(proxyJointsView);
+    json.Key("componentType");
+    json.Value(kComponentTypeUnsignedByte);
+    json.Key("count");
+    json.Value(static_cast<std::int64_t>(3));
+    json.Key("type");
+    json.Value("VEC4");
+    json.EndObject();
+
+    json.BeginObject();
+    json.Key("bufferView");
+    json.Value(proxyWeightsView);
+    json.Key("componentType");
+    json.Value(kComponentTypeFloat);
+    json.Key("count");
+    json.Value(static_cast<std::int64_t>(3));
+    json.Key("type");
+    json.Value("VEC4");
+    json.EndObject();
+
+    json.BeginObject();
+    json.Key("bufferView");
+    json.Value(proxyIndexView);
+    json.Key("componentType");
+    json.Value(kComponentTypeUnsignedInt);
+    json.Key("count");
+    json.Value(static_cast<std::int64_t>(3));
+    json.Key("type");
+    json.Value("SCALAR");
+    json.EndObject();
+    json.EndArray();
+
+    json.Key("meshes");
+    json.BeginArray();
+    json.BeginObject();
+    json.Key("name");
+    json.Value("skeleton_proxy");
+    json.Key("primitives");
+    json.BeginArray();
+    json.BeginObject();
+    json.Key("attributes");
+    json.BeginObject();
+    json.Key("POSITION");
+    json.Value(proxyPositionAccessor);
+    json.Key("JOINTS_0");
+    json.Value(proxyPositionAccessor + 1);
+    json.Key("WEIGHTS_0");
+    json.Value(proxyPositionAccessor + 2);
+    json.EndObject();
+    json.Key("indices");
+    json.Value(proxyPositionAccessor + 3);
+    json.Key("mode");
+    json.Value(static_cast<std::int64_t>(4));
+    json.EndObject();
+    json.EndArray();
+    json.EndObject();
     json.EndArray();
 
     // Узлы: по одному на кость, затем dummy-точки скелета. Иерархия строится
@@ -374,6 +507,16 @@ GltfSkeletonStatus WriteSkeletonGltf(const LabAnimation& anim,
         WriteFloatArray(json, matrix, 16);
         json.EndObject();
     }
+
+    // Узел меша-заглушки: именно он делает файл импортируемым в UE.
+    json.BeginObject();
+    json.Key("name");
+    json.Value("skeleton_proxy");
+    json.Key("mesh");
+    json.Value(static_cast<std::int64_t>(0));
+    json.Key("skin");
+    json.Value(static_cast<std::int64_t>(0));
+    json.EndObject();
     json.EndArray();
 
     // Skin без меша: joints и обратные bind-матрицы сохраняются, чтобы меш
@@ -472,6 +615,8 @@ GltfSkeletonStatus WriteSkeletonGltf(const LabAnimation& anim,
             json.Value(static_cast<std::int64_t>(b));
         }
     }
+    // Узел заглушки идёт последним: кости, затем dummy, затем он.
+    json.Value(static_cast<std::int64_t>(boneNum + anim.Dummies.size()));
     json.EndArray();
     json.EndObject();
     json.EndArray();

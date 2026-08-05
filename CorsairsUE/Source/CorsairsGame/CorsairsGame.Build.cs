@@ -1,0 +1,22 @@
+using UnrealBuildTool;
+
+// Игровой слой: состояние мира, персонажи, ввод. Пишется в UE-идиомах;
+// существующий Client/src/Scene используется как построчная спецификация
+// поведения, а не как источник для переноса.
+public class CorsairsGame : ModuleRules
+{
+	public CorsairsGame(ReadOnlyTargetRules Target) : base(Target)
+	{
+		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
+
+		PublicDependencyModuleNames.AddRange(new string[]
+		{
+			"Core",
+			"CoreUObject",
+			"Engine",
+			"InputCore",
+			"EnhancedInput",
+			"CorsairsNet",
+		});
+	}
+}

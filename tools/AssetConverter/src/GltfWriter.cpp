@@ -611,12 +611,20 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         json.EndArray();
     }
 
+    // В сцену обязаны попасть ВСЕ узлы, включая суставы: спецификация glTF
+    // требует, чтобы суставы skin'а находились в той же сцене, что и скиннутый
+    // меш. Импортёр Blender обходит skin.joints напрямую и стерпит их
+    // отсутствие, а Interchange в UE строит скелет от корней сцены и падает на
+    // ensure(SkeletonNodeUid).
+    const std::size_t sceneNodeCount =
+        1 + obj.Helper.Dummies.size() + (hasSkin ? mesh.BoneIndices.size() : 0);
+
     json.Key("scenes");
     json.BeginArray();
     json.BeginObject();
     json.Key("nodes");
     json.BeginArray();
-    for (std::size_t i = 0; i <= obj.Helper.Dummies.size(); ++i) {
+    for (std::size_t i = 0; i < sceneNodeCount; ++i) {
         json.Value(static_cast<std::int64_t>(i));
     }
     json.EndArray();
