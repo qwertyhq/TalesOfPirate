@@ -4,7 +4,9 @@
 
 #include "TestHarness.h"
 
+#include <cmath>
 #include <filesystem>
+#include <limits>
 #include <string>
 
 namespace {
@@ -310,6 +312,48 @@ CORSAIRS_TEST(GltfWriter_RejectsMeshWithoutVertices) {
         AC::WriteGltf(empty, OutputDir() / "empty.gltf", detail);
     REQUIRE_EQ(static_cast<std::uint32_t>(status),
                static_cast<std::uint32_t>(AC::GltfStatus::EMPTY_MESH));
+}
+
+
+CORSAIRS_TEST(GltfWriter_ReplacesNonFiniteNormalsAndUvs) {
+    // Исходные данные местами содержат NaN и бесконечности: в нормалях у
+    // восемнадцати моделей, в развёртке у трёх. Спецификация glTF таких
+    // значений не допускает, а Interchange заменяет их нулями — для нормали
+    // это означает отсутствие направления, и освещение грани ломается.
+    const auto bytes = AC::ReadWholeFile(SampleLgo());
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    auto object = AC::ParseLgo(*bytes, diag);
+    REQUIRE(object.has_value());
+    REQUIRE(!object->Mesh.Normals.empty());
+
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    object->Mesh.Normals[0] = AC::Vector3{nan, 0.0f, 0.0f};
+    object->Mesh.Normals[1] = AC::Vector3{0.0f, inf, 0.0f};
+    if (!object->Mesh.Texcoords[0].empty()) {
+        object->Mesh.Texcoords[0][0] = AC::Vector2{nan, nan};
+    }
+
+    std::filesystem::create_directories(OutputDir());
+    const auto path = OutputDir() / "sanitized.gltf";
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(*object, path, detail, {})),
+               static_cast<std::uint32_t>(AC::GltfStatus::OK));
+
+    // Проверяем сам двоичный буфер: JSON нечисловые значения не показывает,
+    // они лежат в .bin.
+    auto binPath = path;
+    binPath.replace_extension(".bin");
+    const auto binary = AC::ReadWholeFile(binPath);
+    REQUIRE(binary.has_value());
+
+    const float* values = reinterpret_cast<const float*>(binary->data());
+    const std::size_t count = binary->size() / sizeof(float);
+    for (std::size_t i = 0; i < count; ++i) {
+        REQUIRE(std::isfinite(values[i]));
+    }
 }
 
 } // namespace

@@ -91,14 +91,33 @@ struct GltfImage {
     std::string Uri;
 };
 
-// Готовит список изображений и отображение «материал -> индекс текстуры».
-// Одна и та же текстура, использованная несколькими материалами, попадает в
-// список один раз.
+// Заменяет нечисловые компоненты на запасное значение. Возвращает число
+// заменённых вершин.
 //
-// В glTF записывается только стадия 0: остальные стадии в MindPower3D — это
-// лайтмапы и слои смешивания фиксированного конвейера DX9, которым в PBR-модели
-// нет прямого соответствия. По решению из спеки материалы всё равно делаются
-// заново средствами UE, здесь важно донести базовую текстуру и имена.
+// Проверять нужно каждую компоненту: в исходных данных встречается и вершина
+// с одной испорченной осью, и полностью нечисловая.
+template <typename T>
+std::size_t SanitizeVectors(std::vector<T>& values, const T& fallback) {
+    std::size_t fixed = 0;
+    for (T& value : values) {
+        const float* components = reinterpret_cast<const float*>(&value);
+        const std::size_t count = sizeof(T) / sizeof(float);
+
+        bool broken = false;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (!std::isfinite(components[i])) {
+                broken = true;
+                break;
+            }
+        }
+        if (broken) {
+            value = fallback;
+            ++fixed;
+        }
+    }
+    return fixed;
+}
+
 // Расширение сравнивается без учёта регистра: в исходных данных встречается
 // и .dds, и .DDS.
 bool IsDdsFile(const std::filesystem::path& path) {
@@ -128,6 +147,14 @@ bool ConvertDdsToPng(const std::filesystem::path& source,
     return WritePng(target, *image);
 }
 
+// Готовит список изображений и отображение «материал -> индекс текстуры».
+// Одна и та же текстура, использованная несколькими материалами, попадает в
+// список один раз.
+//
+// В glTF записывается только стадия 0: остальные стадии в MindPower3D — это
+// лайтмапы и слои смешивания фиксированного конвейера DX9, которым в PBR-модели
+// нет прямого соответствия. По решению из спеки материалы всё равно делаются
+// заново средствами UE, здесь важно донести базовую текстуру и имена.
 void CollectImages(const LgoGeomObj& obj, const GltfTextureOptions& textures,
                    const std::filesystem::path& gltfDir,
                    std::vector<GltfImage>& images,
@@ -249,6 +276,14 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         std::swap(n.Y, n.Z);
     }
 
+    // Исходные данные местами содержат NaN и бесконечности — в нормалях у
+    // восемнадцати моделей, в развёртке у трёх. Спецификация glTF запрещает
+    // нечисловые значения, а Interchange заменяет их нулями, что для нормали
+    // означает отсутствие направления: освещение такой грани ломается.
+    // Подставляем осмысленные значения на месте.
+    SanitizeVectors(positions, Vector3{0.0f, 0.0f, 0.0f});
+    SanitizeVectors(normals, Vector3{0.0f, 1.0f, 0.0f});
+
     // Смена порядка обхода треугольника — парная операция к смене рукости.
     std::vector<std::uint32_t> indices = mesh.Indices;
     for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
@@ -270,9 +305,12 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
 
     BufferView uvView{0, 0, kTargetArrayBuffer};
     const bool hasUv = !mesh.Texcoords[0].empty();
+    std::vector<Vector2> texcoords;
     if (hasUv) {
-        uvView = AppendToBuffer(buffer, mesh.Texcoords[0].data(),
-                                mesh.Texcoords[0].size() * sizeof(Vector2),
+        texcoords = mesh.Texcoords[0];
+        SanitizeVectors(texcoords, Vector2{0.0f, 0.0f});
+        uvView = AppendToBuffer(buffer, texcoords.data(),
+                                texcoords.size() * sizeof(Vector2),
                                 kTargetArrayBuffer);
     }
 
@@ -437,7 +475,7 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         json.Key("componentType");
         json.Value(kComponentTypeFloat);
         json.Key("count");
-        json.Value(static_cast<std::int64_t>(mesh.Texcoords[0].size()));
+        json.Value(static_cast<std::int64_t>(texcoords.size()));
         json.Key("type");
         json.Value("VEC2");
         json.EndObject();
