@@ -92,19 +92,45 @@ Parallels — это ARM. Для GameServer нужна либо настояща
 
 Порядок — по возрастанию зависимости от предыдущего шага.
 
-### Шаг A. Поставить Unreal Engine и создать проект
+### Шаг A. Unreal Engine и проект — ГОТОВО
 
-Через Epic Games Launcher для macOS, последняя стабильная 5.x (не Preview).
-Версия фиксируется и не меняется до конца этапа 5 — апгрейд движка посреди
+**UE 5.8.1 установлен** в `/Users/Shared/Epic Games/UE_5.8` (нативная сборка под
+Apple Silicon). Версию не менять до конца этапа 5: апгрейд движка посреди
 переноса ломает воспроизводимость проверок.
 
-Создать пустой C++ проект `CorsairsUE` с модулями по схеме из спеки:
-`Source/CorsairsNet`, `Source/CorsairsGame`, `Source/CorsairsImport`.
+**Проект `CorsairsUE/` создан и собирается.** Четыре модуля по схеме спеки:
+`CorsairsNet` (Runtime, PreDefault), `CorsairsGame` (Runtime), `CorsairsUE`
+(первичный игровой модуль), `CorsairsImport` (Editor).
 
-### Шаг B. Импорт конвертированных ассетов
+```bash
+"/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/Mac/Build.sh" \
+    CorsairsUEEditor Mac Development -project="$PWD/CorsairsUE/CorsairsUE.uproject"
+```
 
-Проверить на одной модели и одной анимации, что glTF импортируется корректно:
-геометрия не вывернута, скелет собирается, анимация проигрывается.
+Сборка занимает около 20 секунд. `Content/`, `Binaries/`, `Intermediate/` и
+`Saved/` в git не попадают.
+
+### Шаг B. Импорт конвертированных ассетов — ПРОВЕРЕНО
+
+```bash
+"/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac/UnrealEditor-Cmd" \
+    "$PWD/CorsairsUE/CorsairsUE.uproject" -run=pythonscript \
+    -script="$PWD/CorsairsUE/Scripts/import_assets.py <каталог-gltf> /Game/Converted" \
+    -unattended -nosplash -nullrhi
+```
+
+Результат импорта контрольных файлов — ноль ошибок Interchange:
+
+| Исходник | Что создаёт UE |
+|---|---|
+| `0066000000.lgo` (скиннинг) | SkeletalMesh + Skeleton + PhysicsAsset + Material + Texture |
+| `04090084.lgo` (без костей) | StaticMesh + Material + Texture |
+| `0301.lab` (скелет) | Skeleton + AnimSequence + PhysicsAsset |
+
+**Раскладку каталогов при импорте нарушать нельзя.** URI текстуры в glTF —
+`../textures/<категория>/<файл>`, то есть glTF должен лежать в
+`<выход>/<категория>/`, а текстуры в `<выход>/textures/<категория>/`. Если
+сплющить структуру, UE не найдёт текстуры.
 
 Контрольные файлы, на которых всё проверялось при разработке:
 
