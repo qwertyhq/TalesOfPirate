@@ -90,8 +90,14 @@ target_include_directories(GameServer PRIVATE
 
 # stdafx.h подключается принудительно, как и в vcxproj: файлы не содержат
 # #include "stdafx.h" (см. CLAUDE.md).
+# stdafx.h подключается ТОЛЬКО к C++-файлам.
+#
+# Без ограничения по языку принудительный -include применялся и к C-файлам
+# (md5c.c), а stdafx.h — заголовок C++ с <algorithm>, <format>, <thread>.
+# Компилятор в режиме C уходил в разбор шаблонов и вставал намертво: три
+# процесса крутили один файл по два часа CPU каждый.
 target_compile_options(GameServer PRIVATE
-    -include "${CMAKE_CURRENT_SOURCE_DIR}/src/Core/stdafx.h"
+    "$<$<COMPILE_LANGUAGE:CXX>:-include;${CMAKE_CURRENT_SOURCE_DIR}/src/Core/stdafx.h>"
     -Wall
     -Wno-unused-parameter
     -Wno-unused-variable
