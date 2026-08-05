@@ -123,6 +123,22 @@ Parallels — это ARM. Для GameServer нужна либо настояща
 `ConvertQuaternionToGltf`: под отражением `(x,y,z,w) → (−x,−y,z,w)`, отрицаются
 X и Y, а не Z.
 
+**Проверить любой конвертированный файл сторонним импортёром:**
+
+```bash
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
+    --python tools/AssetConverter/scripts/validate_gltf.py -- <файл.gltf>
+```
+
+Скрипт печатает счётчики вершин, костей, материалов, ключей анимации и вершин
+со скиннингом. Прогнан на 45 случайных файлах — ноль ошибок импорта.
+
+**Икосфера на 42 вершины в импорте скелета — не баг.** Blender подставляет
+объект-заглушку для `skin`, на который не ссылается ни один меш. Такой skin в
+файлах анимаций присутствует намеренно: он несёт обратные bind-матрицы, а они
+не выводятся из дорожки — численно показано, что bind-поза отличается от позы
+первого кадра. Заглушка безвредна и удаляется.
+
 ### Шаг C. Landscape и навигация
 
 Из `<карта>.height.r16` — импорт Landscape (UE читает сырой r16 напрямую).
@@ -156,8 +172,20 @@ X и Y, а не Z.
 
 ### Шаг E. Сетевой слой, частично
 
-Поставить .NET 10 (`dotnet` на машине сейчас **не установлен**) и поднять
-серверы, которые не требуют Windows:
+**.NET 10.0.302 уже установлен** в `~/.dotnet` (через `dotnet-install.sh`, без
+sudo — установка cask'ом требует пароль). Добавьте в PATH:
+
+```bash
+export PATH="$HOME/.dotnet:$PATH"
+```
+
+Проверено на macOS ARM64: Account, Gate, Group и Admin.Web собираются с нулём
+ошибок, 507 тестов `Platform.Network` проходят. Для этого пришлось убрать из
+`Corsairs.Platform.Msgpack.csproj` условие `OS != Windows_NT`, подменявшее
+TargetFramework на снятые с поддержки фреймворки (коммит `5891b410`); на
+Windows поведение не изменилось.
+
+Поднять серверы, которые не требуют Windows:
 
 ```bash
 dotnet run --project sources/Dotnet/Servers/Account/Corsairs.AccountServer  # TCP:9958
