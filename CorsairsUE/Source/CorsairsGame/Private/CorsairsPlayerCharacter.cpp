@@ -106,13 +106,27 @@ bool ACorsairsPlayerCharacter::SetBodyAnimation(const FString& AssetPath)
 		return false;
 	}
 
-	// Скелеты обязаны совпадать: иначе UE проигрывает дорожку по именам костей
-	// и молча выдаёт искажённую позу вместо отказа.
-	if (GetMesh()->GetSkeletalMeshAsset() == nullptr ||
-		GetMesh()->GetSkeletalMeshAsset()->GetSkeleton() != Sequence->GetSkeleton())
+	// Скелеты обязаны быть либо одним ассетом, либо объявленными совместимыми.
+	//
+	// Interchange заводит отдельный Skeleton на каждый импортируемый файл,
+	// поэтому у тела и дорожки они разные, даже когда деревья костей совпадают
+	// полностью. Совместимость проставляет link_character_skeletons.py; без
+	// неё UE проигрывает дорожку по именам и молча выдаёт искажённую позу
+	// вместо отказа.
+	USkeletalMesh* Body = GetMesh()->GetSkeletalMeshAsset();
+	USkeleton* BodySkeleton = Body != nullptr ? Body->GetSkeleton() : nullptr;
+	USkeleton* AnimSkeleton = Sequence->GetSkeleton();
+
+	if (BodySkeleton == nullptr || AnimSkeleton == nullptr)
+	{
+		UE_LOG(LogCorsairsCharacter, Warning, TEXT("нет скелета для %s"), *AssetPath);
+		return false;
+	}
+	if (BodySkeleton != AnimSkeleton &&
+		!AnimSkeleton->IsCompatibleForEditor(BodySkeleton))
 	{
 		UE_LOG(LogCorsairsCharacter, Warning,
-			   TEXT("скелет анимации не совпадает со скелетом тела: %s"), *AssetPath);
+			   TEXT("скелет анимации несовместим со скелетом тела: %s"), *AssetPath);
 		return false;
 	}
 
