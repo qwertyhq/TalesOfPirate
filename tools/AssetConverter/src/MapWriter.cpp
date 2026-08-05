@@ -165,10 +165,16 @@ MapWriteStatus WriteSceneManifest(const SceneObjects& scene,
         json.Value(static_cast<std::int64_t>(placed.Info.Id()));
         json.Key("type");
         json.Value(static_cast<std::int64_t>(placed.Info.Type()));
+        // Мировые координаты, а не сырые: в файле они относительны началу
+        // секции.
         json.Key("x");
-        json.Value(static_cast<std::int64_t>(placed.Info.X));
+        json.Value(static_cast<std::int64_t>(placed.WorldX()));
         json.Key("y");
-        json.Value(static_cast<std::int64_t>(placed.Info.Y));
+        json.Value(static_cast<std::int64_t>(placed.WorldY()));
+        json.Key("sectionX");
+        json.Value(static_cast<std::int64_t>(placed.SectionX));
+        json.Key("sectionY");
+        json.Value(static_cast<std::int64_t>(placed.SectionY));
         json.Key("heightOff");
         json.Value(static_cast<std::int64_t>(placed.Info.HeightOff));
         json.Key("yaw");

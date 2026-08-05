@@ -132,6 +132,28 @@ CORSAIRS_TEST(SceneObjParser_HeaderFileSizeMatchesActual) {
     REQUIRE_EQ(static_cast<std::size_t>(scene->Header.FileSize), bytes->size());
 }
 
+CORSAIRS_TEST(SceneObjParser_WorldCoordinatesSpreadAcrossMap) {
+    const auto bytes = AC::ReadWholeFile(MapPath("garner.obj"));
+    REQUIRE(bytes.has_value());
+
+    AC::SceneObjDiagnostics diag;
+    const auto scene = AC::ParseSceneObj(*bytes, diag);
+    REQUIRE(scene.has_value());
+
+    // Координаты в файле относительны секции; мировые обязаны разъезжаться по
+    // всей карте, а не жаться к нулю. Максимум мировой координаты должен
+    // заметно превышать размер одной секции (8 тайлов * 100 = 800).
+    std::int32_t maxWorldX = 0;
+    std::int32_t maxRawX = 0;
+    for (const AC::PlacedObject& placed : scene->Objects) {
+        maxWorldX = placed.WorldX() > maxWorldX ? placed.WorldX() : maxWorldX;
+        maxRawX = placed.Info.X > maxRawX ? placed.Info.X : maxRawX;
+    }
+
+    REQUIRE(maxRawX < 800 * 2);
+    REQUIRE(maxWorldX > 100000);
+}
+
 CORSAIRS_TEST(SceneObjParser_RejectsBadMagic) {
     std::vector<std::uint8_t> bytes(64, 0);
 

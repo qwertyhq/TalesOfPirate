@@ -151,6 +151,64 @@ CORSAIRS_TEST(GltfWriter_EmitsDummyAttachPointsAsNodes) {
     REQUIRE(text.find(R"("matrix")") != std::string::npos);
 }
 
+CORSAIRS_TEST(GltfWriter_EmitsSkinningForCharacterMesh) {
+    // 0066000000.lgo: 250 вершин, 8 костей, boneInflFactor=2.
+    const auto bytes = AC::ReadWholeFile(SampleLgo());
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+    REQUIRE_EQ(obj->Mesh.BoneIndices.size(), 8u);
+    REQUIRE_EQ(obj->Mesh.Blends.size(), 250u);
+
+    std::filesystem::create_directories(OutputDir());
+    const std::filesystem::path gltfPath = OutputDir() / "skinned.gltf";
+
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(*obj, gltfPath, detail)),
+               static_cast<std::uint32_t>(AC::GltfStatus::OK));
+
+    const auto written = AC::ReadWholeFile(gltfPath);
+    REQUIRE(written.has_value());
+    const std::string text{reinterpret_cast<const char*>(written->data()), written->size()};
+
+    REQUIRE(text.find(R"("JOINTS_0")") != std::string::npos);
+    REQUIRE(text.find(R"("WEIGHTS_0")") != std::string::npos);
+    REQUIRE(text.find(R"("skins")") != std::string::npos);
+    REQUIRE(text.find(R"("skin":0)") != std::string::npos);
+    // Имена суставов несут глобальные id костей: (3, 0, 6, 1, 7, 4, 5, 2).
+    REQUIRE(text.find(R"("bone_3")") != std::string::npos);
+    REQUIRE(text.find(R"("bone_2")") != std::string::npos);
+}
+
+CORSAIRS_TEST(GltfWriter_SkipsSkinningForStaticMesh) {
+    // Модель сцены без костей не должна получать skin.
+    const auto bytes = AC::ReadWholeFile(
+        std::filesystem::path{CORSAIRS_REPO_ROOT} / "Client" / "model" /
+        "character" / "2000000003.lgo");
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+    REQUIRE(obj->Mesh.BoneIndices.empty());
+
+    std::filesystem::create_directories(OutputDir());
+    const std::filesystem::path gltfPath = OutputDir() / "static.gltf";
+
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(*obj, gltfPath, detail)),
+               static_cast<std::uint32_t>(AC::GltfStatus::OK));
+
+    const auto written = AC::ReadWholeFile(gltfPath);
+    REQUIRE(written.has_value());
+    const std::string text{reinterpret_cast<const char*>(written->data()), written->size()};
+
+    REQUIRE(text.find(R"("JOINTS_0")") == std::string::npos);
+    REQUIRE(text.find(R"("skins")") == std::string::npos);
+}
+
 CORSAIRS_TEST(GltfWriter_RejectsMeshWithoutVertices) {
     AC::LgoGeomObj empty;
     empty.Version = 0x1004u;

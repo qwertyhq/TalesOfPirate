@@ -75,11 +75,30 @@ static_assert(sizeof(SceneFileHeader) == 44, "SceneFileHeader: раскладк�
 static_assert(sizeof(SectionIndex) == 8, "SectionIndex: раскладка на диске 8 байт");
 static_assert(sizeof(SceneObjInfo) == 20, "SceneObjInfo: раскладка на диске 20 байт");
 
+// Множитель мировых координат: клиент разворачивает относительные координаты
+// объекта в мировые как `sectionIndex * sectionSize * 100`. Источник —
+// CSceneObjFile::ReadSectionObjInfo в sources/Client/src/Scene/Nodes/Object/.
+inline constexpr std::int32_t kWorldUnitsPerTile = 100;
+
 // Размещённый объект вместе с координатами секции, в которой он найден.
+//
+// ВАЖНО: `Info.X` / `Info.Y` на диске — координаты ОТНОСИТЕЛЬНО начала своей
+// секции. Мировые координаты дают `WorldX()` / `WorldY()`. Запись сырых
+// значений собрала бы всю карту в кучу у начала координат.
 struct PlacedObject {
     SceneObjInfo Info;
     std::int32_t SectionX;
     std::int32_t SectionY;
+    std::int32_t SectionWidth;
+    std::int32_t SectionHeight;
+
+    [[nodiscard]] std::int32_t WorldX() const {
+        return Info.X + SectionX * SectionWidth * kWorldUnitsPerTile;
+    }
+
+    [[nodiscard]] std::int32_t WorldY() const {
+        return Info.Y + SectionY * SectionHeight * kWorldUnitsPerTile;
+    }
 };
 
 struct SceneObjects {

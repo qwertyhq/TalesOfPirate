@@ -14,6 +14,7 @@ namespace {
 
 constexpr std::int64_t kComponentTypeFloat = 5126;
 constexpr std::int64_t kComponentTypeUnsignedInt = 5125;
+constexpr std::int64_t kComponentTypeUnsignedByte = 5121;
 constexpr std::int64_t kTargetArrayBuffer = 34962;
 constexpr std::int64_t kTargetElementArrayBuffer = 34963;
 constexpr std::int64_t kModeTriangles = 4;
@@ -143,6 +144,45 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
                                 kTargetArrayBuffer);
     }
 
+    // Скиннинг. BlendInfo::Index индексирует BoneIndices (локальный индекс ->
+    // глобальный id кости), а glTF JOINTS_0 индексирует массив skin.joints.
+    // Строим joints в том же порядке, что BoneIndices, — тогда индексы
+    // переносятся один в один без перенумерации.
+    const bool hasSkin = !mesh.Blends.empty() && !mesh.BoneIndices.empty();
+
+    BufferView jointsView{0, 0, kTargetArrayBuffer};
+    BufferView weightsView{0, 0, kTargetArrayBuffer};
+    if (hasSkin) {
+        std::vector<std::uint8_t> joints(mesh.Blends.size() * 4);
+        std::vector<float> weights(mesh.Blends.size() * 4);
+
+        for (std::size_t v = 0; v < mesh.Blends.size(); ++v) {
+            const BlendInfo& blend = mesh.Blends[v];
+            float sum = 0.0f;
+            for (std::size_t k = 0; k < 4; ++k) {
+                // Индекс вне диапазона обнуляем вместе с весом: иначе glTF
+                // невалиден, а вершина всё равно не должна им управляться.
+                const bool valid = blend.Index[k] < mesh.BoneIndices.size();
+                joints[v * 4 + k] = valid ? blend.Index[k] : 0;
+                weights[v * 4 + k] = valid ? blend.Weight[k] : 0.0f;
+                sum += weights[v * 4 + k];
+            }
+            // glTF требует, чтобы веса в сумме давали единицу.
+            if (sum > 0.0f) {
+                for (std::size_t k = 0; k < 4; ++k) {
+                    weights[v * 4 + k] /= sum;
+                }
+            }
+            else {
+                weights[v * 4] = 1.0f;
+            }
+        }
+
+        jointsView = AppendToBuffer(buffer, joints.data(), joints.size(), kTargetArrayBuffer);
+        weightsView = AppendToBuffer(buffer, weights.data(),
+                                     weights.size() * sizeof(float), kTargetArrayBuffer);
+    }
+
     const BufferView indexView = AppendToBuffer(
         buffer, indices.data(), indices.size() * sizeof(std::uint32_t),
         kTargetElementArrayBuffer);
@@ -170,6 +210,15 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     if (hasUv) {
         uvViewIndex = static_cast<std::int64_t>(views.size());
         views.push_back(uvView);
+    }
+
+    std::int64_t jointsViewIndex = -1;
+    std::int64_t weightsViewIndex = -1;
+    if (hasSkin) {
+        jointsViewIndex = static_cast<std::int64_t>(views.size());
+        views.push_back(jointsView);
+        weightsViewIndex = static_cast<std::int64_t>(views.size());
+        views.push_back(weightsView);
     }
 
     const std::int64_t indexViewIndex = static_cast<std::int64_t>(views.size());
@@ -258,10 +307,39 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         json.EndObject();
     }
 
+    std::int64_t jointsAccessor = -1;
+    std::int64_t weightsAccessor = -1;
+    if (hasSkin) {
+        jointsAccessor = 1 + (hasNormals ? 1 : 0) + (hasUv ? 1 : 0);
+        weightsAccessor = jointsAccessor + 1;
+
+        json.BeginObject();
+        json.Key("bufferView");
+        json.Value(jointsViewIndex);
+        json.Key("componentType");
+        json.Value(kComponentTypeUnsignedByte);
+        json.Key("count");
+        json.Value(static_cast<std::int64_t>(mesh.Blends.size()));
+        json.Key("type");
+        json.Value("VEC4");
+        json.EndObject();
+
+        json.BeginObject();
+        json.Key("bufferView");
+        json.Value(weightsViewIndex);
+        json.Key("componentType");
+        json.Value(kComponentTypeFloat);
+        json.Key("count");
+        json.Value(static_cast<std::int64_t>(mesh.Blends.size()));
+        json.Key("type");
+        json.Value("VEC4");
+        json.EndObject();
+    }
+
     // По аккессору индексов на каждый подсет: они делят один bufferView,
     // отличаясь byteOffset и count.
     const std::int64_t firstSubsetAccessor =
-        1 + (hasNormals ? 1 : 0) + (hasUv ? 1 : 0);
+        1 + (hasNormals ? 1 : 0) + (hasUv ? 1 : 0) + (hasSkin ? 2 : 0);
 
     for (const SubsetInfo& subset : mesh.Subsets) {
         json.BeginObject();
@@ -299,6 +377,12 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
             json.Key("TEXCOORD_0");
             json.Value(uvAccessor);
         }
+        if (hasSkin) {
+            json.Key("JOINTS_0");
+            json.Value(jointsAccessor);
+            json.Key("WEIGHTS_0");
+            json.Value(weightsAccessor);
+        }
         json.EndObject();
         json.Key("indices");
         json.Value(firstSubsetAccessor + static_cast<std::int64_t>(i));
@@ -320,6 +404,10 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     json.Value(static_cast<std::int64_t>(0));
     json.Key("name");
     json.Value("mesh");
+    if (hasSkin) {
+        json.Key("skin");
+        json.Value(static_cast<std::int64_t>(0));
+    }
     json.EndObject();
 
     for (std::size_t i = 0; i < obj.Helper.Dummies.size(); ++i) {
@@ -337,7 +425,36 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         json.EndArray();
         json.EndObject();
     }
+
+    // Узлы-суставы. Имя несёт ГЛОБАЛЬНЫЙ id кости из BoneIndices — по нему
+    // меш связывается с настоящим скелетом из .lab на этапе импорта. Сами
+    // узлы плоские и без трансформаций: иерархия и bind-позы живут в .lab,
+    // а какой именно .lab соответствует модели, задаётся игровыми данными.
+    for (std::size_t i = 0; i < mesh.BoneIndices.size(); ++i) {
+        json.BeginObject();
+        json.Key("name");
+        json.Value(std::format("bone_{}", mesh.BoneIndices[i]));
+        json.EndObject();
+    }
     json.EndArray();
+
+    if (hasSkin) {
+        // inverseBindMatrices не указываются намеренно: по спецификации это
+        // необязательное поле, при его отсутствии подразумеваются единичные
+        // матрицы. Настоящие обратные bind-матрицы лежат в .lab.
+        json.Key("skins");
+        json.BeginArray();
+        json.BeginObject();
+        json.Key("joints");
+        json.BeginArray();
+        const std::size_t firstJointNode = 1 + obj.Helper.Dummies.size();
+        for (std::size_t i = 0; i < mesh.BoneIndices.size(); ++i) {
+            json.Value(static_cast<std::int64_t>(firstJointNode + i));
+        }
+        json.EndArray();
+        json.EndObject();
+        json.EndArray();
+    }
 
     json.Key("scenes");
     json.BeginArray();

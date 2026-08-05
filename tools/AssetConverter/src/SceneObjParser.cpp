@@ -111,7 +111,9 @@ std::optional<SceneObjects> ParseSceneObj(std::span<const std::uint8_t> bytes,
 
         for (std::int32_t i = 0; i < index.ObjNum; ++i) {
             scene.Objects.push_back(PlacedObject{raw[static_cast<std::size_t>(i)],
-                                                 sectionX, sectionY});
+                                                 sectionX, sectionY,
+                                                 scene.Header.SectionWidth,
+                                                 scene.Header.SectionHeight});
         }
         ++scene.NonEmptySections;
     }
