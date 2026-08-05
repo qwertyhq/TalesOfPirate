@@ -854,11 +854,20 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
             json.EndArray();
 
             // Дети адресуются с учётом смещения: перед костями идут узел меша
-            // и dummy-точки крепления.
+            // и точки крепления самой модели.
             std::vector<std::int64_t> children;
             for (std::uint32_t other = 0; other < skeletonBoneNum; ++other) {
                 if (skeleton->Bones[other].ParentId == b) {
                     children.push_back(static_cast<std::int64_t>(firstBoneNode + other));
+                }
+            }
+            // Точки крепления скелета тоже входят в иерархию: импортёр считает
+            // их костями, и без них дерево меша окажется короче, чем у
+            // анимации, — 56 против 77, и дорожка к мешу не применится.
+            for (std::size_t d = 0; d < skeleton->Dummies.size(); ++d) {
+                if (skeleton->Dummies[d].ParentBoneId == b) {
+                    children.push_back(static_cast<std::int64_t>(
+                        firstBoneNode + skeletonBoneNum + d));
                 }
             }
             if (!children.empty()) {
@@ -869,6 +878,22 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
                 }
                 json.EndArray();
             }
+            json.EndObject();
+        }
+
+        for (std::size_t d = 0; d < skeleton->Dummies.size(); ++d) {
+            float matrix[16]{};
+            ConvertMatrixToGltf(skeleton->Dummies[d].Mat, matrix);
+
+            json.BeginObject();
+            json.Key("name");
+            json.Value(std::format("bone_dummy_{}", d));
+            json.Key("matrix");
+            json.BeginArray();
+            for (const float value : matrix) {
+                json.Value(static_cast<double>(value));
+            }
+            json.EndArray();
             json.EndObject();
         }
     }
@@ -913,7 +938,7 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     // ensure(SkeletonNodeUid).
     const std::size_t sceneNodeCount =
         1 + obj.Helper.Dummies.size() +
-        (hasSkeleton ? skeletonBoneNum
+        (hasSkeleton ? skeletonBoneNum + skeleton->Dummies.size()
                      : (hasSkin ? mesh.BoneIndices.size() : 0));
 
     json.Key("scenes");
