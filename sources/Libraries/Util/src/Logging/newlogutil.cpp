@@ -58,7 +58,14 @@ namespace Corsairs::Util {
 		}
 
 		if (!_logStream.is_open()) {
-			_logStream = std::ofstream(_path + '\\' + GenerateFileName(), std::ios_base::out | std::ios_base::app);
+			// Разделитель через std::filesystem, а не литеральный '\\': на
+			// POSIX обратный слэш — обычный символ имени, и файл получал имя
+			// вида `game_server\common_2026_08_05.log` внутри правильного
+			// каталога. Каталог при этом создавался верно, поэтому дефект
+			// пережил нормализацию пути и заметен только по списку файлов.
+			const std::filesystem::path file =
+				std::filesystem::path(_path) / GenerateFileName();
+			_logStream = std::ofstream(file, std::ios_base::out | std::ios_base::app);
 			_logStream << "START NEW LOGGER SESSION" << '\n';
 		}
 
@@ -291,7 +298,16 @@ namespace Corsairs::Util {
 	//  Выделение Win32-консоли для GUI-приложения. Без этого std::cout уходит
 	//  в никуда. Запускается при первом включении глобальной консоли; повторные
 	//  вызовы — no-op.
+	//
+	//  Вне Windows не делается ничего: там stdout уже подключён к терминалу,
+	//  а отдельной консоли, к которой можно присоединиться, не существует.
+	//  Заглушки в PlatformCompat.h позволяли этому блоку собраться на POSIX, и
+	//  freopen_s перенаправлял весь вывод в файл с именем `CONOUT$` — на
+	//  Windows это имя консольного устройства, в POSIX просто имя файла.
 	static void EnsureWin32Console() {
+#ifndef _WIN32
+		return;
+#else
 		static std::once_flag s_consoleOnce{};
 		std::call_once(s_consoleOnce, []() {
 			//  Если у процесса уже есть консоль (например, запущен из cmd) —
@@ -319,6 +335,7 @@ namespace Corsairs::Util {
 			std::cin.clear();
 			std::ios::sync_with_stdio(true);
 		});
+#endif
 	}
 
 	void LogManager::EnableGlobalConsole(bool status) {

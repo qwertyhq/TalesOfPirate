@@ -27,3 +27,9 @@ sources/Server/GameServer/build-posix/
 
 # Промежуточные результаты конвертации ассетов (пересоздаются AssetConverter)
 /artifacts/
+
+# Отчёты скриптов редактора — результат прогона, не исходник
+CorsairsUE/Scripts/reports/
+
+# Мусор Finder
+.DS_Store
