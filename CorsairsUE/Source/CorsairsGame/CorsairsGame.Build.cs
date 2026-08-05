@@ -17,6 +17,8 @@ public class CorsairsGame : ModuleRules
 			"InputCore",
 			"EnhancedInput",
 			"CorsairsNet",
+			"Json",
+			"JsonUtilities",
 		});
 	}
 }

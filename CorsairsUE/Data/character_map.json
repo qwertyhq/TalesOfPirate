@@ -1,0 +1,6604 @@
+{
+ "characters": {
+  "1": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Long Haired Guy"
+  },
+  "10": {
+   "mesh": "/Game/All/0010000000/SkeletalMeshes/0010000000",
+   "name": "Artisan"
+  },
+  "100": {
+   "mesh": "/Game/All/0082000000/SkeletalMeshes/0082000000",
+   "name": "Wolf Cub"
+  },
+  "1000": {
+   "mesh": "/Game/All/0305000000/SkeletalMeshes/0305000000",
+   "name": "Pirate Emissary"
+  },
+  "1001": {
+   "mesh": "/Game/All/0227000000/SkeletalMeshes/0227000000",
+   "name": "Victory Goddess"
+  },
+  "1002": {
+   "mesh": "/Game/All/0139000000/SkeletalMeshes/0139000000",
+   "name": "War Tree"
+  },
+  "1003": {
+   "mesh": "/Game/All/0704000000/SkeletalMeshes/0704000000",
+   "name": "Navy Tower"
+  },
+  "1004": {
+   "mesh": "/Game/All/0703000000/SkeletalMeshes/0703000000",
+   "name": "Pirate Tower"
+  },
+  "1005": {
+   "mesh": "/Game/All/0772000000/SkeletalMeshes/0772000000",
+   "name": "Navy Defense Tower"
+  },
+  "1006": {
+   "mesh": "/Game/All/0773000000/SkeletalMeshes/0773000000",
+   "name": "Navy Devil Tower"
+  },
+  "1007": {
+   "mesh": "/Game/All/0776000000/SkeletalMeshes/0776000000",
+   "name": "Navy Guardian"
+  },
+  "1008": {
+   "mesh": "/Game/All/0777000000/SkeletalMeshes/0777000000",
+   "name": "Pirate Guardian"
+  },
+  "1009": {
+   "mesh": "/Game/All/0778000000/SkeletalMeshes/0778000000",
+   "name": "Aries Guardian"
+  },
+  "101": {
+   "mesh": "/Game/All/0083000000/SkeletalMeshes/0083000000",
+   "name": "Starving Wolf"
+  },
+  "1010": {
+   "mesh": "/Game/All/0704000000/SkeletalMeshes/0704000000",
+   "name": "Navy Advanced Tower"
+  },
+  "1011": {
+   "mesh": "/Game/All/0703000000/SkeletalMeshes/0703000000",
+   "name": "Pirate Advanced Tower"
+  },
+  "1012": {
+   "mesh": "/Game/All/0769000000/SkeletalMeshes/0769000000",
+   "name": "Medusa"
+  },
+  "1013": {
+   "mesh": "/Game/All/0770000000/SkeletalMeshes/0770000000",
+   "name": "Navy Token Box"
+  },
+  "1014": {
+   "mesh": "/Game/All/0771000000/SkeletalMeshes/0771000000",
+   "name": "Pirate Token Box"
+  },
+  "1015": {
+   "mesh": "/Game/All/0772000000/SkeletalMeshes/0772000000",
+   "name": "Pirate Defense Tower"
+  },
+  "1016": {
+   "mesh": "/Game/All/0773000000/SkeletalMeshes/0773000000",
+   "name": "Pirate Devil Tower"
+  },
+  "1017": {
+   "mesh": "/Game/All/0774000000/SkeletalMeshes/0774000000",
+   "name": "Navy Statue"
+  },
+  "1018": {
+   "mesh": "/Game/All/0775000000/SkeletalMeshes/0775000000",
+   "name": "Pirate Statue"
+  },
+  "1019": {
+   "mesh": "/Game/All/0700000000/SkeletalMeshes/0700000000",
+   "name": "Navy Granary"
+  },
+  "102": {
+   "mesh": "/Game/All/0084000000/SkeletalMeshes/0084000000",
+   "name": "Feral Wolf"
+  },
+  "1020": {
+   "mesh": "/Game/All/0699000000/SkeletalMeshes/0699000000",
+   "name": "Pirate Granary"
+  },
+  "1021": {
+   "mesh": "/Game/All/0702000000/SkeletalMeshes/0702000000",
+   "name": "Navy Ammo Warehouse"
+  },
+  "1022": {
+   "mesh": "/Game/All/0701000000/SkeletalMeshes/0701000000",
+   "name": "Pirate Ammo Warehouse"
+  },
+  "1023": {
+   "mesh": "/Game/All/3001000000/SkeletalMeshes/3001000000",
+   "name": "Navy Cannon Tower"
+  },
+  "1024": {
+   "mesh": "/Game/All/3001000000/SkeletalMeshes/3001000000",
+   "name": "Pirate Cannon Tower"
+  },
+  "1025": {
+   "mesh": "/Game/All/0667000000/SkeletalMeshes/0667000000",
+   "name": "Navy Emissary"
+  },
+  "1026": {
+   "mesh": "/Game/All/0305000000/SkeletalMeshes/0305000000",
+   "name": "Pirate Emissary"
+  },
+  "1027": {
+   "mesh": "/Game/All/0227000000/SkeletalMeshes/0227000000",
+   "name": "Victory Goddess"
+  },
+  "1028": {
+   "mesh": "/Game/All/0704000000/SkeletalMeshes/0704000000",
+   "name": "Navy Tower"
+  },
+  "1029": {
+   "mesh": "/Game/All/0703000000/SkeletalMeshes/0703000000",
+   "name": "Pirate Tower"
+  },
+  "103": {
+   "mesh": "/Game/All/0110000000/SkeletalMeshes/0110000000",
+   "name": "Forest Spirit"
+  },
+  "1030": {
+   "mesh": "/Game/All/0772000000/SkeletalMeshes/0772000000",
+   "name": "Navy Defense Tower"
+  },
+  "1031": {
+   "mesh": "/Game/All/0773000000/SkeletalMeshes/0773000000",
+   "name": "Navy Devil Tower"
+  },
+  "1032": {
+   "mesh": "/Game/All/0776000000/SkeletalMeshes/0776000000",
+   "name": "Navy Guardian"
+  },
+  "1033": {
+   "mesh": "/Game/All/0777000000/SkeletalMeshes/0777000000",
+   "name": "Pirate Guardian"
+  },
+  "1034": {
+   "mesh": "/Game/All/0704000000/SkeletalMeshes/0704000000",
+   "name": "Navy Advanced Tower"
+  },
+  "1035": {
+   "mesh": "/Game/All/0703000000/SkeletalMeshes/0703000000",
+   "name": "Pirate Advanced Tower"
+  },
+  "1036": {
+   "mesh": "/Game/All/0779000000/SkeletalMeshes/0779000000",
+   "name": "Balloon"
+  },
+  "1037": {
+   "mesh": "/Game/All/0780000000/SkeletalMeshes/0780000000",
+   "name": "Marriage Charlatan"
+  },
+  "1038": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1039": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "104": {
+   "mesh": "/Game/All/0111000000/SkeletalMeshes/0111000000",
+   "name": "Marsh Spirit"
+  },
+  "1040": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1041": {
+   "mesh": "/Game/All/0814000000/SkeletalMeshes/0814000000",
+   "name": "Chirstmas Tree small"
+  },
+  "1042": {
+   "mesh": "/Game/All/0815000000/SkeletalMeshes/0815000000",
+   "name": "Chirstmas Tree big"
+  },
+  "1043": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1044": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1045": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1046": {
+   "mesh": "/Game/All/0826000000/SkeletalMeshes/0826000000",
+   "name": "Chirstmas Reindeer"
+  },
+  "1047": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1048": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1049": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "105": {
+   "mesh": "/Game/All/0112000000/SkeletalMeshes/0112000000",
+   "name": "Siren Queen"
+  },
+  "1050": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1051": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1052": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1053": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1054": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1055": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1056": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1057": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1058": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1059": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "106": {
+   "mesh": "/Game/All/0114000000/SkeletalMeshes/0114000000",
+   "name": "Sand Bandit Leader - Garet"
+  },
+  "1060": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1061": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1062": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1063": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1064": {
+   "mesh": "/Game/All/0238000000/SkeletalMeshes/0238000000",
+   "name": "Angel Guarder NPC"
+  },
+  "1065": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1066": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1067": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1068": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1069": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "107": {
+   "mesh": "/Game/All/0115000000/SkeletalMeshes/0115000000",
+   "name": "Treant"
+  },
+  "1070": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1071": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1072": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1073": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1074": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1075": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1076": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1077": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1078": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1079": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "108": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1080": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1081": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1082": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1083": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1084": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1085": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1086": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1087": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1088": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1089": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "109": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1090": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1091": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1092": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1093": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1094": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1095": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1096": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1097": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1098": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1099": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "11": {
+   "mesh": "/Game/All/0011000000/SkeletalMeshes/0011000000",
+   "name": "Occult Merchant"
+  },
+  "110": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1100": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1101": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1102": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1103": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1104": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1105": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1106": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1107": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1108": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1109": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "111": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1110": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1111": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1112": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1113": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1114": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1115": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1116": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1117": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1118": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1119": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "112": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1120": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1121": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1122": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1123": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1124": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1125": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1126": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1127": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1128": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1129": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "113": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1130": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1131": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1132": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1133": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1134": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1135": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1136": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1137": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1138": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1139": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "114": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1140": {
+   "mesh": "/Game/All/0003000000/SkeletalMeshes/0003000000",
+   "name": "Twins MM"
+  },
+  "1141": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Mysterious Augur"
+  },
+  "1142": {
+   "mesh": "/Game/All/0271000000/SkeletalMeshes/0271000000",
+   "name": "Crystal Master"
+  },
+  "1143": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1144": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1145": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1146": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1147": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1148": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1149": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "115": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1150": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1151": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1152": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1153": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1154": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1155": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1156": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1157": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1158": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1159": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "116": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1160": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1161": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1162": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1163": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1164": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1165": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1166": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1167": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1168": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1169": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "117": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1170": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Treasure Hunter Leya"
+  },
+  "1171": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1172": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1173": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "Cold Star"
+  },
+  "1174": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "Princess Julia"
+  },
+  "1175": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1176": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1177": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1178": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1179": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "118": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1180": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1181": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1182": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1183": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1184": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1185": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1186": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1187": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1188": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1189": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "119": {
+   "mesh": "/Game/All/0063000000/SkeletalMeshes/0063000000",
+   "name": "Grass Tortoise"
+  },
+  "1190": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1191": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1192": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1193": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1194": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1195": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1196": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1197": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1198": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1199": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "12": {
+   "mesh": "/Game/All/0085000000/SkeletalMeshes/0085000000",
+   "name": "Castle Guard"
+  },
+  "120": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1200": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1201": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1202": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1203": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1204": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1205": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1206": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1207": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1208": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1209": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "121": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1210": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1211": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1212": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1213": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1214": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1215": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1216": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1217": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1218": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1219": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "122": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1220": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1221": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1222": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1223": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1224": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1225": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1226": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1227": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1228": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1229": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "123": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1230": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1231": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1232": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1233": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1234": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1235": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1236": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1237": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1238": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1239": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "124": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1240": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1241": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1242": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1243": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1244": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1245": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1246": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1247": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1248": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1249": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "125": {
+   "mesh": "/Game/All/0047000000/SkeletalMeshes/0047000000",
+   "name": "Cuddly Lamb"
+  },
+  "1250": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1251": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1252": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1253": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1254": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1255": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1256": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1257": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1258": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1259": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "126": {
+   "mesh": "/Game/All/0048000000/SkeletalMeshes/0048000000",
+   "name": "Whacky Lamb"
+  },
+  "1260": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1261": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1262": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1263": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1264": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1265": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1266": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1267": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1268": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1269": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "127": {
+   "mesh": "/Game/All/0286000000/SkeletalMeshes/0286000000",
+   "name": "Slowpoke Snail"
+  },
+  "1270": {
+   "mesh": "/Game/All/0094000000/SkeletalMeshes/0094000000",
+   "name": "Gold Scorpion King"
+  },
+  "1271": {
+   "mesh": "/Game/All/0130000000/SkeletalMeshes/0130000000",
+   "name": "Dawn Owl"
+  },
+  "1272": {
+   "mesh": "/Game/All/0304000000/SkeletalMeshes/0304000000",
+   "name": "Shimizu Pig"
+  },
+  "1273": {
+   "mesh": "/Game/All/0540000000/SkeletalMeshes/0540000000",
+   "name": "Berserk Demon Wolf"
+  },
+  "1274": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1275": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1276": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1277": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1278": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1279": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "128": {
+   "mesh": "/Game/All/0287000000/SkeletalMeshes/0287000000",
+   "name": "Stinging Beak"
+  },
+  "1280": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1281": {
+   "mesh": "/Game/All/0672000000/SkeletalMeshes/0672000000",
+   "name": "Thief - Wang Xiao Hu"
+  },
+  "1282": {
+   "mesh": "/Game/All/0018000000/SkeletalMeshes/0018000000",
+   "name": "Mutated White Bobcat"
+  },
+  "1283": {
+   "mesh": "/Game/All/0017000000/SkeletalMeshes/0017000000",
+   "name": "Mutated Black Bobcat"
+  },
+  "1284": {
+   "mesh": "/Game/All/0099000000/SkeletalMeshes/0099000000",
+   "name": "Baby Ice Dragon"
+  },
+  "1285": {
+   "mesh": "/Game/All/0065000000/SkeletalMeshes/0065000000",
+   "name": "Batman"
+  },
+  "1286": {
+   "mesh": "/Game/All/0029000000/SkeletalMeshes/0029000000",
+   "name": "Llama"
+  },
+  "1287": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1288": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1289": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "129": {
+   "mesh": "/Game/All/0288000000/SkeletalMeshes/0288000000",
+   "name": "Sandy Shroom"
+  },
+  "1290": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1291": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1292": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1293": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1294": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1295": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1296": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1297": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1298": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1299": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "13": {
+   "mesh": "/Game/All/0086000000/SkeletalMeshes/0086000000",
+   "name": "Shopkeeper"
+  },
+  "130": {
+   "mesh": "/Game/All/0289000000/SkeletalMeshes/0289000000",
+   "name": "Snowy Shroom"
+  },
+  "1300": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1301": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1302": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1303": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1304": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1305": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1306": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1307": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1308": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1309": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "131": {
+   "mesh": "/Game/All/0290000000/SkeletalMeshes/0290000000",
+   "name": "Sand Brigand"
+  },
+  "1310": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1311": {
+   "mesh": "/Game/All/0889000000/SkeletalMeshes/0889000000",
+   "name": "Demon Deacon - Sebastien"
+  },
+  "1312": {
+   "mesh": "/Game/All/0730000000/SkeletalMeshes/0730000000",
+   "name": "Baby Black Dragon"
+  },
+  "1313": {
+   "mesh": "/Game/All/1013000000/SkeletalMeshes/1013000000",
+   "name": "Witch Broomstick"
+  },
+  "1314": {
+   "mesh": "/Game/All/1001000000/SkeletalMeshes/1001000000",
+   "name": "The Pink Ostrich"
+  },
+  "1315": {
+   "mesh": "/Game/All/1008000000/SkeletalMeshes/1008000000",
+   "name": "The Lycan"
+  },
+  "1316": {
+   "mesh": "/Game/All/1000000000/SkeletalMeshes/1000000000",
+   "name": "Little Cat"
+  },
+  "1317": {
+   "mesh": "/Game/All/1005000000/SkeletalMeshes/1005000000",
+   "name": "Lion King"
+  },
+  "1318": {
+   "mesh": "/Game/All/1010000000/SkeletalMeshes/1010000000",
+   "name": "The Tortoise"
+  },
+  "1319": {
+   "mesh": "/Game/All/1012000000/SkeletalMeshes/1012000000",
+   "name": "Trex"
+  },
+  "132": {
+   "mesh": "/Game/All/0291000000/SkeletalMeshes/0291000000",
+   "name": "Ferocious Scorpion"
+  },
+  "1320": {
+   "mesh": "/Game/All/1004000000/SkeletalMeshes/1004000000",
+   "name": "The Rat"
+  },
+  "1321": {
+   "mesh": "/Game/All/1006000000/SkeletalMeshes/1006000000",
+   "name": "Pink Deer"
+  },
+  "1322": {
+   "mesh": "/Game/All/1007000000/SkeletalMeshes/1007000000",
+   "name": "Little Wolf"
+  },
+  "1323": {
+   "mesh": "/Game/All/1014000000/SkeletalMeshes/1014000000",
+   "name": "Birdcopter"
+  },
+  "1324": {
+   "mesh": "/Game/All/1002000000/SkeletalMeshes/1002000000",
+   "name": "The Elephant King"
+  },
+  "1325": {
+   "mesh": "/Game/All/1015000000/SkeletalMeshes/1015000000",
+   "name": "The Baby Rockets"
+  },
+  "1326": {
+   "mesh": "/Game/All/1003000000/SkeletalMeshes/1003000000",
+   "name": "The Squirrel"
+  },
+  "1327": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1328": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1329": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "133": {
+   "mesh": "/Game/All/0292000000/SkeletalMeshes/0292000000",
+   "name": "Snowy Tortoise"
+  },
+  "1330": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1331": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1332": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1333": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1334": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1335": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1336": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1337": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1338": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1339": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "134": {
+   "mesh": "/Game/All/0293000000/SkeletalMeshes/0293000000",
+   "name": "Sandy Tortoise"
+  },
+  "1340": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1341": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1342": {
+   "mesh": "/Game/All/0800000000/SkeletalMeshes/0800000000",
+   "name": "Capture The Flag"
+  },
+  "1343": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1344": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1345": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1346": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1347": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1348": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1349": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "135": {
+   "mesh": "/Game/All/0294000000/SkeletalMeshes/0294000000",
+   "name": "Mature Grass Tortoise"
+  },
+  "1350": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1351": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1352": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1353": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1354": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1355": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1356": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1357": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1358": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1359": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "136": {
+   "mesh": "/Game/All/0295000000/SkeletalMeshes/0295000000",
+   "name": "Grassland Wolf"
+  },
+  "1360": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1361": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1362": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1363": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1364": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1365": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1366": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1367": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1368": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1369": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "137": {
+   "mesh": "/Game/All/0296000000/SkeletalMeshes/0296000000",
+   "name": "Snowy Wolf"
+  },
+  "1370": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1371": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1372": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1373": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1374": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1375": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1376": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1377": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1378": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1379": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "138": {
+   "mesh": "/Game/All/0297000000/SkeletalMeshes/0297000000",
+   "name": "Snow Spirit"
+  },
+  "1380": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1381": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1382": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1383": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1384": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1385": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1386": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1387": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1388": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1389": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "139": {
+   "mesh": "/Game/All/0298000000/SkeletalMeshes/0298000000",
+   "name": "Barbaric Bee"
+  },
+  "1390": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1391": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1392": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1393": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1394": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1395": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1396": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1397": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1398": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1399": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "14": {
+   "mesh": "/Game/All/0087000000/SkeletalMeshes/0087000000",
+   "name": "Head Secretary"
+  },
+  "140": {
+   "mesh": "/Game/All/0299000000/SkeletalMeshes/0299000000",
+   "name": "Thickskin Lizard"
+  },
+  "1400": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1401": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1402": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1403": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1404": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1405": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1406": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1407": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1408": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1409": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "141": {
+   "mesh": "/Game/All/0300000000/SkeletalMeshes/0300000000",
+   "name": "Battle Tortoise"
+  },
+  "1410": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1411": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1412": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1413": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1414": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1415": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1416": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1417": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1418": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1419": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "142": {
+   "mesh": "/Game/All/0301000000/SkeletalMeshes/0301000000",
+   "name": "Snowy Bear Cub"
+  },
+  "1420": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1421": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1422": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1423": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1424": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1425": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1426": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1427": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1428": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1429": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "143": {
+   "mesh": "/Game/All/0302000000/SkeletalMeshes/0302000000",
+   "name": "Armored Crab"
+  },
+  "1430": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1431": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1432": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1433": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1434": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1435": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1436": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1437": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1438": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1439": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "144": {
+   "mesh": "/Game/All/0304000000/SkeletalMeshes/0304000000",
+   "name": "Snowy Tusk Boar"
+  },
+  "1440": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1441": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1442": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1443": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1444": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1445": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1446": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1447": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1448": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1449": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "145": {
+   "mesh": "/Game/All/0303000000/SkeletalMeshes/0303000000",
+   "name": "Jack the Pirate's Sailor"
+  },
+  "1450": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1451": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1452": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1453": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1454": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1455": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1456": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1457": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1458": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1459": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "146": {
+   "mesh": "/Game/All/0305000000/SkeletalMeshes/0305000000",
+   "name": "Jack the Pirate's Fighter"
+  },
+  "1460": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1461": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1462": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1463": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1464": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1465": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1466": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1467": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1468": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1469": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "147": {
+   "mesh": "/Game/All/0319000000/SkeletalMeshes/0319000000",
+   "name": "Pirate Ship"
+  },
+  "1470": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1471": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1472": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1473": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1474": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1475": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1476": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1477": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1478": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1479": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "148": {
+   "mesh": "/Game/All/0320000000/SkeletalMeshes/0320000000",
+   "name": "Cannibal Pirate Ship"
+  },
+  "1480": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1481": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1482": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1483": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1484": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1485": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1486": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1487": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1488": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1489": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "149": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1490": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1491": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1492": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1493": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1494": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1495": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1496": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1497": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1498": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1499": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "15": {
+   "mesh": "/Game/All/0088000000/SkeletalMeshes/0088000000",
+   "name": "Attendant"
+  },
+  "150": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1500": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1501": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "NPC Lance"
+  },
+  "1502": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "NPC Carsise"
+  },
+  "1503": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "NPC Phyllis"
+  },
+  "1504": {
+   "mesh": "/Game/All/0003000000/SkeletalMeshes/0003000000",
+   "name": "NPC Ami"
+  },
+  "1505": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "NPC Monkey D.Luffy"
+  },
+  "1506": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "NPC Nami"
+  },
+  "1507": {
+   "mesh": "/Game/All/0003000000/SkeletalMeshes/0003000000",
+   "name": "NPC Chopper"
+  },
+  "1508": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "NPC Nico Robin"
+  },
+  "1509": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "NPC Shanks"
+  },
+  "151": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1510": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "NPC Usopp"
+  },
+  "1511": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "NPC Sabo"
+  },
+  "1512": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "NPC Jewelry Bonney"
+  },
+  "1513": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "NPC Shirahoshi"
+  },
+  "1514": {
+   "mesh": "/Game/All/0003000000/SkeletalMeshes/0003000000",
+   "name": "NPC Mansherry"
+  },
+  "1515": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "NPC Nefertari Vivi"
+  },
+  "1516": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "NPC Roronoa Zoro"
+  },
+  "1517": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "NPC Portgas D.Ace"
+  },
+  "1518": {
+   "mesh": "/Game/All/0003000000/SkeletalMeshes/0003000000",
+   "name": "NPC Tony Tony Chopper"
+  },
+  "1519": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "NPC Nami Exchanger"
+  },
+  "152": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1520": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "NPC Franky"
+  },
+  "1521": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "NPC Jinbe"
+  },
+  "1522": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "NPC Chaos Ace"
+  },
+  "1523": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "NPC Kaya"
+  },
+  "1524": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "NPC Alvida"
+  },
+  "1525": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "NPC Boaa"
+  },
+  "1526": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "NPC Tashigi"
+  },
+  "1527": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "NPC Monkey D.Dragon"
+  },
+  "1528": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "NPC Buggy"
+  },
+  "1529": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "NPC Monkey D.Garp"
+  },
+  "153": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1530": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "NPC Urouge"
+  },
+  "1531": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "NPC Sanji"
+  },
+  "1532": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "NPC Ancient"
+  },
+  "1533": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "NPC Gaimon"
+  },
+  "1534": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "NPC Guild War"
+  },
+  "1535": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1536": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1537": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1538": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1539": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "154": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1540": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1541": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1542": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1543": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1544": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1545": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1546": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1547": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1548": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1549": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "155": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1550": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1551": {
+   "mesh": "/Game/All/0094000000/SkeletalMeshes/0094000000",
+   "name": "Baby Scorpion"
+  },
+  "1552": {
+   "mesh": "/Game/All/0211000000/SkeletalMeshes/0211000000",
+   "name": "Elk"
+  },
+  "1553": {
+   "mesh": "/Game/All/0176000000/SkeletalMeshes/0176000000",
+   "name": "Sailor Squirt"
+  },
+  "1554": {
+   "mesh": "/Game/All/0280000000/SkeletalMeshes/0280000000",
+   "name": "Gigantic Melon"
+  },
+  "1555": {
+   "mesh": "/Game/All/0226000000/SkeletalMeshes/0226000000",
+   "name": "Great King Clam"
+  },
+  "1556": {
+   "mesh": "/Game/All/0128000000/SkeletalMeshes/0128000000",
+   "name": "Phantom Tree"
+  },
+  "1557": {
+   "mesh": "/Game/All/0076000000/SkeletalMeshes/0076000000",
+   "name": "Smuggler"
+  },
+  "1558": {
+   "mesh": "/Game/All/0083000000/SkeletalMeshes/0083000000",
+   "name": "Starving Wolf"
+  },
+  "1559": {
+   "mesh": "/Game/All/0298000000/SkeletalMeshes/0298000000",
+   "name": "Barbaric Bee"
+  },
+  "156": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1560": {
+   "mesh": "/Game/All/0219000000/SkeletalMeshes/0219000000",
+   "name": "Armored King Crab"
+  },
+  "1561": {
+   "mesh": "/Game/All/0031000000/SkeletalMeshes/0031000000",
+   "name": "Sand Raider"
+  },
+  "1562": {
+   "mesh": "/Game/All/0027000000/SkeletalMeshes/0027000000",
+   "name": "Sand Bandit"
+  },
+  "1563": {
+   "mesh": "/Game/All/0293000000/SkeletalMeshes/0293000000",
+   "name": "Sandy Tortoise"
+  },
+  "1564": {
+   "mesh": "/Game/All/0130000000/SkeletalMeshes/0130000000",
+   "name": "Owlie"
+  },
+  "1565": {
+   "mesh": "/Game/All/0201000000/SkeletalMeshes/0201000000",
+   "name": "Naive Snow Doll"
+  },
+  "1566": {
+   "mesh": "/Game/All/0279000000/SkeletalMeshes/0279000000",
+   "name": "Hard Crust Snail"
+  },
+  "1567": {
+   "mesh": "/Game/All/0301000000/SkeletalMeshes/0301000000",
+   "name": "Snowy Bear Cub"
+  },
+  "1568": {
+   "mesh": "/Game/All/0206000000/SkeletalMeshes/0206000000",
+   "name": "Tusk Battle Boar"
+  },
+  "1569": {
+   "mesh": "/Game/All/0281000000/SkeletalMeshes/0281000000",
+   "name": "Air Porky"
+  },
+  "157": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1570": {
+   "mesh": "/Game/All/0288000000/SkeletalMeshes/0288000000",
+   "name": "Sandy Shroom"
+  },
+  "1571": {
+   "mesh": "/Game/All/0197000000/SkeletalMeshes/0197000000",
+   "name": "Mudman"
+  },
+  "1572": {
+   "mesh": "/Game/All/0296000000/SkeletalMeshes/0296000000",
+   "name": "Snowy Wolf"
+  },
+  "1573": {
+   "mesh": "/Game/All/0284000000/SkeletalMeshes/0284000000",
+   "name": "Meadow Deer"
+  },
+  "1574": {
+   "mesh": "/Game/All/0084000000/SkeletalMeshes/0084000000",
+   "name": "Feral Wolf"
+  },
+  "1575": {
+   "mesh": "/Game/All/0061000000/SkeletalMeshes/0061000000",
+   "name": "Fallen Naiad"
+  },
+  "1576": {
+   "mesh": "/Game/All/0138000000/SkeletalMeshes/0138000000",
+   "name": "Man Eating Spider"
+  },
+  "1577": {
+   "mesh": "/Game/All/0202000000/SkeletalMeshes/0202000000",
+   "name": "Fragile Snow Doll"
+  },
+  "1578": {
+   "mesh": "/Game/All/0109000000/SkeletalMeshes/0109000000",
+   "name": "Cavalier"
+  },
+  "1579": {
+   "mesh": "/Game/All/0304000000/SkeletalMeshes/0304000000",
+   "name": "Berserk Snowboar"
+  },
+  "158": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1580": {
+   "mesh": "/Game/All/0065000000/SkeletalMeshes/0065000000",
+   "name": "Devious Bat"
+  },
+  "1581": {
+   "mesh": "/Game/All/0285000000/SkeletalMeshes/0285000000",
+   "name": "Grassland Elk"
+  },
+  "1582": {
+   "mesh": "/Game/All/0186000000/SkeletalMeshes/0186000000",
+   "name": "Lizard King"
+  },
+  "1583": {
+   "mesh": "/Game/All/0170000000/SkeletalMeshes/0170000000",
+   "name": "White Owlie"
+  },
+  "1584": {
+   "mesh": "/Game/All/0203000000/SkeletalMeshes/0203000000",
+   "name": "Playful Snow Doll"
+  },
+  "1585": {
+   "mesh": "/Game/All/0062000000/SkeletalMeshes/0062000000",
+   "name": "Berserk Boxeroo"
+  },
+  "1586": {
+   "mesh": "/Game/All/0300000000/SkeletalMeshes/0300000000",
+   "name": "Battle Tortoise"
+  },
+  "1587": {
+   "mesh": "/Game/All/0286000000/SkeletalMeshes/0286000000",
+   "name": "Slowpoke Snail"
+  },
+  "1588": {
+   "mesh": "/Game/All/0292000000/SkeletalMeshes/0292000000",
+   "name": "Snowy Tortoise"
+  },
+  "1589": {
+   "mesh": "/Game/All/0283000000/SkeletalMeshes/0283000000",
+   "name": "Crazy Sheep"
+  },
+  "159": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1590": {
+   "mesh": "/Game/All/0287000000/SkeletalMeshes/0287000000",
+   "name": "Stinging Beak"
+  },
+  "1591": {
+   "mesh": "/Game/All/0222000000/SkeletalMeshes/0222000000",
+   "name": "Fearsome Tortoise"
+  },
+  "1592": {
+   "mesh": "/Game/All/0291000000/SkeletalMeshes/0291000000",
+   "name": "Ferocious Scorpion"
+  },
+  "1593": {
+   "mesh": "/Game/All/0304000000/SkeletalMeshes/0304000000",
+   "name": "Snowy Tusk Boar"
+  },
+  "1594": {
+   "mesh": "/Game/All/0103000000/SkeletalMeshes/0103000000",
+   "name": "Cumbersome Yeti"
+  },
+  "1595": {
+   "mesh": "/Game/All/0220000000/SkeletalMeshes/0220000000",
+   "name": "Pumpkin General"
+  },
+  "1596": {
+   "mesh": "/Game/All/0530000000/SkeletalMeshes/0530000000",
+   "name": "Infant Icy Dragon"
+  },
+  "1597": {
+   "mesh": "/Game/All/0503000000/SkeletalMeshes/0503000000",
+   "name": "Dark Mud Monster"
+  },
+  "1598": {
+   "mesh": "/Game/All/0504000000/SkeletalMeshes/0504000000",
+   "name": "Great Polar Bear"
+  },
+  "1599": {
+   "mesh": "/Game/All/0190000000/SkeletalMeshes/0190000000",
+   "name": "Water Fairy"
+  },
+  "16": {
+   "mesh": "/Game/All/0089000000/SkeletalMeshes/0089000000",
+   "name": "Banker"
+  },
+  "160": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1600": {
+   "mesh": "/Game/All/0217000000/SkeletalMeshes/0217000000",
+   "name": "Werewolf Archer"
+  },
+  "1601": {
+   "mesh": "/Game/All/0505000000/SkeletalMeshes/0505000000",
+   "name": "Sturdy Rock Golem"
+  },
+  "1602": {
+   "mesh": "/Game/All/0545000000/SkeletalMeshes/0545000000",
+   "name": "Horrific Yeti"
+  },
+  "1603": {
+   "mesh": "/Game/All/0104000000/SkeletalMeshes/0104000000",
+   "name": "Lizardman"
+  },
+  "1604": {
+   "mesh": "/Game/All/0238000000/SkeletalMeshes/0238000000",
+   "name": "Guardian Angel"
+  },
+  "1605": {
+   "mesh": "/Game/All/0565000000/SkeletalMeshes/0565000000",
+   "name": "Skeletal Warrior Leader"
+  },
+  "1606": {
+   "mesh": "/Game/All/0666000000/SkeletalMeshes/0666000000",
+   "name": "Bloodthirsty Hunter"
+  },
+  "1607": {
+   "mesh": "/Game/All/0151000000/SkeletalMeshes/0151000000",
+   "name": "Iron Golem"
+  },
+  "1608": {
+   "mesh": "/Game/All/0105000000/SkeletalMeshes/0105000000",
+   "name": "Lizard Warrior"
+  },
+  "1609": {
+   "mesh": "/Game/All/0218000000/SkeletalMeshes/0218000000",
+   "name": "Long Hair Crab"
+  },
+  "161": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1610": {
+   "mesh": "/Game/All/0196000000/SkeletalMeshes/0196000000",
+   "name": "Giant Lizard"
+  },
+  "1611": {
+   "mesh": "/Game/All/0508000000/SkeletalMeshes/0508000000",
+   "name": "Horrific Cursed Corpse"
+  },
+  "1612": {
+   "mesh": "/Game/All/0037000000/SkeletalMeshes/0037000000",
+   "name": "Chimera"
+  },
+  "1613": {
+   "mesh": "/Game/All/0547000000/SkeletalMeshes/0547000000",
+   "name": "Treant Terror"
+  },
+  "1614": {
+   "mesh": "/Game/All/0530000000/SkeletalMeshes/0530000000",
+   "name": "Baby Icy Dragon"
+  },
+  "1615": {
+   "mesh": "/Game/All/0546000000/SkeletalMeshes/0546000000",
+   "name": "Evil Pumpkin Knight"
+  },
+  "1616": {
+   "mesh": "/Game/All/0030000000/SkeletalMeshes/0030000000",
+   "name": "Palace Guard"
+  },
+  "1617": {
+   "mesh": "/Game/All/0122000000/SkeletalMeshes/0122000000",
+   "name": "Shadow Hunter"
+  },
+  "1618": {
+   "mesh": "/Game/All/0512000000/SkeletalMeshes/0512000000",
+   "name": "Cursed Water Fairy"
+  },
+  "1619": {
+   "mesh": "/Game/All/0511000000/SkeletalMeshes/0511000000",
+   "name": "Lumbering Treant"
+  },
+  "162": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1620": {
+   "mesh": "/Game/All/0522000000/SkeletalMeshes/0522000000",
+   "name": "Corrupted Guardian Angel"
+  },
+  "1621": {
+   "mesh": "/Game/All/0524000000/SkeletalMeshes/0524000000",
+   "name": "Frenzied Lizardman"
+  },
+  "1622": {
+   "mesh": "/Game/All/0523000000/SkeletalMeshes/0523000000",
+   "name": "Mad Tribal Witchdoctor"
+  },
+  "1623": {
+   "mesh": "/Game/All/0525000000/SkeletalMeshes/0525000000",
+   "name": "Nimble Forest Hunter"
+  },
+  "1624": {
+   "mesh": "/Game/All/0049000000/SkeletalMeshes/0049000000",
+   "name": "Terra Artificer"
+  },
+  "1625": {
+   "mesh": "/Game/All/0052000000/SkeletalMeshes/0052000000",
+   "name": "Terra Elder"
+  },
+  "1626": {
+   "mesh": "/Game/All/0208000000/SkeletalMeshes/0208000000",
+   "name": "Terra Captain"
+  },
+  "1627": {
+   "mesh": "/Game/All/0526000000/SkeletalMeshes/0526000000",
+   "name": "Nimble Shadow Hunter"
+  },
+  "1628": {
+   "mesh": "/Game/All/0527000000/SkeletalMeshes/0527000000",
+   "name": "Terra Soldier Leader"
+  },
+  "1629": {
+   "mesh": "/Game/All/0528000000/SkeletalMeshes/0528000000",
+   "name": "Elite Lizardman Warrior"
+  },
+  "163": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1630": {
+   "mesh": "/Game/All/0567000000/SkeletalMeshes/0567000000",
+   "name": "Lizard Warrior Leader"
+  },
+  "1631": {
+   "mesh": "/Game/All/0529000000/SkeletalMeshes/0529000000",
+   "name": "Elite Terra Warrior"
+  },
+  "1632": {
+   "mesh": "/Game/All/0568000000/SkeletalMeshes/0568000000",
+   "name": "Terra Warrior Leader"
+  },
+  "1633": {
+   "mesh": "/Game/All/0017000000/SkeletalMeshes/0017000000",
+   "name": "Black Bobcat"
+  },
+  "1634": {
+   "mesh": "/Game/All/0532000000/SkeletalMeshes/0532000000",
+   "name": "Vicious Grassland Elder"
+  },
+  "1635": {
+   "mesh": "/Game/All/0533000000/SkeletalMeshes/0533000000",
+   "name": "Terra Artificer Leader"
+  },
+  "1636": {
+   "mesh": "/Game/All/0509000000/SkeletalMeshes/0509000000",
+   "name": "Elite Shadow Hunter"
+  },
+  "1637": {
+   "mesh": "/Game/All/0531000000/SkeletalMeshes/0531000000",
+   "name": "Feral White Bobcat"
+  },
+  "1638": {
+   "mesh": "/Game/All/0548000000/SkeletalMeshes/0548000000",
+   "name": "Deadly Werewolf Archer"
+  },
+  "1639": {
+   "mesh": "/Game/All/0534000000/SkeletalMeshes/0534000000",
+   "name": "Feral Black Bobcat"
+  },
+  "164": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1640": {
+   "mesh": "/Game/All/0550000000/SkeletalMeshes/0550000000",
+   "name": "Evil Guardian Angel"
+  },
+  "1641": {
+   "mesh": "/Game/All/0067000000/SkeletalMeshes/0067000000",
+   "name": "Frost Chimera"
+  },
+  "1642": {
+   "mesh": "/Game/All/0557000000/SkeletalMeshes/0557000000",
+   "name": "Cursed White Bobcat"
+  },
+  "1643": {
+   "mesh": "/Game/All/0551000000/SkeletalMeshes/0551000000",
+   "name": "Evil Tribal Shaman"
+  },
+  "1644": {
+   "mesh": "/Game/All/0552000000/SkeletalMeshes/0552000000",
+   "name": "Frantic Lizardman"
+  },
+  "1645": {
+   "mesh": "/Game/All/0559000000/SkeletalMeshes/0559000000",
+   "name": "Cursed Black Bobcat"
+  },
+  "1646": {
+   "mesh": "/Game/All/0553000000/SkeletalMeshes/0553000000",
+   "name": "Ruthless Forest Hunter"
+  },
+  "1647": {
+   "mesh": "/Game/All/0554000000/SkeletalMeshes/0554000000",
+   "name": "Ruthless Shadow Hunter"
+  },
+  "1648": {
+   "mesh": "/Game/All/0236000000/SkeletalMeshes/0236000000",
+   "name": "Relic Guard"
+  },
+  "1649": {
+   "mesh": "/Game/All/0100000000/SkeletalMeshes/0100000000",
+   "name": "Anubis"
+  },
+  "165": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "1650": {
+   "mesh": "/Game/All/0045000000/SkeletalMeshes/0045000000",
+   "name": "Dharma Pharaoh"
+  },
+  "166": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "167": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "168": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "169": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "17": {
+   "mesh": "/Game/All/0090000000/SkeletalMeshes/0090000000",
+   "name": "Trader"
+  },
+  "170": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "171": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "172": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "173": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "174": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "175": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "176": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "177": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "178": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "179": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "18": {
+   "mesh": "/Game/All/0091000000/SkeletalMeshes/0091000000",
+   "name": "Innkeeper"
+  },
+  "180": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "181": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "182": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "183": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "184": {
+   "mesh": "/Game/All/0095000000/SkeletalMeshes/0095000000",
+   "name": "Greedy Shroom"
+  },
+  "185": {
+   "mesh": "/Game/All/0097000000/SkeletalMeshes/0097000000",
+   "name": "Mystic Flower"
+  },
+  "186": {
+   "mesh": "/Game/All/0098000000/SkeletalMeshes/0098000000",
+   "name": "Sand Crab"
+  },
+  "187": {
+   "mesh": "/Game/All/0099000000/SkeletalMeshes/0099000000",
+   "name": "Baby Icy Dragon"
+  },
+  "188": {
+   "mesh": "/Game/All/0094000000/SkeletalMeshes/0094000000",
+   "name": "Baby Scorpion"
+  },
+  "189": {
+   "mesh": "/Game/All/0101000000/SkeletalMeshes/0101000000",
+   "name": "Angelic Panda"
+  },
+  "19": {
+   "mesh": "/Game/All/0096000000/SkeletalMeshes/0096000000",
+   "name": "Peter"
+  },
+  "190": {
+   "mesh": "/Game/All/0100000000/SkeletalMeshes/0100000000",
+   "name": "Anubis"
+  },
+  "191": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "192": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "193": {
+   "mesh": "/Game/All/0093000000/SkeletalMeshes/0093000000",
+   "name": "Baby Squid"
+  },
+  "194": {
+   "mesh": "/Game/All/0102000000/SkeletalMeshes/0102000000",
+   "name": "Snowman"
+  },
+  "195": {
+   "mesh": "/Game/All/0103000000/SkeletalMeshes/0103000000",
+   "name": "Cumbersome Yeti"
+  },
+  "196": {
+   "mesh": "/Game/All/0104000000/SkeletalMeshes/0104000000",
+   "name": "Lizardman"
+  },
+  "197": {
+   "mesh": "/Game/All/0105000000/SkeletalMeshes/0105000000",
+   "name": "Lizard Warrior"
+  },
+  "198": {
+   "mesh": "/Game/All/0106000000/SkeletalMeshes/0106000000",
+   "name": "Blood Polliwog"
+  },
+  "199": {
+   "mesh": "/Game/All/0107000000/SkeletalMeshes/0107000000",
+   "name": "Great Polliwog"
+  },
+  "2": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "Strong Guy"
+  },
+  "20": {
+   "mesh": "/Game/All/0092000000/SkeletalMeshes/0092000000",
+   "name": "Blacksmith"
+  },
+  "200": {
+   "mesh": "/Game/All/0109000000/SkeletalMeshes/0109000000",
+   "name": "Cavalier"
+  },
+  "201": {
+   "mesh": "/Game/All/0122000000/SkeletalMeshes/0122000000",
+   "name": "Shadow Hunter"
+  },
+  "202": {
+   "mesh": "/Game/All/0121000000/SkeletalMeshes/0121000000",
+   "name": "Palace Guard"
+  },
+  "203": {
+   "mesh": "/Game/All/0128000000/SkeletalMeshes/0128000000",
+   "name": "Phantom Tree"
+  },
+  "204": {
+   "mesh": "/Game/All/0124000000/SkeletalMeshes/0124000000",
+   "name": "Rock Golem"
+  },
+  "205": {
+   "mesh": "/Game/All/0137000000/SkeletalMeshes/0137000000",
+   "name": "Small Treant"
+  },
+  "206": {
+   "mesh": "/Game/All/0136000000/SkeletalMeshes/0136000000",
+   "name": "Mini Bee"
+  },
+  "207": {
+   "mesh": "/Game/All/0139000000/SkeletalMeshes/0139000000",
+   "name": "Pine Tree"
+  },
+  "208": {
+   "mesh": "/Game/All/0140000000/SkeletalMeshes/0140000000",
+   "name": "Crystal Ore"
+  },
+  "209": {
+   "mesh": "/Game/All/0141000000/SkeletalMeshes/0141000000",
+   "name": "Crystal Ore"
+  },
+  "21": {
+   "mesh": "/Game/All/0108000000/SkeletalMeshes/0108000000",
+   "name": "Shaitan Blacksmith"
+  },
+  "210": {
+   "mesh": "/Game/All/0138000000/SkeletalMeshes/0138000000",
+   "name": "Man-Eating Spider"
+  },
+  "211": {
+   "mesh": "/Game/All/0156000000/SkeletalMeshes/0156000000",
+   "name": "Bandit Leader - Adder"
+  },
+  "212": {
+   "mesh": "/Game/All/0151000000/SkeletalMeshes/0151000000",
+   "name": "Iron Golem"
+  },
+  "213": {
+   "mesh": "/Game/All/0159000000/SkeletalMeshes/0159000000",
+   "name": "Bubble Clam"
+  },
+  "214": {
+   "mesh": "/Game/All/0160000000/SkeletalMeshes/0160000000",
+   "name": "Oyster"
+  },
+  "215": {
+   "mesh": "/Game/All/0161000000/SkeletalMeshes/0161000000",
+   "name": "Orange Mystic Shrub"
+  },
+  "216": {
+   "mesh": "/Game/All/0162000000/SkeletalMeshes/0162000000",
+   "name": "Snowy Mystic Shrub"
+  },
+  "217": {
+   "mesh": "/Game/All/0163000000/SkeletalMeshes/0163000000",
+   "name": "Red Mystic Shrub"
+  },
+  "218": {
+   "mesh": "/Game/All/0164000000/SkeletalMeshes/0164000000",
+   "name": "Dry Mystic Shrub"
+  },
+  "219": {
+   "mesh": "/Game/All/0165000000/SkeletalMeshes/0165000000",
+   "name": "Blue Mystic Shrub"
+  },
+  "22": {
+   "mesh": "/Game/All/0113000000/SkeletalMeshes/0113000000",
+   "name": "Thunder Blacksmith"
+  },
+  "220": {
+   "mesh": "/Game/All/0166000000/SkeletalMeshes/0166000000",
+   "name": "Purple Mystic Shrub"
+  },
+  "221": {
+   "mesh": "/Game/All/0167000000/SkeletalMeshes/0167000000",
+   "name": "Ancient Mystic Shrub"
+  },
+  "222": {
+   "mesh": "/Game/All/0168000000/SkeletalMeshes/0168000000",
+   "name": "Snowy Mystic Flower"
+  },
+  "223": {
+   "mesh": "/Game/All/0169000000/SkeletalMeshes/0169000000",
+   "name": "Terra Guard"
+  },
+  "224": {
+   "mesh": "/Game/All/0130000000/SkeletalMeshes/0130000000",
+   "name": "Owlie"
+  },
+  "225": {
+   "mesh": "/Game/All/0170000000/SkeletalMeshes/0170000000",
+   "name": "White Owlie"
+  },
+  "226": {
+   "mesh": "/Game/All/0171000000/SkeletalMeshes/0171000000",
+   "name": "Brigand"
+  },
+  "227": {
+   "mesh": "/Game/All/0172000000/SkeletalMeshes/0172000000",
+   "name": "Sentry Crab"
+  },
+  "228": {
+   "mesh": "/Game/All/0173000000/SkeletalMeshes/0173000000",
+   "name": "Snowy Snail"
+  },
+  "229": {
+   "mesh": "/Game/All/0226000000/SkeletalMeshes/0226000000",
+   "name": "Great King Clam"
+  },
+  "23": {
+   "mesh": "/Game/All/0116000000/SkeletalMeshes/0116000000",
+   "name": "High Priest"
+  },
+  "230": {
+   "mesh": "/Game/All/0174000000/SkeletalMeshes/0174000000",
+   "name": "Pirate Squirt"
+  },
+  "231": {
+   "mesh": "/Game/All/0175000000/SkeletalMeshes/0175000000",
+   "name": "Pirate Squidy"
+  },
+  "232": {
+   "mesh": "/Game/All/0176000000/SkeletalMeshes/0176000000",
+   "name": "Sailor Squirt"
+  },
+  "233": {
+   "mesh": "/Game/All/0177000000/SkeletalMeshes/0177000000",
+   "name": "Sailor Squidy"
+  },
+  "234": {
+   "mesh": "/Game/All/0178000000/SkeletalMeshes/0178000000",
+   "name": "Snow Squirt"
+  },
+  "235": {
+   "mesh": "/Game/All/0179000000/SkeletalMeshes/0179000000",
+   "name": "Snow Squidy"
+  },
+  "236": {
+   "mesh": "/Game/All/0154000000/SkeletalMeshes/0154000000",
+   "name": "Nightmare"
+  },
+  "237": {
+   "mesh": "/Game/All/0180000000/SkeletalMeshes/0180000000",
+   "name": "Piglet"
+  },
+  "238": {
+   "mesh": "/Game/All/0148000000/SkeletalMeshes/0148000000",
+   "name": "Little Deer"
+  },
+  "239": {
+   "mesh": "/Game/All/0182000000/SkeletalMeshes/0182000000",
+   "name": "Snowy Piglet"
+  },
+  "24": {
+   "mesh": "/Game/All/0117000000/SkeletalMeshes/0117000000",
+   "name": "Thundoria Banker"
+  },
+  "240": {
+   "mesh": "/Game/All/0181000000/SkeletalMeshes/0181000000",
+   "name": "Little White Deer"
+  },
+  "241": {
+   "mesh": "/Game/All/0186000000/SkeletalMeshes/0186000000",
+   "name": "Lizard King"
+  },
+  "242": {
+   "mesh": "/Game/All/0188000000/SkeletalMeshes/0188000000",
+   "name": "Fish Bone"
+  },
+  "243": {
+   "mesh": "/Game/All/0189000000/SkeletalMeshes/0189000000",
+   "name": "Ninja Mole"
+  },
+  "244": {
+   "mesh": "/Game/All/0190000000/SkeletalMeshes/0190000000",
+   "name": "Water Fairy"
+  },
+  "245": {
+   "mesh": "/Game/All/0191000000/SkeletalMeshes/0191000000",
+   "name": "Stone Golem"
+  },
+  "246": {
+   "mesh": "/Game/All/0192000000/SkeletalMeshes/0192000000",
+   "name": "Crimson Golem"
+  },
+  "247": {
+   "mesh": "/Game/All/0193000000/SkeletalMeshes/0193000000",
+   "name": "Big Scorpion"
+  },
+  "248": {
+   "mesh": "/Game/All/0194000000/SkeletalMeshes/0194000000",
+   "name": "Elite Tribal Warrior"
+  },
+  "249": {
+   "mesh": "/Game/All/0195000000/SkeletalMeshes/0195000000",
+   "name": "Tribal Villager"
+  },
+  "25": {
+   "mesh": "/Game/All/0119000000/SkeletalMeshes/0119000000",
+   "name": "Icicle Hotel"
+  },
+  "250": {
+   "mesh": "/Game/All/0196000000/SkeletalMeshes/0196000000",
+   "name": "Giant Lizard"
+  },
+  "251": {
+   "mesh": "/Game/All/0197000000/SkeletalMeshes/0197000000",
+   "name": "Mudman"
+  },
+  "252": {
+   "mesh": "/Game/All/0198000000/SkeletalMeshes/0198000000",
+   "name": "Killer Shroom"
+  },
+  "253": {
+   "mesh": "/Game/All/0199000000/SkeletalMeshes/0199000000",
+   "name": "Mud Monster"
+  },
+  "254": {
+   "mesh": "/Game/All/0200000000/SkeletalMeshes/0200000000",
+   "name": "Blur Beast"
+  },
+  "255": {
+   "mesh": "/Game/All/0201000000/SkeletalMeshes/0201000000",
+   "name": "Naive Snow Doll"
+  },
+  "256": {
+   "mesh": "/Game/All/0202000000/SkeletalMeshes/0202000000",
+   "name": "Fragile Snow Doll"
+  },
+  "257": {
+   "mesh": "/Game/All/0203000000/SkeletalMeshes/0203000000",
+   "name": "Playful Snow Doll"
+  },
+  "258": {
+   "mesh": "/Game/All/0204000000/SkeletalMeshes/0204000000",
+   "name": "Bear Cub"
+  },
+  "259": {
+   "mesh": "/Game/All/0205000000/SkeletalMeshes/0205000000",
+   "name": "Polar Bear"
+  },
+  "26": {
+   "mesh": "/Game/All/0120000000/SkeletalMeshes/0120000000",
+   "name": "Shaitan Inn"
+  },
+  "260": {
+   "mesh": "/Game/All/0223000000/SkeletalMeshes/0223000000",
+   "name": "King Penguin"
+  },
+  "261": {
+   "mesh": "/Game/All/0224000000/SkeletalMeshes/0224000000",
+   "name": "Forest Hunter"
+  },
+  "262": {
+   "mesh": "/Game/All/0227000000/SkeletalMeshes/0227000000",
+   "name": "Soul of Goddess"
+  },
+  "263": {
+   "mesh": "/Game/All/0208000000/SkeletalMeshes/0208000000",
+   "name": "Terra Captain"
+  },
+  "264": {
+   "mesh": "/Game/All/0206000000/SkeletalMeshes/0206000000",
+   "name": "Tusk Battle Boar"
+  },
+  "265": {
+   "mesh": "/Game/All/0210000000/SkeletalMeshes/0210000000",
+   "name": "War Tortoise"
+  },
+  "266": {
+   "mesh": "/Game/All/0211000000/SkeletalMeshes/0211000000",
+   "name": "Elk"
+  },
+  "267": {
+   "mesh": "/Game/All/0212000000/SkeletalMeshes/0212000000",
+   "name": "Undead Warrior"
+  },
+  "268": {
+   "mesh": "/Game/All/0213000000/SkeletalMeshes/0213000000",
+   "name": "Skeletal Warrior"
+  },
+  "269": {
+   "mesh": "/Game/All/0214000000/SkeletalMeshes/0214000000",
+   "name": "Skeletal Archer"
+  },
+  "27": {
+   "mesh": "/Game/All/0123000000/SkeletalMeshes/0123000000",
+   "name": "Shaitan Banker"
+  },
+  "270": {
+   "mesh": "/Game/All/0215000000/SkeletalMeshes/0215000000",
+   "name": "Undead Archer"
+  },
+  "271": {
+   "mesh": "/Game/All/0216000000/SkeletalMeshes/0216000000",
+   "name": "Werewolf Warrior"
+  },
+  "272": {
+   "mesh": "/Game/All/0217000000/SkeletalMeshes/0217000000",
+   "name": "Werewolf Archer"
+  },
+  "273": {
+   "mesh": "/Game/All/0218000000/SkeletalMeshes/0218000000",
+   "name": "Long Hair Crab"
+  },
+  "274": {
+   "mesh": "/Game/All/0219000000/SkeletalMeshes/0219000000",
+   "name": "Armored King Crab"
+  },
+  "275": {
+   "mesh": "/Game/All/0220000000/SkeletalMeshes/0220000000",
+   "name": "Pumpkin General"
+  },
+  "276": {
+   "mesh": "/Game/All/0221000000/SkeletalMeshes/0221000000",
+   "name": "Snail General"
+  },
+  "277": {
+   "mesh": "/Game/All/0222000000/SkeletalMeshes/0222000000",
+   "name": "Fearsome Tortoise"
+  },
+  "278": {
+   "mesh": "/Game/All/0225000000/SkeletalMeshes/0225000000",
+   "name": "King Tortoise"
+  },
+  "279": {
+   "mesh": "/Game/All/0233000000/SkeletalMeshes/0233000000",
+   "name": "Violent King Bear"
+  },
+  "28": {
+   "mesh": "/Game/All/0125000000/SkeletalMeshes/0125000000",
+   "name": "Thundoria Shop"
+  },
+  "280": {
+   "mesh": "/Game/All/0234000000/SkeletalMeshes/0234000000",
+   "name": "Cactus Chieftian"
+  },
+  "281": {
+   "mesh": "/Game/All/0235000000/SkeletalMeshes/0235000000",
+   "name": "Snow Lady"
+  },
+  "282": {
+   "mesh": "/Game/All/0236000000/SkeletalMeshes/0236000000",
+   "name": "Relic Guard"
+  },
+  "283": {
+   "mesh": "/Game/All/0237000000/SkeletalMeshes/0237000000",
+   "name": "Tribal Chieftian"
+  },
+  "284": {
+   "mesh": "/Game/All/0238000000/SkeletalMeshes/0238000000",
+   "name": "Guardian Angel"
+  },
+  "285": {
+   "mesh": "/Game/All/0252000000/SkeletalMeshes/0252000000",
+   "name": "Lubi Terror"
+  },
+  "286": {
+   "mesh": "/Game/All/0264000000/SkeletalMeshes/0264000000",
+   "name": "Melon"
+  },
+  "287": {
+   "mesh": "/Game/All/0270000000/SkeletalMeshes/0270000000",
+   "name": "Angel Squirt"
+  },
+  "288": {
+   "mesh": "/Game/All/0271000000/SkeletalMeshes/0271000000",
+   "name": "Angel Squidy"
+  },
+  "289": {
+   "mesh": "/Game/All/0275000000/SkeletalMeshes/0275000000",
+   "name": "Atrocious Yeti King"
+  },
+  "29": {
+   "mesh": "/Game/All/0126000000/SkeletalMeshes/0126000000",
+   "name": "Nurse"
+  },
+  "290": {
+   "mesh": "/Game/All/0269000000/SkeletalMeshes/0269000000",
+   "name": "Captain Fickle"
+  },
+  "291": {
+   "mesh": "/Game/All/0277000000/SkeletalMeshes/0277000000",
+   "name": "Jack the Pirate's Militia"
+  },
+  "292": {
+   "mesh": "/Game/All/0279000000/SkeletalMeshes/0279000000",
+   "name": "Hard Crust Snail"
+  },
+  "293": {
+   "mesh": "/Game/All/0278000000/SkeletalMeshes/0278000000",
+   "name": "Northern Snail"
+  },
+  "294": {
+   "mesh": "/Game/All/0280000000/SkeletalMeshes/0280000000",
+   "name": "Gigantic Melon"
+  },
+  "295": {
+   "mesh": "/Game/All/0281000000/SkeletalMeshes/0281000000",
+   "name": "Air Porky"
+  },
+  "296": {
+   "mesh": "/Game/All/0282000000/SkeletalMeshes/0282000000",
+   "name": "Combat Piglet"
+  },
+  "297": {
+   "mesh": "/Game/All/0283000000/SkeletalMeshes/0283000000",
+   "name": "Crazy Sheep"
+  },
+  "298": {
+   "mesh": "/Game/All/0284000000/SkeletalMeshes/0284000000",
+   "name": "Meadow Deer"
+  },
+  "299": {
+   "mesh": "/Game/All/0285000000/SkeletalMeshes/0285000000",
+   "name": "Grassland Elk"
+  },
+  "3": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "Female Lead"
+  },
+  "30": {
+   "mesh": "/Game/All/0127000000/SkeletalMeshes/0127000000",
+   "name": "Shaitan Service"
+  },
+  "300": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "301": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "Ship 01"
+  },
+  "302": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "Boat 02"
+  },
+  "303": {
+   "mesh": "/Game/All/0003000000/SkeletalMeshes/0003000000",
+   "name": "Boat 03"
+  },
+  "304": {
+   "mesh": "/Game/All/0004000000/SkeletalMeshes/0004000000",
+   "name": "Boat 04"
+  },
+  "305": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "Attack Boat 1"
+  },
+  "306": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Defense low level boat 1"
+  },
+  "307": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Attack Boat 2"
+  },
+  "308": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Defense Boat 2"
+  },
+  "309": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Speedboat 1"
+  },
+  "31": {
+   "mesh": "/Game/All/0012000000/SkeletalMeshes/0012000000",
+   "name": "Armored Crab"
+  },
+  "310": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Speedboat 2"
+  },
+  "311": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "312": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "313": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "314": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "315": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "316": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "317": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "318": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "319": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "32": {
+   "mesh": "/Game/All/0013000000/SkeletalMeshes/0013000000",
+   "name": "Sharp Beak"
+  },
+  "320": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "321": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "322": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "323": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "324": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "325": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "326": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "327": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "328": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "329": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "33": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "330": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "331": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "332": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "333": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "334": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "335": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "336": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "337": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "338": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "339": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "34": {
+   "mesh": "/Game/All/0016000000/SkeletalMeshes/0016000000",
+   "name": "Horned Penguin"
+  },
+  "340": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "341": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "342": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "343": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "344": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "345": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "346": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "347": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "348": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "349": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "35": {
+   "mesh": "/Game/All/0017000000/SkeletalMeshes/0017000000",
+   "name": "Black Bobcat"
+  },
+  "350": {
+   "mesh": "/Game/All/3000000000/SkeletalMeshes/3000000000",
+   "name": "Defense Turret A"
+  },
+  "351": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "352": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "353": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "354": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "355": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "356": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "357": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "358": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "359": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "36": {
+   "mesh": "/Game/All/0018000000/SkeletalMeshes/0018000000",
+   "name": "Feral White Bobcat"
+  },
+  "360": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "361": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "362": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "363": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "364": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "365": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "366": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "367": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "368": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "369": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "37": {
+   "mesh": "/Game/All/0019000000/SkeletalMeshes/0019000000",
+   "name": "Pumpkin Knight"
+  },
+  "370": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "371": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "372": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "373": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "374": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "375": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "376": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "377": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "378": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "379": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "38": {
+   "mesh": "/Game/All/0020000000/SkeletalMeshes/0020000000",
+   "name": "Tribal Shaman"
+  },
+  "380": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "381": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "382": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "383": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "384": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "385": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "386": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "387": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "388": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "389": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "39": {
+   "mesh": "/Game/All/0021000000/SkeletalMeshes/0021000000",
+   "name": "Sea Snail"
+  },
+  "390": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "391": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "392": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "393": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "394": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "395": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "396": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "397": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "398": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "399": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "4": {
+   "mesh": "/Game/All/0003000000/SkeletalMeshes/0003000000",
+   "name": "Lady 2"
+  },
+  "40": {
+   "mesh": "/Game/All/0022000000/SkeletalMeshes/0022000000",
+   "name": "Manbeast Captain"
+  },
+  "400": {
+   "mesh": "/Game/All/0132000000/SkeletalMeshes/0132000000",
+   "name": "Shaitan Service"
+  },
+  "401": {
+   "mesh": "/Game/All/0131000000/SkeletalMeshes/0131000000",
+   "name": "Icicle Shop"
+  },
+  "402": {
+   "mesh": "/Game/All/0129000000/SkeletalMeshes/0129000000",
+   "name": "Argent Boy"
+  },
+  "403": {
+   "mesh": "/Game/All/0135000000/SkeletalMeshes/0135000000",
+   "name": "Shaitan Boy"
+  },
+  "404": {
+   "mesh": "/Game/All/0133000000/SkeletalMeshes/0133000000",
+   "name": "Shaitan Artisan"
+  },
+  "405": {
+   "mesh": "/Game/All/0134000000/SkeletalMeshes/0134000000",
+   "name": "Icicle City Artisan"
+  },
+  "406": {
+   "mesh": "/Game/All/0143000000/SkeletalMeshes/0143000000",
+   "name": "Thundoria Nurse"
+  },
+  "407": {
+   "mesh": "/Game/All/0146000000/SkeletalMeshes/0146000000",
+   "name": "Shaitan Nurse"
+  },
+  "408": {
+   "mesh": "/Game/All/0142000000/SkeletalMeshes/0142000000",
+   "name": "Shaitan Shop"
+  },
+  "409": {
+   "mesh": "/Game/All/0144000000/SkeletalMeshes/0144000000",
+   "name": "Thin Sailor"
+  },
+  "41": {
+   "mesh": "/Game/All/0023000000/SkeletalMeshes/0023000000",
+   "name": "Iron Mummy"
+  },
+  "410": {
+   "mesh": "/Game/All/0145000000/SkeletalMeshes/0145000000",
+   "name": "Fat Sailor"
+  },
+  "411": {
+   "mesh": "/Game/All/0147000000/SkeletalMeshes/0147000000",
+   "name": "Shaitan Inn"
+  },
+  "412": {
+   "mesh": "/Game/All/0149000000/SkeletalMeshes/0149000000",
+   "name": "Shaitan Bank"
+  },
+  "413": {
+   "mesh": "/Game/All/0150000000/SkeletalMeshes/0150000000",
+   "name": "Mona"
+  },
+  "414": {
+   "mesh": "/Game/All/0152000000/SkeletalMeshes/0152000000",
+   "name": "Little Tommy"
+  },
+  "415": {
+   "mesh": "/Game/All/0153000000/SkeletalMeshes/0153000000",
+   "name": "President of Commerce"
+  },
+  "416": {
+   "mesh": "/Game/All/0155000000/SkeletalMeshes/0155000000",
+   "name": "Thundoria Ambassador"
+  },
+  "417": {
+   "mesh": "/Game/All/0183000000/SkeletalMeshes/0183000000",
+   "name": "Navy Commander"
+  },
+  "418": {
+   "mesh": "/Game/All/0185000000/SkeletalMeshes/0185000000",
+   "name": "Thundoria Teleporter"
+  },
+  "419": {
+   "mesh": "/Game/All/0187000000/SkeletalMeshes/0187000000",
+   "name": "Icicle Nurse"
+  },
+  "42": {
+   "mesh": "/Game/All/0024000000/SkeletalMeshes/0024000000",
+   "name": "Steel Mummy"
+  },
+  "420": {
+   "mesh": "/Game/All/0207000000/SkeletalMeshes/0207000000",
+   "name": "Clan Chief"
+  },
+  "421": {
+   "mesh": "/Game/All/0209000000/SkeletalMeshes/0209000000",
+   "name": "Fortunate Mother"
+  },
+  "422": {
+   "mesh": "/Game/All/0228000000/SkeletalMeshes/0228000000",
+   "name": "Merman Prince"
+  },
+  "423": {
+   "mesh": "/Game/All/0229000000/SkeletalMeshes/0229000000",
+   "name": "Icicle Teleporter"
+  },
+  "424": {
+   "mesh": "/Game/All/0230000000/SkeletalMeshes/0230000000",
+   "name": "Shaitan Teleporter"
+  },
+  "425": {
+   "mesh": "/Game/All/0231000000/SkeletalMeshes/0231000000",
+   "name": "Little Daniel"
+  },
+  "426": {
+   "mesh": "/Game/All/0239000000/SkeletalMeshes/0239000000",
+   "name": "Galley 01"
+  },
+  "427": {
+   "mesh": "/Game/All/0240000000/SkeletalMeshes/0240000000",
+   "name": "Galley 02"
+  },
+  "428": {
+   "mesh": "/Game/All/0241000000/SkeletalMeshes/0241000000",
+   "name": "Galley 03"
+  },
+  "429": {
+   "mesh": "/Game/All/0242000000/SkeletalMeshes/0242000000",
+   "name": "Manufacturer Desmond"
+  },
+  "43": {
+   "mesh": "/Game/All/0025000000/SkeletalMeshes/0025000000",
+   "name": "Killer Cactus"
+  },
+  "430": {
+   "mesh": "/Game/All/0243000000/SkeletalMeshes/0243000000",
+   "name": "Holy Priestess"
+  },
+  "431": {
+   "mesh": "/Game/All/0244000000/SkeletalMeshes/0244000000",
+   "name": "Thundoria Blacksmith"
+  },
+  "432": {
+   "mesh": "/Game/All/0245000000/SkeletalMeshes/0245000000",
+   "name": "Sailing Ship 01"
+  },
+  "433": {
+   "mesh": "/Game/All/0246000000/SkeletalMeshes/0246000000",
+   "name": "Sailing Ship 02"
+  },
+  "434": {
+   "mesh": "/Game/All/0247000000/SkeletalMeshes/0247000000",
+   "name": "Sailing Ship 03"
+  },
+  "435": {
+   "mesh": "/Game/All/0047000000/SkeletalMeshes/0047000000",
+   "name": "Cuddly Lamb"
+  },
+  "436": {
+   "mesh": "/Game/All/0184000000/SkeletalMeshes/0184000000",
+   "name": "Icicle Blacksmith"
+  },
+  "437": {
+   "mesh": "/Game/All/0248000000/SkeletalMeshes/0248000000",
+   "name": "Thundoria Service"
+  },
+  "438": {
+   "mesh": "/Game/All/0249000000/SkeletalMeshes/0249000000",
+   "name": "Buoy 1"
+  },
+  "439": {
+   "mesh": "/Game/All/0250000000/SkeletalMeshes/0250000000",
+   "name": "Buoy 2"
+  },
+  "44": {
+   "mesh": "/Game/All/0026000000/SkeletalMeshes/0026000000",
+   "name": "Blackarrow Squid"
+  },
+  "440": {
+   "mesh": "/Game/All/0251000000/SkeletalMeshes/0251000000",
+   "name": "Freight Npc"
+  },
+  "441": {
+   "mesh": "/Game/All/0253000000/SkeletalMeshes/0253000000",
+   "name": "Argent Navy Girl"
+  },
+  "442": {
+   "mesh": "/Game/All/0254000000/SkeletalMeshes/0254000000",
+   "name": "Icicle Navy Girl"
+  },
+  "443": {
+   "mesh": "/Game/All/0255000000/SkeletalMeshes/0255000000",
+   "name": "Thundoria Navy Girl"
+  },
+  "444": {
+   "mesh": "/Game/All/0256000000/SkeletalMeshes/0256000000",
+   "name": "Shaitan Navy Girl"
+  },
+  "445": {
+   "mesh": "/Game/All/0257000000/SkeletalMeshes/0257000000",
+   "name": "Icicle Navy Guy"
+  },
+  "446": {
+   "mesh": "/Game/All/0258000000/SkeletalMeshes/0258000000",
+   "name": "Argent Navy Guy"
+  },
+  "447": {
+   "mesh": "/Game/All/0259000000/SkeletalMeshes/0259000000",
+   "name": "Thunder Navy Guy"
+  },
+  "448": {
+   "mesh": "/Game/All/0260000000/SkeletalMeshes/0260000000",
+   "name": "Shaitan Navy Guy"
+  },
+  "449": {
+   "mesh": "/Game/All/0261000000/SkeletalMeshes/0261000000",
+   "name": "Trader 3"
+  },
+  "45": {
+   "mesh": "/Game/All/0027000000/SkeletalMeshes/0027000000",
+   "name": "Sand Bandit"
+  },
+  "450": {
+   "mesh": "/Game/All/0262000000/SkeletalMeshes/0262000000",
+   "name": "Trader 4"
+  },
+  "451": {
+   "mesh": "/Game/All/0263000000/SkeletalMeshes/0263000000",
+   "name": "Dockman"
+  },
+  "452": {
+   "mesh": "/Game/All/0265000000/SkeletalMeshes/0265000000",
+   "name": "Dockman 1"
+  },
+  "453": {
+   "mesh": "/Game/All/0266000000/SkeletalMeshes/0266000000",
+   "name": "Dockman 2"
+  },
+  "454": {
+   "mesh": "/Game/All/0267000000/SkeletalMeshes/0267000000",
+   "name": "Dockman 3"
+  },
+  "455": {
+   "mesh": "/Game/All/0268000000/SkeletalMeshes/0268000000",
+   "name": "Landing Sign"
+  },
+  "456": {
+   "mesh": "/Game/All/0272000000/SkeletalMeshes/0272000000",
+   "name": "Wooden Crate"
+  },
+  "457": {
+   "mesh": "/Game/All/0273000000/SkeletalMeshes/0273000000",
+   "name": "Wooden Barrel"
+  },
+  "458": {
+   "mesh": "/Game/All/0274000000/SkeletalMeshes/0274000000",
+   "name": "Fearsome Tortoise Lair"
+  },
+  "459": {
+   "mesh": "/Game/All/0276000000/SkeletalMeshes/0276000000",
+   "name": "Freights (Wood)"
+  },
+  "46": {
+   "mesh": "/Game/All/0028000000/SkeletalMeshes/0028000000",
+   "name": "Snowy Bat"
+  },
+  "460": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Sunken Ship"
+  },
+  "461": {
+   "mesh": "/Game/All/0307000000/SkeletalMeshes/0307000000",
+   "name": "Fish Swarm"
+  },
+  "462": {
+   "mesh": "/Game/All/0308000000/SkeletalMeshes/0308000000",
+   "name": "Fish Swarm (Bountiful)"
+  },
+  "463": {
+   "mesh": "/Game/All/0309000000/SkeletalMeshes/0309000000",
+   "name": "Bird Nest"
+  },
+  "464": {
+   "mesh": "/Game/All/0312000000/SkeletalMeshes/0312000000",
+   "name": "Iron Ore"
+  },
+  "465": {
+   "mesh": "/Game/All/0313000000/SkeletalMeshes/0313000000",
+   "name": "Stone Ore"
+  },
+  "466": {
+   "mesh": "/Game/All/0314000000/SkeletalMeshes/0314000000",
+   "name": "Honeycomb"
+  },
+  "467": {
+   "mesh": "/Game/All/0311000000/SkeletalMeshes/0311000000",
+   "name": "Phantom Sword"
+  },
+  "468": {
+   "mesh": "/Game/All/0310000000/SkeletalMeshes/0310000000",
+   "name": "Lucky Magical Stone"
+  },
+  "469": {
+   "mesh": "/Game/All/0315000000/SkeletalMeshes/0315000000",
+   "name": "Pine Tree"
+  },
+  "47": {
+   "mesh": "/Game/All/0030000000/SkeletalMeshes/0030000000",
+   "name": "Palace Guard"
+  },
+  "470": {
+   "mesh": "/Game/All/0316000000/SkeletalMeshes/0316000000",
+   "name": "Pine Tree"
+  },
+  "471": {
+   "mesh": "/Game/All/0317000000/SkeletalMeshes/0317000000",
+   "name": "Pine Tree"
+  },
+  "472": {
+   "mesh": "/Game/All/0318000000/SkeletalMeshes/0318000000",
+   "name": "Mushroom"
+  },
+  "473": {
+   "mesh": "/Game/All/0322000000/SkeletalMeshes/0322000000",
+   "name": "Thundoria Ambassador"
+  },
+  "474": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "475": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "476": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "477": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "478": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "479": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "48": {
+   "mesh": "/Game/All/0029000000/SkeletalMeshes/0029000000",
+   "name": "Humpy Camel"
+  },
+  "480": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "481": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "482": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "483": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "484": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "485": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "486": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "487": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "488": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "489": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "49": {
+   "mesh": "/Game/All/0031000000/SkeletalMeshes/0031000000",
+   "name": "Sand Raider"
+  },
+  "490": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "491": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "492": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "493": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "494": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "495": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "496": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "497": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "498": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "499": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "5": {
+   "mesh": "/Game/All/0005000000/SkeletalMeshes/0005000000",
+   "name": "Warrior"
+  },
+  "50": {
+   "mesh": "/Game/All/0032000000/SkeletalMeshes/0032000000",
+   "name": "Relic Protector"
+  },
+  "500": {
+   "mesh": "/Game/All/0500000000/SkeletalMeshes/0500000000",
+   "name": "Wolf"
+  },
+  "501": {
+   "mesh": "/Game/All/0501000000/SkeletalMeshes/0501000000",
+   "name": "Steel-shell Snail"
+  },
+  "502": {
+   "mesh": "/Game/All/0502000000/SkeletalMeshes/0502000000",
+   "name": "Elite Skeletal Archer"
+  },
+  "503": {
+   "mesh": "/Game/All/0503000000/SkeletalMeshes/0503000000",
+   "name": "Dark Mud Monster"
+  },
+  "504": {
+   "mesh": "/Game/All/0504000000/SkeletalMeshes/0504000000",
+   "name": "Great Polar Bear"
+  },
+  "505": {
+   "mesh": "/Game/All/0505000000/SkeletalMeshes/0505000000",
+   "name": "Sturdy Rock Golem"
+  },
+  "506": {
+   "mesh": "/Game/All/0506000000/SkeletalMeshes/0506000000",
+   "name": "Elite Skeletal Warrior"
+  },
+  "507": {
+   "mesh": "/Game/All/0507000000/SkeletalMeshes/0507000000",
+   "name": "Elite Palace Sentinel"
+  },
+  "508": {
+   "mesh": "/Game/All/0508000000/SkeletalMeshes/0508000000",
+   "name": "Horrific Cursed Corpse"
+  },
+  "509": {
+   "mesh": "/Game/All/0509000000/SkeletalMeshes/0509000000",
+   "name": "Elite Shadow Hunter"
+  },
+  "51": {
+   "mesh": "/Game/All/0033000000/SkeletalMeshes/0033000000",
+   "name": "Naiad"
+  },
+  "510": {
+   "mesh": "/Game/All/0510000000/SkeletalMeshes/0510000000",
+   "name": "Elite Palace Guard"
+  },
+  "511": {
+   "mesh": "/Game/All/0511000000/SkeletalMeshes/0511000000",
+   "name": "Lumbering Treant"
+  },
+  "512": {
+   "mesh": "/Game/All/0512000000/SkeletalMeshes/0512000000",
+   "name": "Cursed Water Fairy"
+  },
+  "513": {
+   "mesh": "/Game/All/0513000000/SkeletalMeshes/0513000000",
+   "name": "Elite Werewolf Warrior"
+  },
+  "514": {
+   "mesh": "/Game/All/0514000000/SkeletalMeshes/0514000000",
+   "name": "Huge Spiky Stramonium"
+  },
+  "515": {
+   "mesh": "/Game/All/0515000000/SkeletalMeshes/0515000000",
+   "name": "Agile Tribal Villager"
+  },
+  "516": {
+   "mesh": "/Game/All/0516000000/SkeletalMeshes/0516000000",
+   "name": "Cumbersome Snowman"
+  },
+  "517": {
+   "mesh": "/Game/All/0517000000/SkeletalMeshes/0517000000",
+   "name": "Cumbersome Yeti"
+  },
+  "518": {
+   "mesh": "/Game/All/0518000000/SkeletalMeshes/0518000000",
+   "name": "Vicious Pumpkin Knight"
+  },
+  "519": {
+   "mesh": "/Game/All/0519000000/SkeletalMeshes/0519000000",
+   "name": "Elite Tribal Warrior"
+  },
+  "52": {
+   "mesh": "/Game/All/0034000000/SkeletalMeshes/0034000000",
+   "name": "Cursed Corpse"
+  },
+  "520": {
+   "mesh": "/Game/All/0520000000/SkeletalMeshes/0520000000",
+   "name": "Elite Werewolf Archer"
+  },
+  "521": {
+   "mesh": "/Game/All/0521000000/SkeletalMeshes/0521000000",
+   "name": "Vicious Undead Warrior"
+  },
+  "522": {
+   "mesh": "/Game/All/0522000000/SkeletalMeshes/0522000000",
+   "name": "Corrupted Guardian Angel"
+  },
+  "523": {
+   "mesh": "/Game/All/0523000000/SkeletalMeshes/0523000000",
+   "name": "Mad Tribal Witchdoctor"
+  },
+  "524": {
+   "mesh": "/Game/All/0524000000/SkeletalMeshes/0524000000",
+   "name": "Frenzied Lizardman"
+  },
+  "525": {
+   "mesh": "/Game/All/0525000000/SkeletalMeshes/0525000000",
+   "name": "Nimble Forest Hunter"
+  },
+  "526": {
+   "mesh": "/Game/All/0526000000/SkeletalMeshes/0526000000",
+   "name": "Nimble Shadow Hunter"
+  },
+  "527": {
+   "mesh": "/Game/All/0527000000/SkeletalMeshes/0527000000",
+   "name": "Terra Soldier Leader"
+  },
+  "528": {
+   "mesh": "/Game/All/0528000000/SkeletalMeshes/0528000000",
+   "name": "Elite Lizardman Warrior"
+  },
+  "529": {
+   "mesh": "/Game/All/0529000000/SkeletalMeshes/0529000000",
+   "name": "Elite Terra Warrior"
+  },
+  "53": {
+   "mesh": "/Game/All/0035000000/SkeletalMeshes/0035000000",
+   "name": "Water Dancer"
+  },
+  "530": {
+   "mesh": "/Game/All/0530000000/SkeletalMeshes/0530000000",
+   "name": "Infant Icy Dragon"
+  },
+  "531": {
+   "mesh": "/Game/All/0531000000/SkeletalMeshes/0531000000",
+   "name": "Feral White Bobcat"
+  },
+  "532": {
+   "mesh": "/Game/All/0532000000/SkeletalMeshes/0532000000",
+   "name": "Vicious Grassland Elder"
+  },
+  "533": {
+   "mesh": "/Game/All/0533000000/SkeletalMeshes/0533000000",
+   "name": "Terra Artificer Leader"
+  },
+  "534": {
+   "mesh": "/Game/All/0534000000/SkeletalMeshes/0534000000",
+   "name": "Feral Black Bobcat"
+  },
+  "535": {
+   "mesh": "/Game/All/0535000000/SkeletalMeshes/0535000000",
+   "name": "Ancient Relic Guard"
+  },
+  "536": {
+   "mesh": "/Game/All/0536000000/SkeletalMeshes/0536000000",
+   "name": "Ancient Relic Protector"
+  },
+  "537": {
+   "mesh": "/Game/All/0537000000/SkeletalMeshes/0537000000",
+   "name": "Sakura Pirate Sailor"
+  },
+  "538": {
+   "mesh": "/Game/All/0538000000/SkeletalMeshes/0538000000",
+   "name": "Sakura Pirate Fighter"
+  },
+  "539": {
+   "mesh": "/Game/All/0539000000/SkeletalMeshes/0539000000",
+   "name": "Sakura Pirate Militia"
+  },
+  "54": {
+   "mesh": "/Game/All/0036000000/SkeletalMeshes/0036000000",
+   "name": "Azure Siren"
+  },
+  "540": {
+   "mesh": "/Game/All/0540000000/SkeletalMeshes/0540000000",
+   "name": "Frenzied Wolf"
+  },
+  "541": {
+   "mesh": "/Game/All/0541000000/SkeletalMeshes/0541000000",
+   "name": "Deadly Skeletal Archer"
+  },
+  "542": {
+   "mesh": "/Game/All/0542000000/SkeletalMeshes/0542000000",
+   "name": "Shadow Hunter Champion"
+  },
+  "543": {
+   "mesh": "/Game/All/0543000000/SkeletalMeshes/0543000000",
+   "name": "Mad Tribal Villager"
+  },
+  "544": {
+   "mesh": "/Game/All/0544000000/SkeletalMeshes/0544000000",
+   "name": "Horrific Snowman"
+  },
+  "545": {
+   "mesh": "/Game/All/0545000000/SkeletalMeshes/0545000000",
+   "name": "Horrific Yeti"
+  },
+  "546": {
+   "mesh": "/Game/All/0546000000/SkeletalMeshes/0546000000",
+   "name": "Evil Pumpkin Knight"
+  },
+  "547": {
+   "mesh": "/Game/All/0547000000/SkeletalMeshes/0547000000",
+   "name": "Treant Terror"
+  },
+  "548": {
+   "mesh": "/Game/All/0548000000/SkeletalMeshes/0548000000",
+   "name": "Deadly Werewolf Archer"
+  },
+  "549": {
+   "mesh": "/Game/All/0549000000/SkeletalMeshes/0549000000",
+   "name": "Evil Undead Warrior"
+  },
+  "55": {
+   "mesh": "/Game/All/0037000000/SkeletalMeshes/0037000000",
+   "name": "Chimera"
+  },
+  "550": {
+   "mesh": "/Game/All/0550000000/SkeletalMeshes/0550000000",
+   "name": "Evil Guardian Angel"
+  },
+  "551": {
+   "mesh": "/Game/All/0551000000/SkeletalMeshes/0551000000",
+   "name": "Evil Tribal Shaman"
+  },
+  "552": {
+   "mesh": "/Game/All/0552000000/SkeletalMeshes/0552000000",
+   "name": "Frantic Lizardman"
+  },
+  "553": {
+   "mesh": "/Game/All/0553000000/SkeletalMeshes/0553000000",
+   "name": "Ruthless Forest Hunter"
+  },
+  "554": {
+   "mesh": "/Game/All/0554000000/SkeletalMeshes/0554000000",
+   "name": "Ruthless Shadow Hunter"
+  },
+  "555": {
+   "mesh": "/Game/All/0555000000/SkeletalMeshes/0555000000",
+   "name": "Lizardman Champion"
+  },
+  "556": {
+   "mesh": "/Game/All/0556000000/SkeletalMeshes/0556000000",
+   "name": "Terra Champion"
+  },
+  "557": {
+   "mesh": "/Game/All/0557000000/SkeletalMeshes/0557000000",
+   "name": "Cursed White Bobcat"
+  },
+  "558": {
+   "mesh": "/Game/All/0558000000/SkeletalMeshes/0558000000",
+   "name": "Wicked Terra Elder"
+  },
+  "559": {
+   "mesh": "/Game/All/0559000000/SkeletalMeshes/0559000000",
+   "name": "Cursed Black Bobcat"
+  },
+  "56": {
+   "mesh": "/Game/All/0038000000/SkeletalMeshes/0038000000",
+   "name": "Dark Blue Pulp"
+  },
+  "560": {
+   "mesh": "/Game/All/0560000000/SkeletalMeshes/0560000000",
+   "name": "Evil Relic Guardian"
+  },
+  "561": {
+   "mesh": "/Game/All/0561000000/SkeletalMeshes/0561000000",
+   "name": "Huge Cyborg"
+  },
+  "562": {
+   "mesh": "/Game/All/0562000000/SkeletalMeshes/0562000000",
+   "name": "Northern Pirate Sailor"
+  },
+  "563": {
+   "mesh": "/Game/All/0563000000/SkeletalMeshes/0563000000",
+   "name": "Northern Pirate Fighter"
+  },
+  "564": {
+   "mesh": "/Game/All/0564000000/SkeletalMeshes/0564000000",
+   "name": "Northern Pirate Militia"
+  },
+  "565": {
+   "mesh": "/Game/All/0565000000/SkeletalMeshes/0565000000",
+   "name": "Skeletal Warrior Leader"
+  },
+  "566": {
+   "mesh": "/Game/All/0566000000/SkeletalMeshes/0566000000",
+   "name": "Werewolf Warrior Leader"
+  },
+  "567": {
+   "mesh": "/Game/All/0567000000/SkeletalMeshes/0567000000",
+   "name": "Lizard Warrior Leader"
+  },
+  "568": {
+   "mesh": "/Game/All/0568000000/SkeletalMeshes/0568000000",
+   "name": "Terra Warrior Leader"
+  },
+  "569": {
+   "mesh": "/Game/All/0569000000/SkeletalMeshes/0569000000",
+   "name": "Beardy Pirate Sailor"
+  },
+  "57": {
+   "mesh": "/Game/All/0039000000/SkeletalMeshes/0039000000",
+   "name": "Sawtooth Shark"
+  },
+  "570": {
+   "mesh": "/Game/All/0570000000/SkeletalMeshes/0570000000",
+   "name": "Beardy Pirate Fighter"
+  },
+  "571": {
+   "mesh": "/Game/All/0571000000/SkeletalMeshes/0571000000",
+   "name": "Beardy Pirate Militia"
+  },
+  "572": {
+   "mesh": "/Game/All/0572000000/SkeletalMeshes/0572000000",
+   "name": "Blackout Squid"
+  },
+  "573": {
+   "mesh": "/Game/All/0573000000/SkeletalMeshes/0573000000",
+   "name": "Sakura 13 Support Ship"
+  },
+  "574": {
+   "mesh": "/Game/All/0574000000/SkeletalMeshes/0574000000",
+   "name": "Sakura 13 Warship"
+  },
+  "575": {
+   "mesh": "/Game/All/0575000000/SkeletalMeshes/0575000000",
+   "name": "Icky Seaweed"
+  },
+  "576": {
+   "mesh": "/Game/All/0576000000/SkeletalMeshes/0576000000",
+   "name": "White Cap Sea Jelly"
+  },
+  "577": {
+   "mesh": "/Game/All/0577000000/SkeletalMeshes/0577000000",
+   "name": "Swift Skeleton Fish"
+  },
+  "578": {
+   "mesh": "/Game/All/0578000000/SkeletalMeshes/0578000000",
+   "name": "Sluggish Squid"
+  },
+  "579": {
+   "mesh": "/Game/All/0579000000/SkeletalMeshes/0579000000",
+   "name": "Ocean Water Dancer"
+  },
+  "58": {
+   "mesh": "/Game/All/0040000000/SkeletalMeshes/0040000000",
+   "name": "Ruby Dolphin"
+  },
+  "580": {
+   "mesh": "/Game/All/0580000000/SkeletalMeshes/0580000000",
+   "name": "Thunder Sea Jelly"
+  },
+  "581": {
+   "mesh": "/Game/All/0581000000/SkeletalMeshes/0581000000",
+   "name": "Evil Blood Polliwog"
+  },
+  "582": {
+   "mesh": "/Game/All/0582000000/SkeletalMeshes/0582000000",
+   "name": "Vicious Mermaid"
+  },
+  "583": {
+   "mesh": "/Game/All/0583000000/SkeletalMeshes/0583000000",
+   "name": "Tempest Sea Jelly"
+  },
+  "584": {
+   "mesh": "/Game/All/0584000000/SkeletalMeshes/0584000000",
+   "name": "Topaz Dolphin"
+  },
+  "585": {
+   "mesh": "/Game/All/0585000000/SkeletalMeshes/0585000000",
+   "name": "Spiny Fish Bone"
+  },
+  "586": {
+   "mesh": "/Game/All/0586000000/SkeletalMeshes/0586000000",
+   "name": "Big Eyed Polliwog"
+  },
+  "587": {
+   "mesh": "/Game/All/0587000000/SkeletalMeshes/0587000000",
+   "name": "Bewitching Siren"
+  },
+  "588": {
+   "mesh": "/Game/All/0588000000/SkeletalMeshes/0588000000",
+   "name": "Amethyst Dolphin"
+  },
+  "589": {
+   "mesh": "/Game/All/0589000000/SkeletalMeshes/0589000000",
+   "name": "Siren Archer"
+  },
+  "59": {
+   "mesh": "/Game/All/0041000000/SkeletalMeshes/0041000000",
+   "name": "Mermaid"
+  },
+  "590": {
+   "mesh": "/Game/All/0590000000/SkeletalMeshes/0590000000",
+   "name": "Berserk Mermaid Protector"
+  },
+  "591": {
+   "mesh": "/Game/All/0591000000/SkeletalMeshes/0591000000",
+   "name": "Berserk Siren Guard"
+  },
+  "592": {
+   "mesh": "/Game/All/0592000000/SkeletalMeshes/0592000000",
+   "name": "Octopus"
+  },
+  "593": {
+   "mesh": "/Game/All/0593000000/SkeletalMeshes/0593000000",
+   "name": "Jack the Pirate's Support Ship"
+  },
+  "594": {
+   "mesh": "/Game/All/0594000000/SkeletalMeshes/0594000000",
+   "name": "Jack the Pirate's Warship"
+  },
+  "595": {
+   "mesh": "/Game/All/0595000000/SkeletalMeshes/0595000000",
+   "name": "Wild Seaweed"
+  },
+  "596": {
+   "mesh": "/Game/All/0596000000/SkeletalMeshes/0596000000",
+   "name": "Man Eating Sea Jelly"
+  },
+  "597": {
+   "mesh": "/Game/All/0597000000/SkeletalMeshes/0597000000",
+   "name": "Tanned Skeleton Fish"
+  },
+  "598": {
+   "mesh": "/Game/All/0598000000/SkeletalMeshes/0598000000",
+   "name": "Vicious Baby Squid"
+  },
+  "599": {
+   "mesh": "/Game/All/0599000000/SkeletalMeshes/0599000000",
+   "name": "Evil Water Dancer"
+  },
+  "6": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "60": {
+   "mesh": "/Game/All/0042000000/SkeletalMeshes/0042000000",
+   "name": "Skeleton Fish"
+  },
+  "600": {
+   "mesh": "/Game/All/0600000000/SkeletalMeshes/0600000000",
+   "name": "Shocking Sea Jelly"
+  },
+  "601": {
+   "mesh": "/Game/All/0601000000/SkeletalMeshes/0601000000",
+   "name": "Feral Blood Polliwog"
+  },
+  "602": {
+   "mesh": "/Game/All/0602000000/SkeletalMeshes/0602000000",
+   "name": "Wandering Mermaid"
+  },
+  "603": {
+   "mesh": "/Game/All/0603000000/SkeletalMeshes/0603000000",
+   "name": "Tornado Sea Jelly"
+  },
+  "604": {
+   "mesh": "/Game/All/0604000000/SkeletalMeshes/0604000000",
+   "name": "Hungry Fish Bone"
+  },
+  "605": {
+   "mesh": "/Game/All/0605000000/SkeletalMeshes/0605000000",
+   "name": "Evil Great Polliwog"
+  },
+  "606": {
+   "mesh": "/Game/All/0606000000/SkeletalMeshes/0606000000",
+   "name": "Dark Blue Siren"
+  },
+  "607": {
+   "mesh": "/Game/All/0607000000/SkeletalMeshes/0607000000",
+   "name": "Frenzied Siren"
+  },
+  "608": {
+   "mesh": "/Game/All/0608000000/SkeletalMeshes/0608000000",
+   "name": "Tanned Mermaid Protector"
+  },
+  "609": {
+   "mesh": "/Game/All/0609000000/SkeletalMeshes/0609000000",
+   "name": "Tanned Siren Guard"
+  },
+  "61": {
+   "mesh": "/Game/All/0043000000/SkeletalMeshes/0043000000",
+   "name": "Fire Spirit"
+  },
+  "610": {
+   "mesh": "/Game/All/0610000000/SkeletalMeshes/0610000000",
+   "name": "Chameleon Squid"
+  },
+  "611": {
+   "mesh": "/Game/All/0611000000/SkeletalMeshes/0611000000",
+   "name": "Northern Pirate Support Ship"
+  },
+  "612": {
+   "mesh": "/Game/All/0612000000/SkeletalMeshes/0612000000",
+   "name": "Northern Pirate Warship"
+  },
+  "613": {
+   "mesh": "/Game/All/0613000000/SkeletalMeshes/0613000000",
+   "name": "Floating Seaweed"
+  },
+  "614": {
+   "mesh": "/Game/All/0614000000/SkeletalMeshes/0614000000",
+   "name": "Poisonous Sea Jelly"
+  },
+  "615": {
+   "mesh": "/Game/All/0615000000/SkeletalMeshes/0615000000",
+   "name": "Decaying Fish Bone"
+  },
+  "616": {
+   "mesh": "/Game/All/0616000000/SkeletalMeshes/0616000000",
+   "name": "Swift Baby Squid"
+  },
+  "617": {
+   "mesh": "/Game/All/0617000000/SkeletalMeshes/0617000000",
+   "name": "Midnight Water Dancer"
+  },
+  "618": {
+   "mesh": "/Game/All/0618000000/SkeletalMeshes/0618000000",
+   "name": "Swift Electric Sea Jelly"
+  },
+  "619": {
+   "mesh": "/Game/All/0619000000/SkeletalMeshes/0619000000",
+   "name": "Prowling Blood Polliwog"
+  },
+  "62": {
+   "mesh": "/Game/All/0044000000/SkeletalMeshes/0044000000",
+   "name": "Hopping Lizard"
+  },
+  "620": {
+   "mesh": "/Game/All/0620000000/SkeletalMeshes/0620000000",
+   "name": "Shadow Mermaid"
+  },
+  "621": {
+   "mesh": "/Game/All/0621000000/SkeletalMeshes/0621000000",
+   "name": "Swift Cyclonic Sea Jelly"
+  },
+  "622": {
+   "mesh": "/Game/All/0622000000/SkeletalMeshes/0622000000",
+   "name": "Mature Ruby Dolphin"
+  },
+  "623": {
+   "mesh": "/Game/All/0623000000/SkeletalMeshes/0623000000",
+   "name": "Scavenger Fish Bone"
+  },
+  "624": {
+   "mesh": "/Game/All/0624000000/SkeletalMeshes/0624000000",
+   "name": "Great Feral Polliwog"
+  },
+  "625": {
+   "mesh": "/Game/All/0625000000/SkeletalMeshes/0625000000",
+   "name": "Ancient Siren"
+  },
+  "626": {
+   "mesh": "/Game/All/0626000000/SkeletalMeshes/0626000000",
+   "name": "Old Sawtooth Shark"
+  },
+  "627": {
+   "mesh": "/Game/All/0627000000/SkeletalMeshes/0627000000",
+   "name": "Ancient Siren Archer"
+  },
+  "628": {
+   "mesh": "/Game/All/0628000000/SkeletalMeshes/0628000000",
+   "name": "Horrific Mermaid Protector"
+  },
+  "629": {
+   "mesh": "/Game/All/0629000000/SkeletalMeshes/0629000000",
+   "name": "Horrific Siren Guard"
+  },
+  "63": {
+   "mesh": "/Game/All/0045000000/SkeletalMeshes/0045000000",
+   "name": "Dharma Pharaoh"
+  },
+  "630": {
+   "mesh": "/Game/All/0630000000/SkeletalMeshes/0630000000",
+   "name": "Beardy Pirate Support Ship"
+  },
+  "631": {
+   "mesh": "/Game/All/0631000000/SkeletalMeshes/0631000000",
+   "name": "Beardy Pirate Warship"
+  },
+  "632": {
+   "mesh": "/Game/All/0632000000/SkeletalMeshes/0632000000",
+   "name": "Cursed Seaweed"
+  },
+  "633": {
+   "mesh": "/Game/All/0633000000/SkeletalMeshes/0633000000",
+   "name": "Berserk Sea Jelly"
+  },
+  "634": {
+   "mesh": "/Game/All/0634000000/SkeletalMeshes/0634000000",
+   "name": "Evil Skeleton Fish"
+  },
+  "635": {
+   "mesh": "/Game/All/0635000000/SkeletalMeshes/0635000000",
+   "name": "Rapid Squid"
+  },
+  "636": {
+   "mesh": "/Game/All/0636000000/SkeletalMeshes/0636000000",
+   "name": "Swift Water Dancer"
+  },
+  "637": {
+   "mesh": "/Game/All/0637000000/SkeletalMeshes/0637000000",
+   "name": "Berserk Electric Sea Jelly"
+  },
+  "638": {
+   "mesh": "/Game/All/0638000000/SkeletalMeshes/0638000000",
+   "name": "Vampiric Polliwog"
+  },
+  "639": {
+   "mesh": "/Game/All/0639000000/SkeletalMeshes/0639000000",
+   "name": "Cursed Mermaid"
+  },
+  "64": {
+   "mesh": "/Game/All/0046000000/SkeletalMeshes/0046000000",
+   "name": "Mad Boar"
+  },
+  "640": {
+   "mesh": "/Game/All/0640000000/SkeletalMeshes/0640000000",
+   "name": "Raging Electric Sea Jelly"
+  },
+  "641": {
+   "mesh": "/Game/All/0641000000/SkeletalMeshes/0641000000",
+   "name": "Old Ruby Dolphin"
+  },
+  "642": {
+   "mesh": "/Game/All/0642000000/SkeletalMeshes/0642000000",
+   "name": "Feral Fish Bone"
+  },
+  "643": {
+   "mesh": "/Game/All/0643000000/SkeletalMeshes/0643000000",
+   "name": "Stealth Great Polliwog"
+  },
+  "644": {
+   "mesh": "/Game/All/0644000000/SkeletalMeshes/0644000000",
+   "name": "Ancient Bewitching Siren"
+  },
+  "645": {
+   "mesh": "/Game/All/0645000000/SkeletalMeshes/0645000000",
+   "name": "White Finned Shark"
+  },
+  "646": {
+   "mesh": "/Game/All/0646000000/SkeletalMeshes/0646000000",
+   "name": "Old Ruby Dolphin"
+  },
+  "647": {
+   "mesh": "/Game/All/0647000000/SkeletalMeshes/0647000000",
+   "name": "Shadow Siren"
+  },
+  "648": {
+   "mesh": "/Game/All/0648000000/SkeletalMeshes/0648000000",
+   "name": "Ancient Mermaid Protector"
+  },
+  "649": {
+   "mesh": "/Game/All/0649000000/SkeletalMeshes/0649000000",
+   "name": "Ancient Siren Guard"
+  },
+  "65": {
+   "mesh": "/Game/All/0049000000/SkeletalMeshes/0049000000",
+   "name": "Terra Artificer"
+  },
+  "650": {
+   "mesh": "/Game/All/0650000000/SkeletalMeshes/0650000000",
+   "name": "Sakura 13 Pirate Command Ship"
+  },
+  "651": {
+   "mesh": "/Game/All/0651000000/SkeletalMeshes/0651000000",
+   "name": "Feral Skeleton Fish"
+  },
+  "652": {
+   "mesh": "/Game/All/0652000000/SkeletalMeshes/0652000000",
+   "name": "Feral Ruby Dolphin"
+  },
+  "653": {
+   "mesh": "/Game/All/0653000000/SkeletalMeshes/0653000000",
+   "name": "Ancient Dark Blue Siren"
+  },
+  "654": {
+   "mesh": "/Game/All/0654000000/SkeletalMeshes/0654000000",
+   "name": "Spearhead Shark"
+  },
+  "655": {
+   "mesh": "/Game/All/0655000000/SkeletalMeshes/0655000000",
+   "name": "Feral Diamond Dolphin"
+  },
+  "656": {
+   "mesh": "/Game/All/0656000000/SkeletalMeshes/0656000000",
+   "name": "Jack the Pirate's Command Ship"
+  },
+  "657": {
+   "mesh": "/Game/All/0657000000/SkeletalMeshes/0657000000",
+   "name": "Feral Siren"
+  },
+  "658": {
+   "mesh": "/Game/All/0658000000/SkeletalMeshes/0658000000",
+   "name": "Black Finned Shark"
+  },
+  "659": {
+   "mesh": "/Game/All/0659000000/SkeletalMeshes/0659000000",
+   "name": "Northern Pirate Command Ship"
+  },
+  "66": {
+   "mesh": "/Game/All/0050000000/SkeletalMeshes/0050000000",
+   "name": "Terra Soldier Leader"
+  },
+  "660": {
+   "mesh": "/Game/All/0660000000/SkeletalMeshes/0660000000",
+   "name": "Silk Shark"
+  },
+  "661": {
+   "mesh": "/Game/All/0661000000/SkeletalMeshes/0661000000",
+   "name": "Beardy Pirate Command Ship"
+  },
+  "662": {
+   "mesh": "/Game/All/0662000000/SkeletalMeshes/0662000000",
+   "name": "Sakura 13 Pirate Flagship"
+  },
+  "663": {
+   "mesh": "/Game/All/0663000000/SkeletalMeshes/0663000000",
+   "name": "Jack the Pirate's Flagship"
+  },
+  "664": {
+   "mesh": "/Game/All/0664000000/SkeletalMeshes/0664000000",
+   "name": "Northern Pirate Flagship"
+  },
+  "665": {
+   "mesh": "/Game/All/0665000000/SkeletalMeshes/0665000000",
+   "name": "Beardy Pirate Flagship"
+  },
+  "666": {
+   "mesh": "/Game/All/0666000000/SkeletalMeshes/0666000000",
+   "name": "Bloodthirsty Hunter"
+  },
+  "667": {
+   "mesh": "/Game/All/0667000000/SkeletalMeshes/0667000000",
+   "name": "Navy Rifleman"
+  },
+  "668": {
+   "mesh": "/Game/All/0269000000/SkeletalMeshes/0269000000",
+   "name": "Jack - Black Sail"
+  },
+  "669": {
+   "mesh": "/Game/All/0202000000/SkeletalMeshes/0202000000",
+   "name": "Imaginary Snow Doll"
+  },
+  "67": {
+   "mesh": "/Game/All/0051000000/SkeletalMeshes/0051000000",
+   "name": "Terra Captain"
+  },
+  "670": {
+   "mesh": "/Game/All/0201000000/SkeletalMeshes/0201000000",
+   "name": "Snow Doll Spirit"
+  },
+  "671": {
+   "mesh": "/Game/All/0203000000/SkeletalMeshes/0203000000",
+   "name": "Evil Snow Doll Spirit"
+  },
+  "672": {
+   "mesh": "/Game/All/0203000000/SkeletalMeshes/0203000000",
+   "name": "Confused Snow Doll"
+  },
+  "673": {
+   "mesh": "/Game/All/0668000000/SkeletalMeshes/0668000000",
+   "name": "Death Knight"
+  },
+  "674": {
+   "mesh": "/Game/All/0669000000/SkeletalMeshes/0669000000",
+   "name": "Clumsy Mud Monster"
+  },
+  "675": {
+   "mesh": "/Game/All/0674000000/SkeletalMeshes/0674000000",
+   "name": "Huge Mud Monster"
+  },
+  "676": {
+   "mesh": "/Game/All/0670000000/SkeletalMeshes/0670000000",
+   "name": "Jungle Monster"
+  },
+  "677": {
+   "mesh": "/Game/All/0671000000/SkeletalMeshes/0671000000",
+   "name": "Blood Spirit"
+  },
+  "678": {
+   "mesh": "/Game/All/0672000000/SkeletalMeshes/0672000000",
+   "name": "Snowman Warlord"
+  },
+  "679": {
+   "mesh": "/Game/All/0673000000/SkeletalMeshes/0673000000",
+   "name": "Wandering Soul"
+  },
+  "68": {
+   "mesh": "/Game/All/0052000000/SkeletalMeshes/0052000000",
+   "name": "Terra Elder"
+  },
+  "680": {
+   "mesh": "/Game/All/0676000000/SkeletalMeshes/0676000000",
+   "name": "Massive Seaweed"
+  },
+  "681": {
+   "mesh": "/Game/All/0677000000/SkeletalMeshes/0677000000",
+   "name": "Grand Sea Jelly"
+  },
+  "682": {
+   "mesh": "/Game/All/0678000000/SkeletalMeshes/0678000000",
+   "name": "Sepia Boss"
+  },
+  "683": {
+   "mesh": "/Game/All/0679000000/SkeletalMeshes/0679000000",
+   "name": "Great White Shark"
+  },
+  "684": {
+   "mesh": "/Game/All/0680000000/SkeletalMeshes/0680000000",
+   "name": "Polliwog Boss"
+  },
+  "685": {
+   "mesh": "/Game/All/0675000000/SkeletalMeshes/0675000000",
+   "name": "Ancient Behemoth"
+  },
+  "686": {
+   "mesh": "/Game/All/0212000000/SkeletalMeshes/0212000000",
+   "name": "Sorrow Warrior"
+  },
+  "687": {
+   "mesh": "/Game/All/0213000000/SkeletalMeshes/0213000000",
+   "name": "Wailing Warrior"
+  },
+  "688": {
+   "mesh": "/Game/All/0214000000/SkeletalMeshes/0214000000",
+   "name": "Wailing Archer"
+  },
+  "689": {
+   "mesh": "/Game/All/0215000000/SkeletalMeshes/0215000000",
+   "name": "Sorrow Archer"
+  },
+  "69": {
+   "mesh": "/Game/All/0053000000/SkeletalMeshes/0053000000",
+   "name": "Little Squirt"
+  },
+  "690": {
+   "mesh": "/Game/All/0212000000/SkeletalMeshes/0212000000",
+   "name": "Sorrow Captain"
+  },
+  "691": {
+   "mesh": "/Game/All/0213000000/SkeletalMeshes/0213000000",
+   "name": "Wailing Captain"
+  },
+  "692": {
+   "mesh": "/Game/All/0214000000/SkeletalMeshes/0214000000",
+   "name": "Wailing Archer Captain"
+  },
+  "693": {
+   "mesh": "/Game/All/0215000000/SkeletalMeshes/0215000000",
+   "name": "Sorrow Archer Captain"
+  },
+  "694": {
+   "mesh": "/Game/All/0272000000/SkeletalMeshes/0272000000",
+   "name": "Treasure Chest"
+  },
+  "695": {
+   "mesh": "/Game/All/0199000000/SkeletalMeshes/0199000000",
+   "name": "Swamp Bog"
+  },
+  "696": {
+   "mesh": "/Game/All/0197000000/SkeletalMeshes/0197000000",
+   "name": "Swamp Man"
+  },
+  "697": {
+   "mesh": "/Game/All/0115000000/SkeletalMeshes/0115000000",
+   "name": "Swamp Watcher"
+  },
+  "698": {
+   "mesh": "/Game/All/0137000000/SkeletalMeshes/0137000000",
+   "name": "Swamp Warden"
+  },
+  "699": {
+   "mesh": "/Game/All/0681000000/SkeletalMeshes/0681000000",
+   "name": "Mystic Tree"
+  },
+  "7": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "70": {
+   "mesh": "/Game/All/0054000000/SkeletalMeshes/0054000000",
+   "name": "Little Squidy"
+  },
+  "700": {
+   "mesh": "/Game/All/0115000000/SkeletalMeshes/0115000000",
+   "name": "Ancient Sentinel"
+  },
+  "701": {
+   "mesh": "/Game/All/0137000000/SkeletalMeshes/0137000000",
+   "name": "Jungle Guardian"
+  },
+  "702": {
+   "mesh": "/Game/All/0188000000/SkeletalMeshes/0188000000",
+   "name": "Fish Bone Ambusher"
+  },
+  "703": {
+   "mesh": "/Game/All/0585000000/SkeletalMeshes/0585000000",
+   "name": "Fish Bone Persuer"
+  },
+  "704": {
+   "mesh": "/Game/All/0682000000/SkeletalMeshes/0682000000",
+   "name": "Water Mine"
+  },
+  "705": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Treasure Chest"
+  },
+  "706": {
+   "mesh": "/Game/All/0503000000/SkeletalMeshes/0503000000",
+   "name": "Master Swamp Bog"
+  },
+  "707": {
+   "mesh": "/Game/All/0197000000/SkeletalMeshes/0197000000",
+   "name": "Swamp Champion"
+  },
+  "708": {
+   "mesh": "/Game/All/0511000000/SkeletalMeshes/0511000000",
+   "name": "Master Swamp Watcher"
+  },
+  "709": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Obscure Chest 1"
+  },
+  "71": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Sleepy Snail"
+  },
+  "710": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Obscure Chest 2"
+  },
+  "711": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Obscure Chest 3"
+  },
+  "712": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Abandoned Chest 1"
+  },
+  "713": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Abandoned Chest 2"
+  },
+  "714": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Abandoned Chest 3"
+  },
+  "715": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Chest of Demonic World 1"
+  },
+  "716": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Chest of Demonic World 2"
+  },
+  "717": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Chest of Demonic World 3"
+  },
+  "718": {
+   "mesh": "/Game/All/0681000000/SkeletalMeshes/0681000000",
+   "name": "Tree of Fortune"
+  },
+  "719": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Sunken Merchant Ship"
+  },
+  "72": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "720": {
+   "mesh": "/Game/All/0212000000/SkeletalMeshes/0212000000",
+   "name": "Elite Wailing Warrior"
+  },
+  "721": {
+   "mesh": "/Game/All/0214000000/SkeletalMeshes/0214000000",
+   "name": "Wailing Marksman"
+  },
+  "722": {
+   "mesh": "/Game/All/0023000000/SkeletalMeshes/0023000000",
+   "name": "Cursed Mummy"
+  },
+  "723": {
+   "mesh": "/Game/All/0024000000/SkeletalMeshes/0024000000",
+   "name": "Crazy Mummy"
+  },
+  "724": {
+   "mesh": "/Game/All/0684000000/SkeletalMeshes/0684000000",
+   "name": "Water Hydra"
+  },
+  "725": {
+   "mesh": "/Game/All/0102000000/SkeletalMeshes/0102000000",
+   "name": "Demonic Snowman"
+  },
+  "726": {
+   "mesh": "/Game/All/0103000000/SkeletalMeshes/0103000000",
+   "name": "Demonic Yeti"
+  },
+  "727": {
+   "mesh": "/Game/All/0310000000/SkeletalMeshes/0310000000",
+   "name": "Mysterious Pebble"
+  },
+  "728": {
+   "mesh": "/Game/All/0710000000/SkeletalMeshes/0710000000",
+   "name": "Blue Base"
+  },
+  "729": {
+   "mesh": "/Game/All/0709000000/SkeletalMeshes/0709000000",
+   "name": "Red Base"
+  },
+  "73": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "730": {
+   "mesh": "/Game/All/0704000000/SkeletalMeshes/0704000000",
+   "name": "Basic Blue Guard Tower"
+  },
+  "731": {
+   "mesh": "/Game/All/0703000000/SkeletalMeshes/0703000000",
+   "name": "Basic Red Guard Tower"
+  },
+  "732": {
+   "mesh": "/Game/All/0685000000/SkeletalMeshes/0685000000",
+   "name": "Chun Li"
+  },
+  "733": {
+   "mesh": "/Game/All/0686000000/SkeletalMeshes/0686000000",
+   "name": "Wu Xin"
+  },
+  "734": {
+   "mesh": "/Game/All/0687000000/SkeletalMeshes/0687000000",
+   "name": "Pirate 006"
+  },
+  "735": {
+   "mesh": "/Game/All/0688000000/SkeletalMeshes/0688000000",
+   "name": "Pirate 007"
+  },
+  "736": {
+   "mesh": "/Game/All/0689000000/SkeletalMeshes/0689000000",
+   "name": "Pirate 008"
+  },
+  "737": {
+   "mesh": "/Game/All/0690000000/SkeletalMeshes/0690000000",
+   "name": "Long Er"
+  },
+  "738": {
+   "mesh": "/Game/All/0691000000/SkeletalMeshes/0691000000",
+   "name": "Sang Di"
+  },
+  "739": {
+   "mesh": "/Game/All/0704000000/SkeletalMeshes/0704000000",
+   "name": "Advance Blue Guard Tower"
+  },
+  "74": {
+   "mesh": "/Game/All/0056000000/SkeletalMeshes/0056000000",
+   "name": "Icy Dragon"
+  },
+  "740": {
+   "mesh": "/Game/All/0703000000/SkeletalMeshes/0703000000",
+   "name": "Advance Red Guard Tower"
+  },
+  "741": {
+   "mesh": "/Game/All/0217000000/SkeletalMeshes/0217000000",
+   "name": "Wolfman Archer"
+  },
+  "742": {
+   "mesh": "/Game/All/0700000000/SkeletalMeshes/0700000000",
+   "name": "Blue Team Granary"
+  },
+  "743": {
+   "mesh": "/Game/All/0699000000/SkeletalMeshes/0699000000",
+   "name": "Red Granary"
+  },
+  "744": {
+   "mesh": "/Game/All/0702000000/SkeletalMeshes/0702000000",
+   "name": "Blue Team Warehouse"
+  },
+  "745": {
+   "mesh": "/Game/All/0701000000/SkeletalMeshes/0701000000",
+   "name": "Red Team Warehouse"
+  },
+  "746": {
+   "mesh": "/Game/All/0315000000/SkeletalMeshes/0315000000",
+   "name": "Iron Tree"
+  },
+  "747": {
+   "mesh": "/Game/All/0269000000/SkeletalMeshes/0269000000",
+   "name": "Pirate Ringleader"
+  },
+  "748": {
+   "mesh": "/Game/All/0698000000/SkeletalMeshes/0698000000",
+   "name": "Fox Taoist"
+  },
+  "749": {
+   "mesh": "/Game/All/0699000000/SkeletalMeshes/0699000000",
+   "name": "Red Team Tent"
+  },
+  "75": {
+   "mesh": "/Game/All/0057000000/SkeletalMeshes/0057000000",
+   "name": "Mystic Shrub"
+  },
+  "750": {
+   "mesh": "/Game/All/0700000000/SkeletalMeshes/0700000000",
+   "name": "Blue Tent"
+  },
+  "751": {
+   "mesh": "/Game/All/0701000000/SkeletalMeshes/0701000000",
+   "name": "Red House"
+  },
+  "752": {
+   "mesh": "/Game/All/0702000000/SkeletalMeshes/0702000000",
+   "name": "Blue House"
+  },
+  "753": {
+   "mesh": "/Game/All/0703000000/SkeletalMeshes/0703000000",
+   "name": "Red Team Pagoda"
+  },
+  "754": {
+   "mesh": "/Game/All/0704000000/SkeletalMeshes/0704000000",
+   "name": "Blue Tower"
+  },
+  "755": {
+   "mesh": "/Game/All/0692000000/SkeletalMeshes/0692000000",
+   "name": "Wang Mo"
+  },
+  "756": {
+   "mesh": "/Game/All/0693000000/SkeletalMeshes/0693000000",
+   "name": "Yuri"
+  },
+  "757": {
+   "mesh": "/Game/All/0707000000/SkeletalMeshes/0707000000",
+   "name": "Pirate Captain 008"
+  },
+  "758": {
+   "mesh": "/Game/All/0694000000/SkeletalMeshes/0694000000",
+   "name": "Luna"
+  },
+  "759": {
+   "mesh": "/Game/All/0705000000/SkeletalMeshes/0705000000",
+   "name": "Hocus Pocus"
+  },
+  "76": {
+   "mesh": "/Game/All/0058000000/SkeletalMeshes/0058000000",
+   "name": "Rookie Boxeroo"
+  },
+  "760": {
+   "mesh": "/Game/All/0706000000/SkeletalMeshes/0706000000",
+   "name": "Shuang"
+  },
+  "761": {
+   "mesh": "/Game/All/0708000000/SkeletalMeshes/0708000000",
+   "name": "Fox Spirit"
+  },
+  "762": {
+   "mesh": "/Game/All/0709000000/SkeletalMeshes/0709000000",
+   "name": "Red Base"
+  },
+  "763": {
+   "mesh": "/Game/All/0710000000/SkeletalMeshes/0710000000",
+   "name": "Blue Base"
+  },
+  "764": {
+   "mesh": "/Game/All/0695000000/SkeletalMeshes/0695000000",
+   "name": "Zombie (Pong)"
+  },
+  "765": {
+   "mesh": "/Game/All/0696000000/SkeletalMeshes/0696000000",
+   "name": "Zombie (Gang)"
+  },
+  "766": {
+   "mesh": "/Game/All/0697000000/SkeletalMeshes/0697000000",
+   "name": "Zombie (Hu)"
+  },
+  "767": {
+   "mesh": "/Game/All/0320000000/SkeletalMeshes/0320000000",
+   "name": "Globbler Pirate Ship"
+  },
+  "768": {
+   "mesh": "/Game/All/0321000000/SkeletalMeshes/0321000000",
+   "name": "Long Fin Pirate Ship"
+  },
+  "769": {
+   "mesh": "/Game/All/0323000000/SkeletalMeshes/0323000000",
+   "name": "Skewering Pirate Ship"
+  },
+  "77": {
+   "mesh": "/Game/All/0059000000/SkeletalMeshes/0059000000",
+   "name": "Boxeroo Champion"
+  },
+  "770": {
+   "mesh": "/Game/All/0324000000/SkeletalMeshes/0324000000",
+   "name": "Pirate Flagship"
+  },
+  "771": {
+   "mesh": "/Game/All/0711000000/SkeletalMeshes/0711000000",
+   "name": "Zhao"
+  },
+  "772": {
+   "mesh": "/Game/All/0712000000/SkeletalMeshes/0712000000",
+   "name": "Cloud"
+  },
+  "773": {
+   "mesh": "/Game/All/0713000000/SkeletalMeshes/0713000000",
+   "name": "Zhou"
+  },
+  "774": {
+   "mesh": "/Game/All/0714000000/SkeletalMeshes/0714000000",
+   "name": "Misty"
+  },
+  "775": {
+   "mesh": "/Game/All/0715000000/SkeletalMeshes/0715000000",
+   "name": "Wang Rong"
+  },
+  "776": {
+   "mesh": "/Game/All/0721000000/SkeletalMeshes/0721000000",
+   "name": "Fox Sage"
+  },
+  "777": {
+   "mesh": "/Game/All/0724000000/SkeletalMeshes/0724000000",
+   "name": "Meteorite"
+  },
+  "778": {
+   "mesh": "/Game/All/0723000000/SkeletalMeshes/0723000000",
+   "name": "Legendary Tree of Fortune"
+  },
+  "779": {
+   "mesh": "/Game/All/0722000000/SkeletalMeshes/0722000000",
+   "name": "Bill"
+  },
+  "78": {
+   "mesh": "/Game/All/0060000000/SkeletalMeshes/0060000000",
+   "name": "Crimson Siren"
+  },
+  "780": {
+   "mesh": "/Game/All/0716000000/SkeletalMeshes/0716000000",
+   "name": "Evil Reindeer"
+  },
+  "781": {
+   "mesh": "/Game/All/0717000000/SkeletalMeshes/0717000000",
+   "name": "Santa Claus"
+  },
+  "782": {
+   "mesh": "/Game/All/0719000000/SkeletalMeshes/0719000000",
+   "name": "Chirstmas Tree"
+  },
+  "783": {
+   "mesh": "/Game/All/0720000000/SkeletalMeshes/0720000000",
+   "name": "Christmas Tree Npc"
+  },
+  "784": {
+   "mesh": "/Game/All/0718000000/SkeletalMeshes/0718000000",
+   "name": "Evil Santa Claus"
+  },
+  "785": {
+   "mesh": "/Game/All/0718000000/SkeletalMeshes/0718000000",
+   "name": "Heaven Gate"
+  },
+  "786": {
+   "mesh": "/Game/All/0729000000/SkeletalMeshes/0729000000",
+   "name": "Lizardman Warrior Commander"
+  },
+  "787": {
+   "mesh": "/Game/All/0728000000/SkeletalMeshes/0728000000",
+   "name": "Evil Tribal Warrior"
+  },
+  "788": {
+   "mesh": "/Game/All/0727000000/SkeletalMeshes/0727000000",
+   "name": "Evil Tribal Chieftian"
+  },
+  "789": {
+   "mesh": "/Game/All/0725000000/SkeletalMeshes/0725000000",
+   "name": "Black Dragon"
+  },
+  "79": {
+   "mesh": "/Game/All/0061000000/SkeletalMeshes/0061000000",
+   "name": "Fallen Naiad"
+  },
+  "790": {
+   "mesh": "/Game/All/0726000000/SkeletalMeshes/0726000000",
+   "name": "Black Dragon Lair Npc"
+  },
+  "791": {
+   "mesh": "/Game/All/0730000000/SkeletalMeshes/0730000000",
+   "name": "Baby Black Dragon"
+  },
+  "792": {
+   "mesh": "/Game/All/0731000000/SkeletalMeshes/0731000000",
+   "name": "Qu Yuan"
+  },
+  "793": {
+   "mesh": "/Game/All/0730000000/SkeletalMeshes/0730000000",
+   "name": "Baby Thunder Dragon"
+  },
+  "794": {
+   "mesh": "/Game/All/0730000000/SkeletalMeshes/0730000000",
+   "name": "Tempest Dragon"
+  },
+  "795": {
+   "mesh": "/Game/All/0735000000/SkeletalMeshes/0735000000",
+   "name": "Heaven Gate"
+  },
+  "796": {
+   "mesh": "/Game/All/0737000000/SkeletalMeshes/0737000000",
+   "name": "Prehistoric Giant Octopus"
+  },
+  "797": {
+   "mesh": "/Game/All/0732000000/SkeletalMeshes/0732000000",
+   "name": "Skeletar Pirate - Lala"
+  },
+  "798": {
+   "mesh": "/Game/All/0738000000/SkeletalMeshes/0738000000",
+   "name": "Wellington"
+  },
+  "799": {
+   "mesh": "/Game/All/0739000000/SkeletalMeshes/0739000000",
+   "name": "Deathsoul Guard"
+  },
+  "8": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "80": {
+   "mesh": "/Game/All/0062000000/SkeletalMeshes/0062000000",
+   "name": "Berserk Boxeroo"
+  },
+  "800": {
+   "mesh": "/Game/All/0740000000/SkeletalMeshes/0740000000",
+   "name": "Auto Defense Weapon"
+  },
+  "801": {
+   "mesh": "/Game/All/3001000000/SkeletalMeshes/3001000000",
+   "name": "Deathsoul Turret"
+  },
+  "802": {
+   "mesh": "/Game/All/0741000000/SkeletalMeshes/0741000000",
+   "name": "Jack Sparrow"
+  },
+  "803": {
+   "mesh": "/Game/All/0742000000/SkeletalMeshes/0742000000",
+   "name": "Mark Turner"
+  },
+  "804": {
+   "mesh": "/Game/All/0736000000/SkeletalMeshes/0736000000",
+   "name": "Elizabeth"
+  },
+  "805": {
+   "mesh": "/Game/All/0734000000/SkeletalMeshes/0734000000",
+   "name": "Barborosa"
+  },
+  "806": {
+   "mesh": "/Game/All/0733000000/SkeletalMeshes/0733000000",
+   "name": "Skeletar Pirate - Kaka"
+  },
+  "807": {
+   "mesh": "/Game/All/0743000000/SkeletalMeshes/0743000000",
+   "name": "Deathsoul Commander"
+  },
+  "808": {
+   "mesh": "/Game/All/0744000000/SkeletalMeshes/0744000000",
+   "name": "Deathsoul Soldier"
+  },
+  "809": {
+   "mesh": "/Game/All/0745000000/SkeletalMeshes/0745000000",
+   "name": "Skeletar Pirate - Tutu"
+  },
+  "81": {
+   "mesh": "/Game/All/0064000000/SkeletalMeshes/0064000000",
+   "name": "Crystalline Dolphin"
+  },
+  "810": {
+   "mesh": "/Game/All/0752000000/SkeletalMeshes/0752000000",
+   "name": "Birthday Strange Pirate"
+  },
+  "811": {
+   "mesh": "/Game/All/0753000000/SkeletalMeshes/0753000000",
+   "name": "Strange Pirate Chief"
+  },
+  "812": {
+   "mesh": "/Game/All/0746000000/SkeletalMeshes/0746000000",
+   "name": "Deathsoul Gunboat"
+  },
+  "813": {
+   "mesh": "/Game/All/0747000000/SkeletalMeshes/0747000000",
+   "name": "Deathsoul Speed Boat"
+  },
+  "814": {
+   "mesh": "/Game/All/0748000000/SkeletalMeshes/0748000000",
+   "name": "Skeletar Pirate Ship"
+  },
+  "815": {
+   "mesh": "/Game/All/0749000000/SkeletalMeshes/0749000000",
+   "name": "Black Jewel"
+  },
+  "816": {
+   "mesh": "/Game/All/0750000000/SkeletalMeshes/0750000000",
+   "name": "Spirit Ship"
+  },
+  "817": {
+   "mesh": "/Game/All/0751000000/SkeletalMeshes/0751000000",
+   "name": "Deathsoul Officer"
+  },
+  "818": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Soul Gathering Coffin"
+  },
+  "819": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Bayside Wreckage"
+  },
+  "82": {
+   "mesh": "/Game/All/0065000000/SkeletalMeshes/0065000000",
+   "name": "Vampire Bat"
+  },
+  "820": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Bayside Wreckage"
+  },
+  "821": {
+   "mesh": "/Game/All/0502000000/SkeletalMeshes/0502000000",
+   "name": "Hell Skeleton A"
+  },
+  "822": {
+   "mesh": "/Game/All/0506000000/SkeletalMeshes/0506000000",
+   "name": "Hell Skeleton B"
+  },
+  "823": {
+   "mesh": "/Game/All/0023000000/SkeletalMeshes/0023000000",
+   "name": "Hell Mummy A"
+  },
+  "824": {
+   "mesh": "/Game/All/0024000000/SkeletalMeshes/0024000000",
+   "name": "Hell Mummy B"
+  },
+  "825": {
+   "mesh": "/Game/All/0695000000/SkeletalMeshes/0695000000",
+   "name": "Hell Corpse A"
+  },
+  "826": {
+   "mesh": "/Game/All/0696000000/SkeletalMeshes/0696000000",
+   "name": "Hell Corpse B"
+  },
+  "827": {
+   "mesh": "/Game/All/0100000000/SkeletalMeshes/0100000000",
+   "name": "Hell Pharaoh A"
+  },
+  "828": {
+   "mesh": "/Game/All/0045000000/SkeletalMeshes/0045000000",
+   "name": "Hell Pharaoh B"
+  },
+  "829": {
+   "mesh": "/Game/All/0082000000/SkeletalMeshes/0082000000",
+   "name": "Richie Yao"
+  },
+  "83": {
+   "mesh": "/Game/All/0066000000/SkeletalMeshes/0066000000",
+   "name": "Sailor Penguin"
+  },
+  "830": {
+   "mesh": "/Game/All/0082000000/SkeletalMeshes/0082000000",
+   "name": "Richie the Seventh"
+  },
+  "831": {
+   "mesh": "/Game/All/0082000000/SkeletalMeshes/0082000000",
+   "name": "Richie the Sixth"
+  },
+  "832": {
+   "mesh": "/Game/All/0082000000/SkeletalMeshes/0082000000",
+   "name": "Richie the Fifth"
+  },
+  "833": {
+   "mesh": "/Game/All/0082000000/SkeletalMeshes/0082000000",
+   "name": "Richie the Fourth"
+  },
+  "834": {
+   "mesh": "/Game/All/0082000000/SkeletalMeshes/0082000000",
+   "name": "Richie the Third"
+  },
+  "835": {
+   "mesh": "/Game/All/0082000000/SkeletalMeshes/0082000000",
+   "name": "Richie the Second"
+  },
+  "836": {
+   "mesh": "/Game/All/0082000000/SkeletalMeshes/0082000000",
+   "name": "Big Richie"
+  },
+  "837": {
+   "mesh": "/Game/All/0082000000/SkeletalMeshes/0082000000",
+   "name": "Cerebus"
+  },
+  "838": {
+   "mesh": "/Game/All/0754000000/SkeletalMeshes/0754000000",
+   "name": "Jackpot Machine"
+  },
+  "839": {
+   "mesh": "/Game/All/0755000000/SkeletalMeshes/0755000000",
+   "name": "Furnace of Immortality"
+  },
+  "84": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "840": {
+   "mesh": "/Game/All/0756000000/SkeletalMeshes/0756000000",
+   "name": "Vault Assistant"
+  },
+  "841": {
+   "mesh": "/Game/All/0054000000/SkeletalMeshes/0054000000",
+   "name": "Little Squidy Captain"
+  },
+  "842": {
+   "mesh": "/Game/All/0148000000/SkeletalMeshes/0148000000",
+   "name": "Strong Little Deer"
+  },
+  "843": {
+   "mesh": "/Game/All/0044000000/SkeletalMeshes/0044000000",
+   "name": "Aberrance Hopping Lizard"
+  },
+  "844": {
+   "mesh": "/Game/All/0211000000/SkeletalMeshes/0211000000",
+   "name": "Vampiric Elk"
+  },
+  "845": {
+   "mesh": "/Game/All/0173000000/SkeletalMeshes/0173000000",
+   "name": "Snowy Snail Monarch"
+  },
+  "846": {
+   "mesh": "/Game/All/0076000000/SkeletalMeshes/0076000000",
+   "name": "Smuggler Leader"
+  },
+  "847": {
+   "mesh": "/Game/All/0293000000/SkeletalMeshes/0293000000",
+   "name": "Ancient Sandy Tortoise"
+  },
+  "848": {
+   "mesh": "/Game/All/0281000000/SkeletalMeshes/0281000000",
+   "name": "Violent Air Porky"
+  },
+  "849": {
+   "mesh": "/Game/All/0138000000/SkeletalMeshes/0138000000",
+   "name": "Man-Eating Spider Queen"
+  },
+  "85": {
+   "mesh": "/Game/All/0069000000/SkeletalMeshes/0069000000",
+   "name": "Stramonium"
+  },
+  "850": {
+   "mesh": "/Game/All/0046000000/SkeletalMeshes/0046000000",
+   "name": "Berserk Mad Boar"
+  },
+  "851": {
+   "mesh": "/Game/All/0295000000/SkeletalMeshes/0295000000",
+   "name": "Grassland Wolf Champion"
+  },
+  "852": {
+   "mesh": "/Game/All/0214000000/SkeletalMeshes/0214000000",
+   "name": "Fearsome Skeletal Archer"
+  },
+  "853": {
+   "mesh": "/Game/All/0073000000/SkeletalMeshes/0073000000",
+   "name": "Elite Tempest Sea Jelly"
+  },
+  "854": {
+   "mesh": "/Game/All/0036000000/SkeletalMeshes/0036000000",
+   "name": "Malicious Azure Siren"
+  },
+  "855": {
+   "mesh": "/Game/All/0106000000/SkeletalMeshes/0106000000",
+   "name": "Aberrance Blood Polliwog"
+  },
+  "856": {
+   "mesh": "/Game/All/0090000000/SkeletalMeshes/0090000000",
+   "name": "Black Market Merchant"
+  },
+  "857": {
+   "mesh": "/Game/All/0227000000/SkeletalMeshes/0227000000",
+   "name": "Revived Soul of Goddess"
+  },
+  "858": {
+   "mesh": "/Game/All/0757000000/SkeletalMeshes/0757000000",
+   "name": "Lady Boss"
+  },
+  "859": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Novice Chaos Chest"
+  },
+  "86": {
+   "mesh": "/Game/All/0068000000/SkeletalMeshes/0068000000",
+   "name": "Needle of Stramonium"
+  },
+  "860": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Standard Chaos Chest"
+  },
+  "861": {
+   "mesh": "/Game/All/0683000000/SkeletalMeshes/0683000000",
+   "name": "Expert Chaos Chest"
+  },
+  "862": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "863": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "864": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "865": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "866": {
+   "mesh": "/Game/All/0758000000/SkeletalMeshes/0758000000",
+   "name": "X Machine"
+  },
+  "867": {
+   "mesh": "/Game/All/0759000000/SkeletalMeshes/0759000000",
+   "name": "Matchstick"
+  },
+  "868": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Lance Newbie Phantom"
+  },
+  "869": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Lance Hunter Phantom"
+  },
+  "87": {
+   "mesh": "/Game/All/0067000000/SkeletalMeshes/0067000000",
+   "name": "Frost Chimera"
+  },
+  "870": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Lance Crusader Phantom"
+  },
+  "871": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Lance Voyager Phantom"
+  },
+  "872": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "Carsise Newbie Phantom"
+  },
+  "873": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "Carsise Swordsman Phantom"
+  },
+  "874": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "Carsise Champion Phantom"
+  },
+  "875": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "Phyllis Newbie Phantom"
+  },
+  "876": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "Phyllis Explorer Phantom"
+  },
+  "877": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "Phyllis Sharpshooter Phantom"
+  },
+  "878": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "Phyllis Cleric Phantom"
+  },
+  "879": {
+   "mesh": "/Game/All/0003000000/SkeletalMeshes/0003000000",
+   "name": "Ami Newbie Phantom"
+  },
+  "88": {
+   "mesh": "/Game/All/0070000000/SkeletalMeshes/0070000000",
+   "name": "Miner Mole"
+  },
+  "880": {
+   "mesh": "/Game/All/0003000000/SkeletalMeshes/0003000000",
+   "name": "Ami Cleric Phantom"
+  },
+  "881": {
+   "mesh": "/Game/All/0003000000/SkeletalMeshes/0003000000",
+   "name": "Ami Seal Master Phantom"
+  },
+  "882": {
+   "mesh": "/Game/All/0760000000/SkeletalMeshes/0760000000",
+   "name": "Boiler"
+  },
+  "883": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Black Dragon Lance"
+  },
+  "884": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "Black Dragon Carsise"
+  },
+  "885": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "Black Dragon Phyllis"
+  },
+  "886": {
+   "mesh": "/Game/All/0003000000/SkeletalMeshes/0003000000",
+   "name": "Black Dragon Ami"
+  },
+  "887": {
+   "mesh": "/Game/All/0762000000/SkeletalMeshes/0762000000",
+   "name": "Material Generator"
+  },
+  "888": {
+   "mesh": "/Game/All/0139000000/SkeletalMeshes/0139000000",
+   "name": "Defoliate Pine"
+  },
+  "889": {
+   "mesh": "/Game/All/0139000000/SkeletalMeshes/0139000000",
+   "name": "Lavender Core Wood"
+  },
+  "89": {
+   "mesh": "/Game/All/0074000000/SkeletalMeshes/0074000000",
+   "name": "Mermaid Queen"
+  },
+  "890": {
+   "mesh": "/Game/All/0139000000/SkeletalMeshes/0139000000",
+   "name": "Tusk Softwood"
+  },
+  "891": {
+   "mesh": "/Game/All/0139000000/SkeletalMeshes/0139000000",
+   "name": "Metal Norite"
+  },
+  "892": {
+   "mesh": "/Game/All/0139000000/SkeletalMeshes/0139000000",
+   "name": "Rue"
+  },
+  "893": {
+   "mesh": "/Game/All/0139000000/SkeletalMeshes/0139000000",
+   "name": "Flower Pear"
+  },
+  "894": {
+   "mesh": "/Game/All/0139000000/SkeletalMeshes/0139000000",
+   "name": "Fir"
+  },
+  "895": {
+   "mesh": "/Game/All/0139000000/SkeletalMeshes/0139000000",
+   "name": "Jade Sandal"
+  },
+  "896": {
+   "mesh": "/Game/All/0139000000/SkeletalMeshes/0139000000",
+   "name": "Crimson Ceiba"
+  },
+  "897": {
+   "mesh": "/Game/All/0139000000/SkeletalMeshes/0139000000",
+   "name": "Water Willow"
+  },
+  "898": {
+   "mesh": "/Game/All/0140000000/SkeletalMeshes/0140000000",
+   "name": "Iron Ore"
+  },
+  "899": {
+   "mesh": "/Game/All/0140000000/SkeletalMeshes/0140000000",
+   "name": "Bronze Ore"
+  },
+  "9": {
+   "mesh": "/Game/All/0055000000/SkeletalMeshes/0055000000",
+   "name": "Weird Monster"
+  },
+  "90": {
+   "mesh": "/Game/All/0071000000/SkeletalMeshes/0071000000",
+   "name": "Sea Jelly"
+  },
+  "900": {
+   "mesh": "/Game/All/0140000000/SkeletalMeshes/0140000000",
+   "name": "Crystal"
+  },
+  "901": {
+   "mesh": "/Game/All/0140000000/SkeletalMeshes/0140000000",
+   "name": "Silver Ore"
+  },
+  "902": {
+   "mesh": "/Game/All/0140000000/SkeletalMeshes/0140000000",
+   "name": "Gold Ore"
+  },
+  "903": {
+   "mesh": "/Game/All/0140000000/SkeletalMeshes/0140000000",
+   "name": "Strange Metal"
+  },
+  "904": {
+   "mesh": "/Game/All/0140000000/SkeletalMeshes/0140000000",
+   "name": "Fascinating Gem"
+  },
+  "905": {
+   "mesh": "/Game/All/0140000000/SkeletalMeshes/0140000000",
+   "name": "Diamond"
+  },
+  "906": {
+   "mesh": "/Game/All/0140000000/SkeletalMeshes/0140000000",
+   "name": "Sorcery Ore"
+  },
+  "907": {
+   "mesh": "/Game/All/0140000000/SkeletalMeshes/0140000000",
+   "name": "Oceania Meteorite"
+  },
+  "908": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Skeletar Ship"
+  },
+  "909": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Coral Ship"
+  },
+  "91": {
+   "mesh": "/Game/All/0072000000/SkeletalMeshes/0072000000",
+   "name": "Electric Sea Jelly"
+  },
+  "910": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Ossein Ship"
+  },
+  "911": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Turtle Shell Ship"
+  },
+  "912": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Hard Shell Ship"
+  },
+  "913": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Shiny Coral Ship"
+  },
+  "914": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Sharp Skeletar Ship"
+  },
+  "915": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Sorceror Ship"
+  },
+  "916": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Crystal Coral Ship"
+  },
+  "917": {
+   "mesh": "/Game/All/0306000000/SkeletalMeshes/0306000000",
+   "name": "Vengence Ship"
+  },
+  "918": {
+   "mesh": "/Game/All/0307000000/SkeletalMeshes/0307000000",
+   "name": "Dotted Codfish"
+  },
+  "919": {
+   "mesh": "/Game/All/0307000000/SkeletalMeshes/0307000000",
+   "name": "Clownfish"
+  },
+  "92": {
+   "mesh": "/Game/All/0073000000/SkeletalMeshes/0073000000",
+   "name": "Tempest Sea Jelly"
+  },
+  "920": {
+   "mesh": "/Game/All/0307000000/SkeletalMeshes/0307000000",
+   "name": "Squirting Fish"
+  },
+  "921": {
+   "mesh": "/Game/All/0307000000/SkeletalMeshes/0307000000",
+   "name": "Moon Tail Eel"
+  },
+  "922": {
+   "mesh": "/Game/All/0307000000/SkeletalMeshes/0307000000",
+   "name": "Diving Clam"
+  },
+  "923": {
+   "mesh": "/Game/All/0307000000/SkeletalMeshes/0307000000",
+   "name": "Phoenix Prawn"
+  },
+  "924": {
+   "mesh": "/Game/All/0307000000/SkeletalMeshes/0307000000",
+   "name": "Tiger Bone Fish"
+  },
+  "925": {
+   "mesh": "/Game/All/0307000000/SkeletalMeshes/0307000000",
+   "name": "Pearlie Ratfish"
+  },
+  "926": {
+   "mesh": "/Game/All/0307000000/SkeletalMeshes/0307000000",
+   "name": "Starry Wood"
+  },
+  "927": {
+   "mesh": "/Game/All/0307000000/SkeletalMeshes/0307000000",
+   "name": "Man-Eating Shark"
+  },
+  "928": {
+   "mesh": "/Game/All/0764000000/SkeletalMeshes/0764000000",
+   "name": "Turkey"
+  },
+  "929": {
+   "mesh": "/Game/All/0765000000/SkeletalMeshes/0765000000",
+   "name": "Mini Santa"
+  },
+  "93": {
+   "mesh": "/Game/All/0075000000/SkeletalMeshes/0075000000",
+   "name": "Bandit"
+  },
+  "930": {
+   "mesh": "/Game/All/0766000000/SkeletalMeshes/0766000000",
+   "name": "Bald Turkey"
+  },
+  "931": {
+   "mesh": "/Game/All/0767000000/SkeletalMeshes/0767000000",
+   "name": "Elk Baby"
+  },
+  "932": {
+   "mesh": "/Game/All/0768000000/SkeletalMeshes/0768000000",
+   "name": "Snowman Baby"
+  },
+  "933": {
+   "mesh": "/Game/All/0769000000/SkeletalMeshes/0769000000",
+   "name": "Medusa"
+  },
+  "934": {
+   "mesh": "/Game/All/0770000000/SkeletalMeshes/0770000000",
+   "name": "Navy Token Box"
+  },
+  "935": {
+   "mesh": "/Game/All/0771000000/SkeletalMeshes/0771000000",
+   "name": "Pirate Token Box"
+  },
+  "936": {
+   "mesh": "/Game/All/0772000000/SkeletalMeshes/0772000000",
+   "name": "Pirate Defense Tower"
+  },
+  "937": {
+   "mesh": "/Game/All/0066000000/SkeletalMeshes/0066000000",
+   "name": "Meaty Penguin"
+  },
+  "938": {
+   "mesh": "/Game/All/0299000000/SkeletalMeshes/0299000000",
+   "name": "Aberrance Lizard"
+  },
+  "939": {
+   "mesh": "/Game/All/0050000000/SkeletalMeshes/0050000000",
+   "name": "Terra Miner"
+  },
+  "94": {
+   "mesh": "/Game/All/0076000000/SkeletalMeshes/0076000000",
+   "name": "Smuggler"
+  },
+  "940": {
+   "mesh": "/Game/All/0236000000/SkeletalMeshes/0236000000",
+   "name": "Sealed Warden"
+  },
+  "941": {
+   "mesh": "/Game/All/0100000000/SkeletalMeshes/0100000000",
+   "name": "Hell Emissary"
+  },
+  "942": {
+   "mesh": "/Game/All/0682000000/SkeletalMeshes/0682000000",
+   "name": "Water Mine Lv1"
+  },
+  "943": {
+   "mesh": "/Game/All/0682000000/SkeletalMeshes/0682000000",
+   "name": "Water Mine Lv2"
+  },
+  "944": {
+   "mesh": "/Game/All/0682000000/SkeletalMeshes/0682000000",
+   "name": "Water Mine Lv3"
+  },
+  "945": {
+   "mesh": "/Game/All/0682000000/SkeletalMeshes/0682000000",
+   "name": "Water Mine Lv4"
+  },
+  "946": {
+   "mesh": "/Game/All/0682000000/SkeletalMeshes/0682000000",
+   "name": ""
+  },
+  "947": {
+   "mesh": "/Game/All/0047000000/SkeletalMeshes/0047000000",
+   "name": "Exploding Lamb Lv1"
+  },
+  "948": {
+   "mesh": "/Game/All/0047000000/SkeletalMeshes/0047000000",
+   "name": "Exploding Lamb Lv2"
+  },
+  "949": {
+   "mesh": "/Game/All/0047000000/SkeletalMeshes/0047000000",
+   "name": "Exploding Lamb Lv3"
+  },
+  "95": {
+   "mesh": "/Game/All/0157000000/SkeletalMeshes/0157000000",
+   "name": "Cactus"
+  },
+  "950": {
+   "mesh": "/Game/All/0047000000/SkeletalMeshes/0047000000",
+   "name": "Exploding Lamb Lv4"
+  },
+  "951": {
+   "mesh": "/Game/All/0047000000/SkeletalMeshes/0047000000",
+   "name": "Exploding Lamb Lv5"
+  },
+  "952": {
+   "mesh": "/Game/All/0725000000/SkeletalMeshes/0725000000",
+   "name": "Black Dragon Phantom"
+  },
+  "953": {
+   "mesh": "/Game/All/0773000000/SkeletalMeshes/0773000000",
+   "name": "Pirate Devil Tower"
+  },
+  "954": {
+   "mesh": "/Game/All/0774000000/SkeletalMeshes/0774000000",
+   "name": "Navy Statue"
+  },
+  "955": {
+   "mesh": "/Game/All/0775000000/SkeletalMeshes/0775000000",
+   "name": "Pirate Statue"
+  },
+  "956": {
+   "mesh": "/Game/All/0291000000/SkeletalMeshes/0291000000",
+   "name": "Killer Scorpion"
+  },
+  "957": {
+   "mesh": "/Game/All/0027000000/SkeletalMeshes/0027000000",
+   "name": "Sand Pirate"
+  },
+  "958": {
+   "mesh": "/Game/All/0105000000/SkeletalMeshes/0105000000",
+   "name": "Desert Lizard Warrior"
+  },
+  "959": {
+   "mesh": "/Game/All/0668000000/SkeletalMeshes/0668000000",
+   "name": "Phantom Knight"
+  },
+  "96": {
+   "mesh": "/Game/All/0158000000/SkeletalMeshes/0158000000",
+   "name": "Melon"
+  },
+  "960": {
+   "mesh": "/Game/All/0203000000/SkeletalMeshes/0203000000",
+   "name": "Sacred Snow Doll"
+  },
+  "961": {
+   "mesh": "/Game/All/0205000000/SkeletalMeshes/0205000000",
+   "name": "Great Polar Bear"
+  },
+  "962": {
+   "mesh": "/Game/All/0667000000/SkeletalMeshes/0667000000",
+   "name": "Ice Guard"
+  },
+  "963": {
+   "mesh": "/Game/All/0673000000/SkeletalMeshes/0673000000",
+   "name": "Evil Ice Phantasm"
+  },
+  "964": {
+   "mesh": "/Game/All/0194000000/SkeletalMeshes/0194000000",
+   "name": "Berserk Tribesman"
+  },
+  "965": {
+   "mesh": "/Game/All/0037000000/SkeletalMeshes/0037000000",
+   "name": "Thunder Lion"
+  },
+  "966": {
+   "mesh": "/Game/All/0506000000/SkeletalMeshes/0506000000",
+   "name": "Evil Carcass"
+  },
+  "967": {
+   "mesh": "/Game/All/0030000000/SkeletalMeshes/0030000000",
+   "name": "Warrior Phantom"
+  },
+  "968": {
+   "mesh": "/Game/All/0157000000/SkeletalMeshes/0157000000",
+   "name": "Devious Cactus"
+  },
+  "969": {
+   "mesh": "/Game/All/0508000000/SkeletalMeshes/0508000000",
+   "name": "Horrifying Mummy"
+  },
+  "97": {
+   "mesh": "/Game/All/0079000000/SkeletalMeshes/0079000000",
+   "name": "Seaweed"
+  },
+  "970": {
+   "mesh": "/Game/All/0304000000/SkeletalMeshes/0304000000",
+   "name": "Berserk Snowboar"
+  },
+  "971": {
+   "mesh": "/Game/All/0235000000/SkeletalMeshes/0235000000",
+   "name": "Snow Mistress"
+  },
+  "972": {
+   "mesh": "/Game/All/0065000000/SkeletalMeshes/0065000000",
+   "name": "Devious Bat"
+  },
+  "973": {
+   "mesh": "/Game/All/0518000000/SkeletalMeshes/0518000000",
+   "name": "Pumpkin Death Warrior"
+  },
+  "974": {
+   "mesh": "/Game/All/0668000000/SkeletalMeshes/0668000000",
+   "name": "Despair Knight - Saro"
+  },
+  "975": {
+   "mesh": "/Game/All/0674000000/SkeletalMeshes/0674000000",
+   "name": "Abyss Mudmonster - Karu"
+  },
+  "976": {
+   "mesh": "/Game/All/0672000000/SkeletalMeshes/0672000000",
+   "name": "Abyss Prisoner - Aruthur"
+  },
+  "977": {
+   "mesh": "/Game/All/0743000000/SkeletalMeshes/0743000000",
+   "name": "Abyss Demon - Sacrois"
+  },
+  "978": {
+   "mesh": "/Game/All/0675000000/SkeletalMeshes/0675000000",
+   "name": "Abyss Beast - Kuroo"
+  },
+  "979": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Abyss Lord - Phantom Baron"
+  },
+  "98": {
+   "mesh": "/Game/All/0080000000/SkeletalMeshes/0080000000",
+   "name": "Yeti"
+  },
+  "980": {
+   "mesh": "/Game/All/0000000000/SkeletalMeshes/0000000000",
+   "name": "Abyss Lord - Demon Flame"
+  },
+  "981": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "Abyss Lord - Evil Beast"
+  },
+  "982": {
+   "mesh": "/Game/All/0001000000/SkeletalMeshes/0001000000",
+   "name": "Abyss Lord - Tyran"
+  },
+  "983": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "Abyss Lord - Phoenix"
+  },
+  "984": {
+   "mesh": "/Game/All/0002000000/SkeletalMeshes/0002000000",
+   "name": "Abyss Lord - Despair"
+  },
+  "985": {
+   "mesh": "/Game/All/0003000000/SkeletalMeshes/0003000000",
+   "name": "Abyss Lord - Drakan"
+  },
+  "986": {
+   "mesh": "/Game/All/0003000000/SkeletalMeshes/0003000000",
+   "name": "Abyss Lord - Tidal"
+  },
+  "987": {
+   "mesh": "/Game/All/0725000000/SkeletalMeshes/0725000000",
+   "name": "Abyss Lord - Hardin"
+  },
+  "988": {
+   "mesh": "/Game/All/0227000000/SkeletalMeshes/0227000000",
+   "name": "Abyss Supreme - Kara"
+  },
+  "989": {
+   "mesh": "/Game/All/0550000000/SkeletalMeshes/0550000000",
+   "name": "Bloodwing Angel"
+  },
+  "99": {
+   "mesh": "/Game/All/0081000000/SkeletalMeshes/0081000000",
+   "name": "Behemoth"
+  },
+  "990": {
+   "mesh": "/Game/All/0522000000/SkeletalMeshes/0522000000",
+   "name": "Black Devious Angel"
+  },
+  "991": {
+   "mesh": "/Game/All/0270000000/SkeletalMeshes/0270000000",
+   "name": "Death Squirty"
+  },
+  "992": {
+   "mesh": "/Game/All/0271000000/SkeletalMeshes/0271000000",
+   "name": "Death Squirdy"
+  },
+  "993": {
+   "mesh": "/Game/All/0700000000/SkeletalMeshes/0700000000",
+   "name": "Navy Granary"
+  },
+  "994": {
+   "mesh": "/Game/All/0699000000/SkeletalMeshes/0699000000",
+   "name": "Pirate Granary"
+  },
+  "995": {
+   "mesh": "/Game/All/0702000000/SkeletalMeshes/0702000000",
+   "name": "Navy Ammo Warehouse"
+  },
+  "996": {
+   "mesh": "/Game/All/0701000000/SkeletalMeshes/0701000000",
+   "name": "Pirate Ammo Warehouse"
+  },
+  "997": {
+   "mesh": "/Game/All/3001000000/SkeletalMeshes/3001000000",
+   "name": "Navy Cannon Tower"
+  },
+  "998": {
+   "mesh": "/Game/All/3001000000/SkeletalMeshes/3001000000",
+   "name": "Pirate Cannon Tower"
+  },
+  "999": {
+   "mesh": "/Game/All/0667000000/SkeletalMeshes/0667000000",
+   "name": "Navy Emissary"
+  }
+ }
+}
