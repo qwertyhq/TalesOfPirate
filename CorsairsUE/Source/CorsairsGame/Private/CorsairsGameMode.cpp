@@ -124,6 +124,14 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 			else if (Character->SetBodyMesh(MeshPath))
 			{
 				UE_LOG(LogCorsairsGameMode, Log, TEXT("тело: %s"), *MeshPath);
+
+				// Анимация ставится после тела: проверка совместимости
+				// скелетов опирается на уже назначенный меш.
+				const FString AnimPath = ResolveField(Slot.TypeId, TEXT("animation"));
+				if (!AnimPath.IsEmpty() && Character->SetBodyAnimation(AnimPath))
+				{
+					UE_LOG(LogCorsairsGameMode, Log, TEXT("анимация: %s"), *AnimPath);
+				}
 			}
 
 			// Персонажа ставим туда, где его держит сервер. Ось Y
@@ -152,6 +160,11 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 }
 
 FString ACorsairsGameMode::ResolveBodyMesh(int32 TypeId) const
+{
+	return ResolveField(TypeId, TEXT("mesh"));
+}
+
+FString ACorsairsGameMode::ResolveField(int32 TypeId, const TCHAR* Field) const
 {
 	const FString Path = FPaths::ProjectDir() / CharacterMapRelativePath;
 
@@ -183,7 +196,7 @@ FString ACorsairsGameMode::ResolveBodyMesh(int32 TypeId) const
 		return FString();
 	}
 
-	FString Mesh;
-	(*Entry)->TryGetStringField(TEXT("mesh"), Mesh);
-	return Mesh;
+	FString Value;
+	(*Entry)->TryGetStringField(Field, Value);
+	return Value;
 }

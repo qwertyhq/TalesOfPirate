@@ -23,6 +23,7 @@ import sys
 
 # Куда import_assets.py кладёт ассеты.
 CONTENT_ROOT = "/Game/All"
+ANIMATION_ROOT = "/Game/Animations"
 
 # Нулевой вариант скина — базовое тело без снаряжения.
 BASE_SKIN_VARIANT = "000000"
@@ -43,10 +44,14 @@ def main():
     for cha_id, name, model in rows:
         if model is None:
             continue
-        asset_name = f"{int(model):04d}{BASE_SKIN_VARIANT}"
+        bone = f"{int(model):04d}"
+        asset_name = f"{bone}{BASE_SKIN_VARIANT}"
         mapping[str(cha_id)] = {
             "name": name,
             "mesh": f"{CONTENT_ROOT}/{asset_name}/SkeletalMeshes/{asset_name}",
+            # Скелет и дорожка приходят из одного .lab, поэтому анимация
+            # адресуется тем же четырёхзначным номером.
+            "animation": f"{ANIMATION_ROOT}/{bone}/SkeletalMeshes/{bone}_Anim",
         }
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)

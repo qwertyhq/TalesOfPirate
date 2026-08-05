@@ -5,6 +5,7 @@
 #include "CorsairsSession.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Animation/AnimSequence.h"
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
@@ -88,6 +89,35 @@ bool ACorsairsPlayerCharacter::SetBodyMesh(const FString& AssetPath)
 	}
 
 	GetMesh()->SetSkeletalMesh(Mesh);
+	return true;
+}
+
+bool ACorsairsPlayerCharacter::SetBodyAnimation(const FString& AssetPath)
+{
+	if (AssetPath.IsEmpty())
+	{
+		return false;
+	}
+
+	UAnimSequence* Sequence = LoadObject<UAnimSequence>(nullptr, *AssetPath);
+	if (Sequence == nullptr)
+	{
+		UE_LOG(LogCorsairsCharacter, Warning, TEXT("анимация не загрузилась: %s"), *AssetPath);
+		return false;
+	}
+
+	// Скелеты обязаны совпадать: иначе UE проигрывает дорожку по именам костей
+	// и молча выдаёт искажённую позу вместо отказа.
+	if (GetMesh()->GetSkeletalMeshAsset() == nullptr ||
+		GetMesh()->GetSkeletalMeshAsset()->GetSkeleton() != Sequence->GetSkeleton())
+	{
+		UE_LOG(LogCorsairsCharacter, Warning,
+			   TEXT("скелет анимации не совпадает со скелетом тела: %s"), *AssetPath);
+		return false;
+	}
+
+	GetMesh()->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+	GetMesh()->PlayAnimation(Sequence, true);
 	return true;
 }
 

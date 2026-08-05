@@ -28,6 +28,14 @@ class CORSAIRSGAME_API ACorsairsPlayerCharacter : public ACharacter
 public:
 	ACorsairsPlayerCharacter();
 
+	/** Ставит телу анимацию и включает её проигрывание по кругу.
+	 *
+	 *  Дорожка применима, только если её скелет совпадает со скелетом тела:
+	 *  оба приходят из одного `.lab`, и связывает их совпадение имён и
+	 *  структуры костей. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	bool SetBodyAnimation(const FString& AssetPath);
+
 	/** Ставит телу скелетный меш по пути ассета. Пустой путь оставляет тело
 	 *  невидимым, что лучше подстановки чужой модели: так сразу видно, что
 	 *  соответствие не разрешилось. */

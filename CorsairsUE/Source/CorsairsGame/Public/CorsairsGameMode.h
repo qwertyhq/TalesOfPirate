@@ -62,6 +62,10 @@ private:
 	 *  нет, и тело останется невидимым. */
 	FString ResolveBodyMesh(int32 TypeId) const;
 
+	/** Значение поля из таблицы персонажей по типу. Пустая строка — записи
+	 *  или поля нет. */
+	FString ResolveField(int32 TypeId, const TCHAR* Field) const;
+
 	UPROPERTY()
 	TObjectPtr<UCorsairsSession> Session;
 };
