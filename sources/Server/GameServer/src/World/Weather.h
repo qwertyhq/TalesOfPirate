@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <list>
+
 class SubMap;
 
 class CWeather

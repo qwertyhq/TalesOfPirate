@@ -5,7 +5,7 @@
 
 #define  WIN32_LEAN_AND_MEAN
 #define  NOMINMAX
-#include <winsock2.h>
+#include "PlatformCompat.h"
 // Windows-заголовки только на Windows; на POSIX — словарь совместимости.
 #include "PlatformCompat.h"
 

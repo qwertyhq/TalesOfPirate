@@ -13,9 +13,9 @@
 #define WIN32_LEAN_AND_MEAN
 // Windows-заголовки только на Windows; на POSIX — словарь совместимости.
 #include "PlatformCompat.h"
-#include <sql.h>
+#include "OdbcCompat.h"
 #include <sqltypes.h>
-#include <sqlext.h>
+
 
 #include <string>
 #include <string_view>

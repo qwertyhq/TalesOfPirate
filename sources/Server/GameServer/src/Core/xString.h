@@ -1,7 +1,7 @@
 ﻿#ifndef XSTRING_H
 #define XSTRING_H
 
-#include "TChar.h"
+#include "PlatformCompat.h"
 
 // (_TCHAR *in)(long *in_from)
 // (_TCHAR *end_list)

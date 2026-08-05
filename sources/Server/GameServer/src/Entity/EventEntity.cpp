@@ -63,7 +63,7 @@ namespace Corsairs::Common::Mission
 		m_CChaAttr.Init( sID );
 		setAttr(ATTR_CHATYPE, EChaCtrlType::NPC_EVENT);
 
-		Corsairs::Util::Square SShape = { { dwxPos, dwyPos }, m_pCChaRecord->Radii };
+		Corsairs::Util::Square SShape = { { static_cast<std::int32_t>(dwxPos), static_cast<std::int32_t>(dwyPos) }, static_cast<std::int32_t>(m_pCChaRecord->Radii) };
 		if( !Submap.Enter( &SShape, this ) )
 		{
 			//LG( "entity_error", "CEventEntity::Create!" );

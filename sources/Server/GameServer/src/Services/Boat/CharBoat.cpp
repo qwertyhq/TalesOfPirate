@@ -766,7 +766,7 @@ namespace Corsairs::Common::Mission {
 			pBoat->Free();
 			owner.SetBoat(NULL);
 			//owner.SystemNotice( "%s%d", pInfo->DataName, Info.dwMoney );
-			owner.SystemNotice(RES_STRING(GM_CHARBOAT_CPP_00024), pInfo->DataName, Info.dwMoney);
+			owner.SystemNotice(RES_STRING(GM_CHARBOAT_CPP_00024), pInfo->DataName.c_str(), Info.dwMoney);
 			return TRUE;
 		}
 

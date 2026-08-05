@@ -12,9 +12,13 @@
 #include <ostream>
 // #include <fstream>
 #include <stdio.h>
-#include "io.h"
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 #include <string>
-#include "windows.h"
+#include "PlatformCompat.h"
 
 CAttachable::CAttachable()
 {

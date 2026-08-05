@@ -302,7 +302,7 @@ long CNpcSpawn::Load( SubMap& submap )
 					pTalk->Free();
 					return;
 				}
-				Corsairs::Util::Square SShape = {{pNpcRecord->dwxPos0, pNpcRecord->dwyPos0}, pCharRecord->Radii};
+				Corsairs::Util::Square SShape = {{static_cast<std::int32_t>(pNpcRecord->dwxPos0), static_cast<std::int32_t>(pNpcRecord->dwyPos0)}, static_cast<std::int32_t>(pCharRecord->Radii)};
 				if (!submap.Enter(&SShape, pTalk)) {
 					pTalk->Free();
 					return;

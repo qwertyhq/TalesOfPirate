@@ -1,3 +1,4 @@
+#include <list>
 #include "Util.h"
 #include "Database.h"
 #include "App/GameAppNet.h"

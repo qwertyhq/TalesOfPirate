@@ -30,7 +30,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <charconv>
 #include <chrono>
+#include <cctype>
+#include <cstdio>
 #include <cstdint>
 #include <ctime>
 #include <cstring>
@@ -54,6 +57,27 @@ using ULONG = std::uint32_t;
 using LONGLONG = std::int64_t;
 using ULONGLONG = std::uint64_t;
 using QWORD = std::uint64_t;
+using LONG32 = std::int32_t;
+using ULONG32 = std::uint32_t;
+using LONG64 = std::int64_t;
+
+// Расширения MSVC для целых фиксированной ширины. В новом коде вместо них
+// положено писать типы из <cstdint> (см. CLAUDE.md).
+// __int64 объявлен через #define, а не using: в коде встречается форма
+// `unsigned __int64`, а к псевдониму типа модификатор unsigned не применить.
+#define __int64 long long
+#define __int32 int
+#define __int16 short
+#define __int8 char
+using ULONG64 = std::uint64_t;
+using UINT32 = std::uint32_t;
+using INT32 = std::int32_t;
+using UINT64 = std::uint64_t;
+using INT64 = std::int64_t;
+using UINT16 = std::uint16_t;
+using INT16 = std::int16_t;
+using UINT8 = std::uint8_t;
+using INT8 = std::int8_t;
 using BOOL = int;
 using LPVOID = void*;
 using LPCSTR = const char*;
@@ -71,6 +95,39 @@ using WPARAM = std::uintptr_t;
 using LPARAM = std::intptr_t;
 using LRESULT = std::intptr_t;
 using HRESULT = std::int32_t;
+
+// Дескрипторы Win32. В серверном коде они встречаются в полях и сигнатурах,
+// но по существу используются как непрозрачные указатели.
+using HANDLE = void*;
+using HINSTANCE = void*;
+using HWND = void*;
+using HMODULE = void*;
+
+#ifndef INVALID_HANDLE_VALUE
+#define INVALID_HANDLE_VALUE (reinterpret_cast<HANDLE>(-1))
+#endif
+
+// Константы длин путей MSVC. На POSIX им соответствуют PATH_MAX и NAME_MAX,
+// но код опирается на конкретные числа при объявлении массивов, поэтому
+// значения взяты из Windows.
+#ifndef _MAX_PATH
+#define _MAX_PATH 260
+#endif
+#ifndef MAX_PATH
+#define MAX_PATH 260
+#endif
+#ifndef _MAX_DRIVE
+#define _MAX_DRIVE 3
+#endif
+#ifndef _MAX_DIR
+#define _MAX_DIR 256
+#endif
+#ifndef _MAX_FNAME
+#define _MAX_FNAME 256
+#endif
+#ifndef _MAX_EXT
+#define _MAX_EXT 256
+#endif
 
 #ifndef S_OK
 #define S_OK 0
@@ -261,6 +318,27 @@ inline int strncpy_s(char (&dest)[N], const char* src, std::size_t count) {
     return strncpy_s(dest, N, src, count);
 }
 
+inline int strncat_s(char* dest, std::size_t destSize, const char* src, std::size_t count) {
+    if (dest == nullptr || src == nullptr || destSize == 0) {
+        return 22;
+    }
+    const std::size_t used = std::strlen(dest);
+    if (used >= destSize - 1) {
+        return 0;
+    }
+    const std::size_t room = destSize - used - 1;
+    const std::size_t limit = (count == _TRUNCATE) ? room : count;
+    const std::size_t copy = limit < room ? limit : room;
+    std::memcpy(dest + used, src, copy);
+    dest[used + copy] = '\0';
+    return 0;
+}
+
+template <std::size_t N>
+inline int strncat_s(char (&dest)[N], const char* src, std::size_t count) {
+    return strncat_s(dest, N, src, count);
+}
+
 inline int strcpy_s(char* dest, std::size_t destSize, const char* src) {
     return strncpy_s(dest, destSize, src, _TRUNCATE);
 }
@@ -278,6 +356,229 @@ inline int _stricmp(const char* a, const char* b) {
 
 inline int _strnicmp(const char* a, const char* b, std::size_t n) {
     return ::strncasecmp(a, b, n);
+}
+
+// _countof — макрос MSVC для длины массива. std::size из <iterator> делает то
+// же самое и является стандартным; макрос оставлен для существующих вызовов.
+#ifndef _countof
+#define _countof(array) (sizeof(array) / sizeof((array)[0]))
+#endif
+
+// itoa — нестандартная функция. Реализация через std::to_chars, чтобы не
+// тянуть sprintf.
+inline char* itoa(int value, char* buffer, int base) {
+    if (buffer == nullptr) {
+        return nullptr;
+    }
+    const auto result = std::to_chars(buffer, buffer + 32, value, base);
+    *result.ptr = '\0';
+    return buffer;
+}
+
+// --- Соглашения о вызовах --------------------------------------------------
+// На Windows это атрибуты вызова; на POSIX они не значат ничего.
+
+#ifndef WINAPI
+#define WINAPI
+#endif
+#ifndef APIENTRY
+#define APIENTRY
+#endif
+#ifndef CALLBACK
+#define CALLBACK
+#endif
+#ifndef __stdcall
+#define __stdcall
+#endif
+
+// --- Консоль ---------------------------------------------------------------
+// Цвета через ANSI-escape вместо SetConsoleTextAttribute. Константы совпадают
+// по значению с Win32, поэтому вызывающий код не меняется.
+
+#ifndef FOREGROUND_BLUE
+#define FOREGROUND_BLUE      0x0001
+#define FOREGROUND_GREEN     0x0002
+#define FOREGROUND_RED       0x0004
+#define FOREGROUND_INTENSITY 0x0008
+#define BACKGROUND_BLUE      0x0010
+#define BACKGROUND_GREEN     0x0020
+#define BACKGROUND_RED       0x0040
+#define BACKGROUND_INTENSITY 0x0080
+#endif
+
+#ifndef STD_OUTPUT_HANDLE
+#define STD_OUTPUT_HANDLE (-11)
+#define STD_ERROR_HANDLE  (-12)
+#define STD_INPUT_HANDLE  (-10)
+#endif
+
+inline HANDLE GetStdHandle(int /*which*/) {
+    return nullptr;
+}
+
+// Переводит битовую маску цвета Win32 в ANSI-код и печатает escape-
+// последовательность. Работает в любом современном терминале.
+inline BOOL SetConsoleTextAttribute(HANDLE /*handle*/, WORD attributes) {
+    const bool bright = (attributes & FOREGROUND_INTENSITY) != 0;
+    int code = 30;
+    if (attributes & FOREGROUND_RED) {
+        code += 1;
+    }
+    if (attributes & FOREGROUND_GREEN) {
+        code += 2;
+    }
+    if (attributes & FOREGROUND_BLUE) {
+        code += 4;
+    }
+    std::printf("\033[%s;%dm", bright ? "1" : "0", code);
+    return TRUE;
+}
+
+#ifndef CP_UTF8
+#define CP_UTF8 65001
+#endif
+
+// На Windows переключает кодовую страницу консоли; на POSIX терминал и так
+// работает в UTF-8.
+inline BOOL SetConsoleOutputCP(UINT /*codepage*/) {
+    return TRUE;
+}
+
+inline DWORD GetCurrentProcessId() {
+    return static_cast<DWORD>(::getpid());
+}
+
+// lstrcmpi — Windows-вариант сравнения без учёта регистра.
+inline int lstrcmpi(const char* a, const char* b) {
+    return ::strcasecmp(a, b);
+}
+
+// strlwr переводит строку в нижний регистр на месте. Нестандартная функция,
+// в новом коде положено использовать std::ranges::transform.
+// _snprintf_s — вариант snprintf от Microsoft с параметром размера буфера.
+// По смыслу с _TRUNCATE совпадает с обычным snprintf.
+template <typename... Args>
+inline int _snprintf_s(char* buffer, std::size_t bufferSize, std::size_t /*count*/,
+                       const char* format, Args... args) {
+    return std::snprintf(buffer, bufferSize, format, args...);
+}
+
+template <std::size_t N, typename... Args>
+inline int _snprintf_s(char (&buffer)[N], std::size_t count, const char* format,
+                       Args... args) {
+    return _snprintf_s(buffer, N, count, format, args...);
+}
+
+inline char* strlwr(char* text) {
+    if (text == nullptr) {
+        return nullptr;
+    }
+    for (char* p = text; *p != '\0'; ++p) {
+        *p = static_cast<char>(std::tolower(static_cast<unsigned char>(*p)));
+    }
+    return text;
+}
+
+inline BOOL SetConsoleTitle(const char* title) {
+    if (title != nullptr) {
+        // OSC 0 — установка заголовка окна терминала.
+        std::printf("\033]0;%s\007", title);
+    }
+    return TRUE;
+}
+
+// --- Заглушки процессов и модулей ------------------------------------------
+
+inline BOOL CloseHandle(HANDLE /*handle*/) {
+    return TRUE;
+}
+
+inline HMODULE GetModuleHandle(const char* /*name*/) {
+    return nullptr;
+}
+
+// На Windows ограничивает число открытых потоков stdio. В POSIX лимит задаётся
+// через setrlimit и по умолчанию достаточен.
+inline int _setmaxstdio(int count) {
+    return count;
+}
+
+// --- Диалоги --------------------------------------------------------------
+// MessageBox на сервере используется для фатальных ошибок запуска. На POSIX
+// выводим в stderr: у консольного демона окон нет.
+
+#ifndef MB_OK
+#define MB_OK          0x0000
+#define MB_ICONERROR   0x0010
+#define MB_ICONWARNING 0x0030
+#define IDOK 1
+#endif
+
+// OutputDebugString пишет в отладчик Windows. На POSIX эквивалент — stderr:
+// его видно и в терминале, и в логах systemd/docker.
+inline void OutputDebugStringA(const char* text) {
+    if (text != nullptr) {
+        std::fputs(text, stderr);
+    }
+}
+
+inline void OutputDebugString(const char* text) {
+    OutputDebugStringA(text);
+}
+
+inline int MessageBox(HWND /*owner*/, const char* text, const char* caption,
+                      UINT /*type*/) {
+    std::fprintf(stderr, "[%s] %s\n", caption ? caption : "GameServer",
+                 text ? text : "");
+    return IDOK;
+}
+
+// --- Структурная обработка исключений --------------------------------------
+// SEH — механизм Windows. На POSIX аварии ловятся сигналами, поэтому здесь
+// только тип-заглушка, чтобы сигнатуры обработчиков компилировались.
+
+struct EXCEPTION_RECORD {
+    DWORD ExceptionCode;
+    DWORD ExceptionFlags;
+    void* ExceptionAddress;
+};
+
+struct EXCEPTION_POINTERS {
+    EXCEPTION_RECORD* ExceptionRecord;
+    void* ContextRecord;
+};
+
+// --- Цикл оконных сообщений ------------------------------------------------
+// У консольного сервера на POSIX его нет: PeekMessage всегда сообщает, что
+// сообщений не поступало, и главный цикл просто крутит игровую логику.
+
+struct MSG {
+    HWND hwnd;
+    UINT message;
+    WPARAM wParam;
+    LPARAM lParam;
+    DWORD time;
+};
+
+#ifndef PM_REMOVE
+#define PM_REMOVE 0x0001
+#define PM_NOREMOVE 0x0000
+#endif
+#ifndef WM_QUIT
+#define WM_QUIT 0x0012
+#endif
+
+inline BOOL PeekMessage(MSG* /*msg*/, HWND /*hwnd*/, UINT /*min*/, UINT /*max*/,
+                        UINT /*remove*/) {
+    return FALSE;
+}
+
+inline BOOL TranslateMessage(const MSG* /*msg*/) {
+    return FALSE;
+}
+
+inline LRESULT DispatchMessage(const MSG* /*msg*/) {
+    return 0;
 }
 
 #endif // _WIN32

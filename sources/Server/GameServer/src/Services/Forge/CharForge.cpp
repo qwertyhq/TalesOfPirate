@@ -42,13 +42,13 @@ namespace Corsairs::Common::Mission {
 		}
 
 		if (pItem->chForgeLv == 0) {
-			character.SystemNotice("%s", pItem->szName);
+			character.SystemNotice("%s", pItem->szName.c_str());
 			return;
 		}
 
 		BYTE byLevel = pItemData->chForgeLv;
 		if (byLevel >= ROLE_MAXNUM_FORGE) {
-			character.SystemNotice("%s", pItem->szName);
+			character.SystemNotice("%s", pItem->szName.c_str());
 			return;
 		}
 
@@ -127,7 +127,7 @@ namespace Corsairs::Common::Mission {
 			if (pRecord->byFailure == BYTE(-1)) {
 				character.m_CKitbag.SetChangeFlag(false);
 				character.KbClearItem(true, true, byIndex);
-				character.SystemNotice("%s", pItem->szName);
+				character.SystemNotice("%s", pItem->szName.c_str());
 				character.SynKitbagNew(enumSYN_KITBAG_FORGEF);
 			}
 			else {

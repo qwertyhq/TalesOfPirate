@@ -1273,7 +1273,7 @@ bool CFightAble::SkillPopBoat(CCharacter* pCBoat, std::int32_t lPosX, std::int32
 			sDir = GetAngle();
 		pCBoat->SetAngle(sDir);
 
-		Corsairs::Util::Square SEntShape = {{lPosX, lPosY}, pCBoat->GetRadius()};
+		Corsairs::Util::Square SEntShape = {{static_cast<std::int32_t>(lPosX), static_cast<std::int32_t>(lPosY)}, static_cast<std::int32_t>(pCBoat->GetRadius())};
 
 		SubMap* pCTempMap = pCBoat->GetSubMap();
 		pCBoat->SetSubMap(GetSubMap());
@@ -1344,7 +1344,7 @@ bool CFightAble::SkillOutBoat(std::int32_t lPosX, std::int32_t lPosY, int16_t sD
 
 	SubMap* pCMap = pCShipM->GetSubMap();
 	Corsairs::Util::Point STarPos = {lPosX, lPosY};
-	Corsairs::Util::Square SShape = {STarPos, GetRadius()};
+	Corsairs::Util::Square SShape = {STarPos, static_cast<std::int32_t>(GetRadius())};
 
 	SubMap* pCTempMap = pOutObj->GetSubMap();
 	pOutObj->SetSubMap(pCMap);

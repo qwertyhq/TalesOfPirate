@@ -354,7 +354,9 @@ void CCharacter::SwitchMap(SubMap *pCSrcMap, const char *szTarMapName, std::int3
 			m_SFightInit.chTarType = 0;
 			m_CChaAttr.Init(GetCat());
 			Corsairs::Util::Square	SSrcShape = GetShape();
-			Corsairs::Util::Square	STarShape = {{lTarX, lTarY}, GetRadius()};
+			// Явное приведение: на POSIX long шире int32, и сужение в списке
+			// инициализации — ошибка, а не предупреждение.
+			Corsairs::Util::Square	STarShape = {{static_cast<std::int32_t>(lTarX), static_cast<std::int32_t>(lTarY)}, static_cast<std::int32_t>(GetRadius())};
 			if (!pCSrcMap->Enter(&STarShape, this))
 				pCSrcMap->Enter(&SSrcShape, this);
 		}

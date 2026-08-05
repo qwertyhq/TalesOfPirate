@@ -11,7 +11,12 @@
 #include "logutil.h"
 #include "ConsoleColor.h"
 #include <cstdio>
+#ifdef _WIN32
 #include <io.h>
+#else
+// POSIX-аналог: access(), unlink() и прочее живут в <unistd.h>.
+#include <unistd.h>
+#endif
 #include <fcntl.h>
 #include "CrushSystem.h"
 

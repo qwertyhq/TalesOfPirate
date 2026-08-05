@@ -2,6 +2,7 @@
 //
 
 #include "Core/stdafx.h"
+#include <thread>
 namespace Corsairs::Common::Localization {}
 using namespace Corsairs::Common::Localization;
 
@@ -138,15 +139,25 @@ BOOL GameServer_Begin() {
 	//
 	//LG("init", "...\n");
 	ToLogService("common", "startup game thread...");
+#ifdef _WIN32
 	DWORD dwThreadID;
 	hGameT = CreateThread(NULL, 0, g_GameLogicProcess, 0, 0, &dwThreadID);
 	ToLogService("common", "Game Thread ID = {}", dwThreadID);
+#else
+	// На POSIX поток запускается стандартными средствами и отсоединяется:
+	// владение им, как и на Windows, остаётся у процесса до завершения.
+	std::thread(g_GameLogicProcess, nullptr).detach();
+	ToLogService("common", "Game Thread started (std::thread)");
+#endif
 	//
 
 	//LG("init",  "Win32 \n");
 	ToLogService("common", "start create Win32 control dialog box");
+#ifdef _WIN32
+	// Диалог управления — часть Windows-версии; на POSIX сервер консольный.
 	HINSTANCE hInst = GetModuleHandle(0);
 	CreateMainDialog(hInst, NULL);
+#endif
 
 	//       CGameApp::Log
 	g_pGameApp->Log("restart", "GameServer restart", g_Config.m_mapList[0].c_str(), "", "", "");
@@ -158,12 +169,14 @@ BOOL GameServer_Begin() {
 void GameServer_End() {
 	//LG("init", "\n");
 	ToLogService("common", "start to exit game map server");
+#ifdef _WIN32
 	CloseHandle(hGameT);
 
 	HWND hConsole = GetConsoleWindow();
 	if (hConsole) {
 		SendMessage(hConsole, WM_CLOSE, 0, 0);
 	}
+#endif
 
 	Sleep(400);
 
@@ -174,8 +187,12 @@ void GameServer_End() {
 	Corsairs::Net::CleanupWinSock();
 }
 
+#ifdef _WIN32
 typedef HWND (*LPGETCONSOLEWINDOW)(void);
 
+// Гасит кнопку закрытия окна консоли, чтобы сервер не уронили случайным
+// кликом. Понятие существует только в Windows: в POSIX-терминале окном
+// управляет эмулятор терминала, а не процесс.
 void DisableCloseButton() {
 	HMODULE hMod = LoadLibrary("kernel32.dll");
 
@@ -190,6 +207,10 @@ void DisableCloseButton() {
 
 	FreeLibrary(hMod);
 }
+#else
+void DisableCloseButton() {
+}
+#endif
 
 void AppExit(void) {
 	//int	*p = NULL;

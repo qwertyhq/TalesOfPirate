@@ -333,9 +333,12 @@ extern std::uint32_t			g_ulCurID;
 extern std::int32_t				g_lCurHandle;
 extern HANDLE			hConsole;
 
+// __VA_OPT__ убирает запятую, когда переменных аргументов нет: запись
+// printf(s, __VA_ARGS__) при вызове C_PRINT("текст") разворачивается в
+// printf(s, ) — MSVC это проглатывал, clang считает синтаксической ошибкой.
 #define C_PRINT(s, ...) \
 	SetConsoleTextAttribute(hConsole, 14); \
-	printf(s, __VA_ARGS__); \
+	printf(s __VA_OPT__(,) __VA_ARGS__); \
 	SetConsoleTextAttribute(hConsole, 10);
 
 #define C_TITLE(s) \

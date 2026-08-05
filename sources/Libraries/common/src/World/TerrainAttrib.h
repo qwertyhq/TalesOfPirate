@@ -9,7 +9,12 @@
 
 #include <stdio.h>
 #include <memory.h>
+#ifdef _WIN32
 #include <io.h>
+#else
+// POSIX-аналог: access(), unlink() и прочее живут в <unistd.h>.
+#include <unistd.h>
+#endif
 
 
 #define ATTRIB_FILE_DEFAULT_WIDTH 4096

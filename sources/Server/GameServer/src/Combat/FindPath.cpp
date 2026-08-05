@@ -93,7 +93,7 @@ PATH_LINK* SearchPath(BYTE *block_buf , short width , short height , short sx , 
 
 		last_buf_ptr = node_list[current_node].buf_ptr;
 		
-		for(register BYTE d = 0 ; d < 8 ; d++)
+		for(BYTE d = 0 ; d < 8 ; d++)
 		{	 		
 			new_buf_ptr = last_buf_ptr + off[d];
 			if( new_buf_ptr < block_buf || new_buf_ptr > end_block )
