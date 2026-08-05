@@ -40,6 +40,7 @@ add_library(AssetConverterLib STATIC
     src/ConversionReport.cpp
     src/DdsDecoder.cpp
     src/PngWriter.cpp
+    src/TerrainMeshWriter.cpp
 )
 target_include_directories(AssetConverterLib PUBLIC include)
 corsairs_set_target_options(AssetConverterLib)

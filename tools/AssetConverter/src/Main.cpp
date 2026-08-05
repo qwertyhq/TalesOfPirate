@@ -7,6 +7,7 @@
 #include "Corsairs/Tools/AssetConverter/LmoParser.h"
 #include "Corsairs/Tools/AssetConverter/MapParser.h"
 #include "Corsairs/Tools/AssetConverter/MapWriter.h"
+#include "Corsairs/Tools/AssetConverter/TerrainMeshWriter.h"
 #include "Corsairs/Tools/AssetConverter/SceneObjParser.h"
 #include "Corsairs/Tools/AssetConverter/TextureResolver.h"
 
@@ -90,6 +91,16 @@ bool ConvertTerrain(const std::filesystem::path& input, const std::filesystem::p
     std::string detail;
     if (AC::WriteTerrain(*terrain, output, detail) != AC::MapWriteStatus::OK) {
         report.AddFailure(relative, "WRITE_FAILED", detail);
+        return false;
+    }
+
+    // Рельеф пишется ещё и мешами: ландшафт Unreal собирается инструментами
+    // редактора, недоступными в headless-режиме, а обычные статические меши
+    // импортируются тем же путём, что и все модели.
+    const AC::TerrainMeshStats meshStats =
+        AC::WriteTerrainMesh(*terrain, output, {}, detail);
+    if (!meshStats.Ok) {
+        report.AddFailure(relative, "TERRAIN_MESH_FAILED", detail);
         return false;
     }
 
