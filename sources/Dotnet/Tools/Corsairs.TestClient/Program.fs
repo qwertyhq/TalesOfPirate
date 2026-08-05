@@ -79,6 +79,26 @@ let private sendPacket (stream: NetworkStream) (packet: WPacket byref) (counter:
     stream.Write(memory.Span)
     stream.Flush()
 
+/// Параметры создаваемого персонажа.
+///
+/// GroupServer проверяет внешность по таблице: причёска зависит от типа тела,
+/// лицо — общее. Значения ниже взяты из первой допустимой пары для типа 1.
+/// Место рождения обязано совпадать со строкой из настройки Birthplaces
+/// GroupServer'а; Argent City — это карта garner.
+/// Метка времени в имени персонажа: имя обязано быть уникальным, а повторный
+/// прогон против той же базы иначе упирался бы в отказ по занятому имени.
+/// Допустимы только буквы, цифры и подчёркивание — отсюда формат без разделителей.
+let NAME_STAMP_FORMAT = "HHmmss"
+
+/// Второй пароль учётной записи. GroupServer принимает только буквы и цифры
+/// и не пускает в мир, пока он не задан.
+let PASSWORD2 = "test1234"
+
+let NEW_CHA_BIRTH = "Argent City"
+let NEW_CHA_TYPE = 1L
+let NEW_CHA_HAIR = 2000L
+let NEW_CHA_FACE = 2554L
+
 let private describeLoginError (code: int16) =
     match code with
     | 1s -> "нет такой учётной записи"
@@ -143,39 +163,141 @@ let main argv =
         counter <- counter + 1u
         log $"Отправлен CM_LOGIN (версия клиента {CLIENT_VERSION})"
 
-        // Ответ идёт не сразу: Gate спрашивает Group, тот — Account.
-        let deadline = DateTime.UtcNow.AddSeconds(20.0)
+        /// Ждёт пакет с одной из ожидаемых команд, пропуская остальные.
+        ///
+        /// Ответ приходит не сразу и не один: Gate спрашивает Group, тот —
+        /// Account или GameServer, а попутно шлёт клиенту служебные команды.
+        let waitFor (expected: uint16 list) (seconds: float) : IRPacket option =
+            let deadline = DateTime.UtcNow.AddSeconds(seconds)
+            let mutable found = None
+            let mutable searching = true
+            while searching && DateTime.UtcNow < deadline do
+                match readPacket stream with
+                | None ->
+                    log "ОШИБКА соединение закрыто сервером"
+                    searching <- false
+                | Some packet ->
+                    if List.contains (packet.GetCmd()) expected then
+                        found <- Some packet
+                        searching <- false
+                    else
+                        log $"  (попутно команда {packet.GetCmd()}, {packet.PayloadLength} байт)"
+                        packet.Dispose()
+            found
+
         let mutable result = 1
-        let mutable waiting = true
 
-        while waiting && DateTime.UtcNow < deadline do
-            match readPacket stream with
-            | None ->
-                log "ОШИБКА соединение закрыто сервером"
-                waiting <- false
-            | Some packet ->
-                let cmd = packet.GetCmd()
-                if cmd = Commands.CMD_MC_LOGIN then
-                    match CommandMessages.Deserialize.mcLoginResponse packet with
-                    | CommandMessages.McLoginError code ->
-                        log $"ВХОД ОТКЛОНЁН: {describeLoginError code}"
-                        result <- 1
-                    | CommandMessages.McLoginSuccess data ->
-                        log $"ВХОД ВЫПОЛНЕН: слотов {data.MaxChaNum}, персонажей {data.Characters.Length}"
-                        data.Characters
-                        |> Array.iteri (fun i cha ->
-                            if cha.Valid then
-                                log $"  слот {i}: {cha.ChaName}, профессия {cha.Job}, уровень {cha.Degree}"
-                            else
-                                log $"  слот {i}: пусто")
-                        result <- 0
-                    waiting <- false
-                else
-                    log $"Получена команда {cmd} ({packet.PayloadLength} байт) — жду ответа на вход"
-                packet.Dispose()
-
-        if waiting then
+        match waitFor [ Commands.CMD_MC_LOGIN ] 20.0 with
+        | None ->
             log "ОШИБКА ответа на вход не дождались"
+        | Some packet ->
+            let response = CommandMessages.Deserialize.mcLoginResponse packet
+            packet.Dispose()
+
+            match response with
+            | CommandMessages.McLoginError code ->
+                log $"ВХОД ОТКЛОНЁН: {describeLoginError code}"
+            | CommandMessages.McLoginSuccess data ->
+                log $"ВХОД ВЫПОЛНЕН: слотов {data.MaxChaNum}, персонажей {data.Characters.Length}"
+                data.Characters
+                |> Array.iteri (fun i cha ->
+                    if cha.Valid then
+                        log $"  слот {i}: {cha.ChaName}, профессия {cha.Job}, уровень {cha.Degree}"
+                    else
+                        log $"  слот {i}: пусто")
+
+                // Второй пароль обязателен для входа в мир: GroupServer
+                // отвергает BGNPLAY, пока он пуст, кодом ERR_PT_INVALID_PW2.
+                // У новой учётной записи его нет, поэтому создаём.
+                if not data.HasPassword2 then
+                    let mutable pw2 = WPacket(64)
+                    pw2.WriteCmd(Commands.CMD_CM_CREATE_PASSWORD2)
+                    pw2.WriteString(PASSWORD2)
+                    sendPacket stream &pw2 counter
+                    counter <- counter + 1u
+                    log "Отправлен CM_CREATE_PASSWORD2"
+
+                    match waitFor [ Commands.CMD_MC_CREATE_PASSWORD2 ] 20.0 with
+                    | None -> log "ОШИБКА ответа на создание второго пароля не дождались"
+                    | Some reply ->
+                        let code = int16 (reply.ReadInt64())
+                        reply.Dispose()
+                        if code = 0s then
+                            log "ВТОРОЙ ПАРОЛЬ СОЗДАН"
+                        else
+                            log $"СОЗДАНИЕ ВТОРОГО ПАРОЛЯ ОТКЛОНЕНО: код {code}"
+
+                // Персонаж нужен, чтобы дойти до GameServer: вход в учётную
+                // запись его не затрагивает вовсе.
+                let existing = data.Characters |> Array.tryFindIndex (fun c -> c.Valid)
+
+                let slot =
+                    match existing with
+                    | Some index ->
+                        log $"Использую персонажа из слота {index}"
+                        Some index
+                    | None ->
+                        let name = $"Test{DateTime.Now.ToString(NAME_STAMP_FORMAT)}"
+                        let mutable create = WPacket(128)
+                        create.WriteCmd(Commands.CMD_CM_NEWCHA)
+                        create.WriteString(name)
+                        create.WriteString(NEW_CHA_BIRTH)
+                        create.WriteInt64(NEW_CHA_TYPE)
+                        create.WriteInt64(NEW_CHA_HAIR)
+                        create.WriteInt64(NEW_CHA_FACE)
+                        sendPacket stream &create counter
+                        counter <- counter + 1u
+                        log $"Отправлен CM_NEWCHA: {name}, место рождения {NEW_CHA_BIRTH}"
+
+                        match waitFor [ Commands.CMD_MC_NEWCHA ] 20.0 with
+                        | None ->
+                            log "ОШИБКА ответа на создание персонажа не дождались"
+                            None
+                        | Some reply ->
+                            let code = int16 (reply.ReadInt64())
+                            reply.Dispose()
+                            if code <> 0s then
+                                log $"СОЗДАНИЕ ОТКЛОНЕНО: код {code}"
+                                None
+                            else
+                                log $"ПЕРСОНАЖ СОЗДАН: {name}"
+                                Some 0
+
+                match slot with
+                | None -> ()
+                | Some index ->
+                    let mutable play = WPacket(32)
+                    play.WriteCmd(Commands.CMD_CM_BGNPLAY)
+                    play.WriteInt64(int64 index)
+                    sendPacket stream &play counter
+                    counter <- counter + 1u
+                    log $"Отправлен CM_BGNPLAY: слот {index}"
+
+                    // Успех подтверждается не ответом на BGNPLAY, а входом в
+                    // карту: MC_ENTERMAP приходит уже от GameServer, и это
+                    // единственная команда во всей цепочке, доказывающая, что
+                    // он участвует.
+                    match waitFor [ Commands.CMD_MC_ENTERMAP; Commands.CMD_MC_BGNPLAY ] 30.0 with
+                    | None ->
+                        log "ОШИБКА входа в мир не дождались"
+                    | Some reply ->
+                        let cmd = reply.GetCmd()
+                        if cmd = Commands.CMD_MC_ENTERMAP then
+                            log "ВХОД В МИР ВЫПОЛНЕН: получен MC_ENTERMAP от GameServer"
+                            result <- 0
+                        else
+                            let code = int16 (reply.ReadInt64())
+                            if code = 0s then
+                                log "BGNPLAY принят, жду MC_ENTERMAP"
+                                match waitFor [ Commands.CMD_MC_ENTERMAP ] 30.0 with
+                                | None -> log "ОШИБКА MC_ENTERMAP не пришёл"
+                                | Some enter ->
+                                    log "ВХОД В МИР ВЫПОЛНЕН: получен MC_ENTERMAP от GameServer"
+                                    enter.Dispose()
+                                    result <- 0
+                            else
+                                log $"ВХОД В МИР ОТКЛОНЁН: код {code}"
+                        reply.Dispose()
 
         Thread.Sleep(200)
         result
