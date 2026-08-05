@@ -14,3 +14,4 @@
 *.user
 *.sqlite-wal
 *.sqlite-shm
+tools/AssetConverter/build/
