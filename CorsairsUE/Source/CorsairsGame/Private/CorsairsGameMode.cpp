@@ -1,5 +1,6 @@
 #include "CorsairsGameMode.h"
 
+#include "CorsairsLoginHud.h"
 #include "CorsairsPlayerCharacter.h"
 
 #include "Dom/JsonObject.h"
@@ -28,6 +29,8 @@ namespace
 ACorsairsGameMode::ACorsairsGameMode()
 {
 	DefaultPawnClass = ACorsairsPlayerCharacter::StaticClass();
+	// Экран состояния сессии: без него отказ сервера виден только в журнале.
+	HUDClass = ACorsairsLoginHud::StaticClass();
 }
 
 void ACorsairsGameMode::BeginPlay()
