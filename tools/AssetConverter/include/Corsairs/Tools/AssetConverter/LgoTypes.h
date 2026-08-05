@@ -15,12 +15,15 @@ inline constexpr std::size_t kObjectStateNum = 8;
 // Флаги FVF DirectX 9. Значения фиксированы спецификацией D3D9 и продублированы
 // здесь, чтобы не тянуть Windows SDK.
 enum class FvfFlag : std::uint32_t {
-    NORMAL  = 0x0010,
-    DIFFUSE = 0x0040,
-    TEX1    = 0x0100,
-    TEX2    = 0x0200,
-    TEX3    = 0x0300,
-    TEX4    = 0x0400,
+    NORMAL           = 0x0010,
+    DIFFUSE          = 0x0040,
+    TEX1             = 0x0100,
+    TEX2             = 0x0200,
+    TEX3             = 0x0300,
+    TEX4             = 0x0400,
+    // В легаси-формате (version 0x0000) наличие скиннинга определяется этим
+    // флагом, а не полем BoneIndexNum, как в 0x1004+.
+    LASTBETA_UBYTE4  = 0x1000,
 };
 
 [[nodiscard]] inline bool HasFvf(std::uint32_t fvf, FvfFlag flag) {
@@ -34,8 +37,12 @@ enum class FvfFlag : std::uint32_t {
     return version == 0x0000u || (version >= 0x1000u && version <= 0x1005u);
 }
 
-// Минимальная версия, чья раскладка блока геометрии реализована в этом плане.
+// Минимальная версия современной раскладки блоков.
 inline constexpr std::uint32_t kMinSupportedVersion = 0x1004u;
+
+// Легаси-раскладка: вложенная версия в начале каждого блока, другой порядок
+// массивов геометрии, однобайтовые индексы костей.
+inline constexpr std::uint32_t kLegacyVersion = 0x0000u;
 
 #pragma pack(push, 1)
 
@@ -152,11 +159,55 @@ struct VertexElement {
     std::uint8_t UsageIndex;
 };
 
+// --- Легаси-формат version = 0x0000 -----------------------------------------
+// Ранняя раскладка, встречающаяся у 91 файла в датасете. Отличается от 0x1004+
+// набором полей и порядком массивов. Источник — lwExpObj.h (lwTexInfo_0000,
+// lwMtlTexInfo_0000, lwMeshInfo_0000) и ветки version==*_VERSION0000 в
+// LgoLoader::LoadMtlTexInfoSingle / LoadMeshInfo.
+
+// Пара «состояние-значение» в старых render-state наборах.
+struct RenderStateValue {
+    std::uint32_t State;
+    std::uint32_t Value;
+};
+
+// lwRenderStateSetTemplate<2, 8> — двумерный массив 2x8 пар.
+struct RenderStateSet2x8 {
+    RenderStateValue Rsv[2][8];
+};
+
+struct TexInfoV0 {
+    std::uint32_t Stage;
+    std::uint32_t ColorkeyType;
+    std::uint32_t Colorkey;
+    std::uint32_t Format;
+    char FileName[kMaxName];
+    RenderStateSet2x8 TssSet;
+};
+
+struct MtlTexInfoV0 {
+    Material Mtl;
+    RenderStateSet2x8 RsSet;
+    TexInfoV0 TexSeq[kMaxTextureStageNum];
+};
+
+struct MeshInfoHeaderV0 {
+    std::uint32_t Fvf;
+    std::uint32_t PtType;
+    std::uint32_t VertexNum;
+    std::uint32_t IndexNum;
+    std::uint32_t SubsetNum;
+    std::uint32_t BoneIndexNum;
+    RenderStateSet2x8 RsSet;
+};
+
 #pragma pack(pop)
 
 inline constexpr std::size_t kGeomObjHeaderSize = sizeof(GeomObjHeader);
 inline constexpr std::size_t kMtlTexInfoSize = sizeof(MtlTexInfo);
 inline constexpr std::size_t kMeshInfoHeaderSize = sizeof(MeshInfoHeader);
+inline constexpr std::size_t kMtlTexInfoV0Size = sizeof(MtlTexInfoV0);
+inline constexpr std::size_t kMeshInfoHeaderV0Size = sizeof(MeshInfoHeaderV0);
 
 // Раскладка на диске зафиксирована файлами, записанными десятилетия назад.
 // Любое расхождение — ошибка компиляции, а не тихо испорченные данные.
@@ -172,5 +223,14 @@ static_assert(sizeof(GeomObjHeader) == 116, "GeomObjHeader: раскладка �
 static_assert(sizeof(VertexElement) == 8, "VertexElement: раскладка на диске 8 байт");
 static_assert(sizeof(Vector2) == 8, "Vector2: раскладка на диске 8 байт");
 static_assert(sizeof(Vector3) == 12, "Vector3: раскладка на диске 12 байт");
+
+// Легаси-раскладка. Размеры выведены из lwExpObj.h и проверены на реальных
+// файлах: у character/2000000003.lgo MtlSize=1036 = 4 (вложенная версия)
+// + 4 (MtlNum) + 1028, а MeshSize=476 сходится с MeshInfoHeaderV0 = 152.
+static_assert(sizeof(RenderStateValue) == 8, "RenderStateValue: 8 байт");
+static_assert(sizeof(RenderStateSet2x8) == 128, "RenderStateSet2x8: 2*8*8 = 128 байт");
+static_assert(sizeof(TexInfoV0) == 208, "TexInfoV0: раскладка на диске 208 байт");
+static_assert(sizeof(MtlTexInfoV0) == 1028, "MtlTexInfoV0: раскладка на диске 1028 байт");
+static_assert(sizeof(MeshInfoHeaderV0) == 152, "MeshInfoHeaderV0: раскладка на диске 152 байта");
 
 } // namespace Corsairs::Tools::AssetConverter

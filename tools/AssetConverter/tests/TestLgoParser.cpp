@@ -10,9 +10,12 @@ namespace {
 
 namespace AC = Corsairs::Tools::AssetConverter;
 
+std::filesystem::path ModelPath(const char* relative) {
+    return std::filesystem::path{CORSAIRS_REPO_ROOT} / "Client" / "model" / relative;
+}
+
 std::filesystem::path SampleLgoPath() {
-    return std::filesystem::path{CORSAIRS_REPO_ROOT} /
-           "Client" / "model" / "character" / "0066000000.lgo";
+    return ModelPath("character/0066000000.lgo");
 }
 
 CORSAIRS_TEST(LgoParser_ParsesHeaderOfRealFile) {
@@ -171,6 +174,81 @@ CORSAIRS_TEST(LgoParser_SubsetsCoverIndexBuffer) {
             static_cast<std::uint64_t>(subset.PrimitiveNum) * 3ull;
         REQUIRE(last <= static_cast<std::uint64_t>(mesh.Header.IndexNum));
     }
+}
+
+// --- Легаси-формат version = 0x0000 -----------------------------------------
+// У него вложенная версия в начале каждого блока, другая раскладка материалов
+// (1028 байт вместо 1004) и другой порядок массивов геометрии: подсеты идут
+// первыми, а индексы костей однобайтовые.
+
+CORSAIRS_TEST(LgoParser_ParsesLegacyVersionZeroSimpleMesh) {
+    const auto bytes = AC::ReadWholeFile(ModelPath("character/2000000003.lgo"));
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+    REQUIRE_EQ(static_cast<std::uint32_t>(diag.Status),
+               static_cast<std::uint32_t>(AC::LgoStatus::OK));
+
+    REQUIRE_EQ(obj->Version, 0x0000u);
+    REQUIRE_EQ(obj->Materials.size(), 1u);
+
+    const AC::LgoMesh& mesh = obj->Mesh;
+    REQUIRE_EQ(mesh.Header.Fvf, 0x0112u);
+    REQUIRE_EQ(mesh.Header.VertexNum, 8u);
+    REQUIRE_EQ(mesh.Header.IndexNum, 12u);
+    REQUIRE_EQ(mesh.Header.SubsetNum, 1u);
+    REQUIRE_EQ(mesh.Positions.size(), 8u);
+    REQUIRE_EQ(mesh.Normals.size(), 8u);
+    REQUIRE_EQ(mesh.Texcoords[0].size(), 8u);
+    REQUIRE_EQ(mesh.Indices.size(), 12u);
+    REQUIRE_EQ(mesh.Subsets.size(), 1u);
+}
+
+CORSAIRS_TEST(LgoParser_ParsesLegacyVersionZeroWithVertexColors) {
+    const auto bytes = AC::ReadWholeFile(ModelPath("item/01020007.lgo"));
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+
+    const AC::LgoMesh& mesh = obj->Mesh;
+    // 0x0152 = XYZ | NORMAL | DIFFUSE | TEX1
+    REQUIRE_EQ(mesh.Header.Fvf, 0x0152u);
+    REQUIRE(AC::HasFvf(mesh.Header.Fvf, AC::FvfFlag::DIFFUSE));
+    REQUIRE_EQ(mesh.Header.VertexNum, 334u);
+    REQUIRE_EQ(mesh.VertexColors.size(), 334u);
+}
+
+CORSAIRS_TEST(LgoParser_ParsesLegacyVersionZeroWithByteBoneIndices) {
+    const auto bytes = AC::ReadWholeFile(ModelPath("character/0018000002.lgo"));
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+
+    const AC::LgoMesh& mesh = obj->Mesh;
+    // 0x1118 содержит LASTBETA_UBYTE4 — скиннинг с однобайтовыми индексами,
+    // которые парсер обязан расширить до 32 бит.
+    REQUIRE(AC::HasFvf(mesh.Header.Fvf, AC::FvfFlag::LASTBETA_UBYTE4));
+    REQUIRE_EQ(mesh.Header.VertexNum, 336u);
+    REQUIRE_EQ(mesh.Header.BoneIndexNum, 15u);
+    REQUIRE_EQ(mesh.Blends.size(), 336u);
+    REQUIRE_EQ(mesh.BoneIndices.size(), 15u);
+}
+
+CORSAIRS_TEST(LgoParser_LegacyMaterialCarriesTextureName) {
+    const auto bytes = AC::ReadWholeFile(ModelPath("character/2000000003.lgo"));
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+    REQUIRE_EQ(obj->Materials.size(), 1u);
+    REQUIRE(!obj->Materials[0].TextureName(0).empty());
 }
 
 } // namespace
