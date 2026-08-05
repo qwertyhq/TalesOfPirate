@@ -95,6 +95,29 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
 	FCorsairsLoginStageChanged OnStageChanged;
 
+	/** Отправляет серверу путь движения.
+	 *
+	 *  Путь — список точек в координатах карты (100 единиц на клетку). Сервер
+	 *  ждёт именно путь, а не мгновенное положение: он сам проигрывает
+	 *  перемещение по времени и проверяет проходимость, поэтому телепорт в
+	 *  произвольную точку им не принимается.
+	 *
+	 *  Первой точкой должно идти текущее положение персонажа. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	bool SendMovePath(const TArray<FIntPoint>& Path);
+
+	/** Идентификатор персонажа в мире. Приходит при входе в карту и нужен в
+	 *  каждой команде действия. */
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	int64 GetWorldId() const { return WorldId; }
+
+	/** Положение, с которого сервер начал персонажа, в координатах карты. */
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	FIntPoint GetSpawnPosition() const { return SpawnPosition; }
+
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	FString GetMapName() const { return MapName; }
+
 	/** Второй пароль учётной записи. Задаётся заранее: экрана для его ввода
 	 *  пока нет, а без него сервер не пускает в мир. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Corsairs")
@@ -114,6 +137,14 @@ private:
 
 	ECorsairsLoginStage Stage = ECorsairsLoginStage::Idle;
 	TArray<FCorsairsCharacterSlot> Characters;
+
+	int64 WorldId = 0;
+	FIntPoint SpawnPosition = FIntPoint::ZeroValue;
+	FString MapName;
+
+	/** Номер пакета действия. Сервер отслеживает порядок команд по нему и
+	 *  отбрасывает устаревшие. */
+	int64 ActionPacketId = 0;
 
 	FString PendingAccount;
 	FString PendingPasswordHash;

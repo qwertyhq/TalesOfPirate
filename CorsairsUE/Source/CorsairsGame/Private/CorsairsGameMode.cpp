@@ -18,6 +18,11 @@ namespace
 	 *  Scripts/build_character_map.py по таблице characters игровых данных:
 	 *  внутри игры нет ни sqlite3, ни доступа к исходникам. */
 	const TCHAR* CharacterMapRelativePath = TEXT("Data/character_map.json");
+
+	/** На сколько поднять персонажа над серверной позицией при появлении.
+	 *  Точная высота земли в этой точке клиенту неизвестна, а падение с
+	 *  запасом безопаснее застревания в грунте. */
+	constexpr double SpawnHeightMargin = 500.0;
 }
 
 ACorsairsGameMode::ACorsairsGameMode()
@@ -105,6 +110,22 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 			{
 				UE_LOG(LogCorsairsGameMode, Log, TEXT("тело: %s"), *MeshPath);
 			}
+
+			// Персонажа ставим туда, где его держит сервер. Ось Y
+			// инвертируется, как при размещении объектов; высота берётся
+			// с запасом над рельефом, дальше персонаж падает на землю сам.
+			const FIntPoint Spawn = Session->GetSpawnPosition();
+			const FVector Location(static_cast<double>(Spawn.X),
+								   -static_cast<double>(Spawn.Y),
+								   Character->GetActorLocation().Z + SpawnHeightMargin);
+			Character->SetActorLocation(Location, false, nullptr,
+										ETeleportType::TeleportPhysics);
+			UE_LOG(LogCorsairsGameMode, Log,
+				   TEXT("позиция от сервера: (%d, %d) на карте %s"),
+				   Spawn.X, Spawn.Y, *Session->GetMapName());
+
+			// С этого момента персонаж сам сообщает серверу о перемещении.
+			Character->AttachSession(Session);
 			break;
 		}
 		break;

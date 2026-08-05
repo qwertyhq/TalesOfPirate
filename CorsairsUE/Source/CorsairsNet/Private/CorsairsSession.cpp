@@ -3,6 +3,7 @@
 #include "common/src/Crypto/Blake2s.h"
 #include "common/src/Network/NetCommand.h"
 
+#include "CorsairsNet/include/CommandMessages.h"
 #include "CorsairsNet/include/Packet.h"
 
 using Corsairs::Net::RPacket;
@@ -74,6 +75,39 @@ void UCorsairsSession::EnterWorld(int32 SlotIndex)
 
 	SetStage(ECorsairsLoginStage::EnteringWorld,
 			 FString::Printf(TEXT("вход персонажем %s"), *Characters[SlotIndex].Name));
+}
+
+bool UCorsairsSession::SendMovePath(const TArray<FIntPoint>& Path)
+{
+	if (Connection == nullptr || Stage != ECorsairsLoginStage::InWorld)
+	{
+		return false;
+	}
+	if (Path.Num() < 2)
+	{
+		// Путь из одной точки сервер трактует как отсутствие движения.
+		return false;
+	}
+
+	// Точки укладываются в двоичный блок ровно так, как их читает сервер:
+	// пара 32-битных чисел на точку, без выравнивания. Формат задан
+	// структурой Corsairs::Util::Point, которую сервер копирует напрямую.
+	TArray<uint8> Blob;
+	Blob.Reserve(Path.Num() * 2 * sizeof(int32));
+	for (const FIntPoint& Point : Path)
+	{
+		const int32 Coordinates[2] = {Point.X, Point.Y};
+		Blob.Append(reinterpret_cast<const uint8*>(Coordinates), sizeof(Coordinates));
+	}
+
+	WPacket Packet(64 + Blob.Num());
+	Packet.WriteCmd(CMD_CM_BEGINACTION);
+	Packet.WriteInt64(WorldId);
+	Packet.WriteInt64(++ActionPacketId);
+	Packet.WriteInt64(Corsairs::Net::Msg::ActionType::MOVE);
+	Packet.WriteSequence(Blob.GetData(), static_cast<uint16>(Blob.Num()));
+
+	return Connection->Send(Packet);
 }
 
 void UCorsairsSession::Poll()
@@ -229,7 +263,29 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 
 	if (Cmd == CMD_MC_ENTERMAP)
 	{
-		SetStage(ECorsairsLoginStage::InWorld, TEXT("в мире"));
+		// Разбор готовой функцией из CommandMessages: структура входа в карту
+		// насчитывает больше сотни полей, включая сумку, навыки и лодки, и
+		// разбирать её вручную значит завести вторую копию раскладки, которая
+		// разойдётся с серверной при первом же изменении.
+		Corsairs::Net::Msg::McEnterMapMessage Message;
+		Corsairs::Net::Msg::deserialize(Packet, Message);
+
+		if (Message.errCode != 0 || !Message.data.has_value())
+		{
+			SetStage(ECorsairsLoginStage::Failed,
+					 FString::Printf(TEXT("вход в карту отклонён, код %lld"), Message.errCode));
+			return;
+		}
+
+		const auto& Data = Message.data.value();
+		WorldId = Data.baseInfo.worldId;
+		SpawnPosition = FIntPoint(static_cast<int32>(Data.baseInfo.posX),
+								  static_cast<int32>(Data.baseInfo.posY));
+		MapName = ToFString(Data.mapName);
+
+		SetStage(ECorsairsLoginStage::InWorld,
+				 FString::Printf(TEXT("карта %s, позиция (%d, %d)"),
+								 *MapName, SpawnPosition.X, SpawnPosition.Y));
 		return;
 	}
 

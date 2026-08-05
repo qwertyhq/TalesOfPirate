@@ -1,6 +1,7 @@
 #include "CorsairsPlayerCharacter.h"
 
 #include "Camera/CameraComponent.h"
+#include "CorsairsSession.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
@@ -16,6 +17,25 @@ namespace
 	constexpr float CapsuleHalfHeight = 88.0f;
 	constexpr float CapsuleRadius = 34.0f;
 
+	/** Как часто сообщать серверу о движении и с какого смещения.
+	 *
+	 *  Отправка каждый кадр забила бы канал сообщениями о сдвиге в сантиметр,
+	 *  а редкая — рассинхронизировала бы положение. Полсекунды и метр
+	 *  соответствуют шагу, с которым двигался оригинальный клиент. */
+	constexpr float ReportInterval = 0.5f;
+	constexpr float ReportDistance = 100.0f;
+
+	/** Сколько единиц координат карты приходится на сантиметр UE.
+	 *
+	 *  Клетка занимает 100 единиц карты и 100 сантиметров UE, поэтому
+	 *  масштаб единичный. Ось Y инвертируется, как в размещении объектов:
+	 *  без этого мир вышел бы зеркальным. */
+	FIntPoint ToMapCoordinates(const FVector& Location)
+	{
+		return FIntPoint(FMath::RoundToInt(Location.X),
+						 FMath::RoundToInt(-Location.Y));
+	}
+
 	/** Длина кронштейна камеры. Обзор в оригинале — с заметного отдаления,
 	 *  чтобы видеть окружение боя, а не затылок. */
 	constexpr float CameraDistance = 600.0f;
@@ -23,7 +43,8 @@ namespace
 
 ACorsairsPlayerCharacter::ACorsairsPlayerCharacter()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	// Тик нужен для периодической отправки положения серверу.
+	PrimaryActorTick.bCanEverTick = true;
 
 	GetCapsuleComponent()->InitCapsuleSize(CapsuleRadius, CapsuleHalfHeight);
 
@@ -67,6 +88,58 @@ bool ACorsairsPlayerCharacter::SetBodyMesh(const FString& AssetPath)
 
 	GetMesh()->SetSkeletalMesh(Mesh);
 	return true;
+}
+
+void ACorsairsPlayerCharacter::AttachSession(UCorsairsSession* InSession)
+{
+	Session = InSession;
+	bHasReported = false;
+	TimeSinceReport = 0.0f;
+}
+
+void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	TimeSinceReport += DeltaSeconds;
+	if (TimeSinceReport >= ReportInterval)
+	{
+		TimeSinceReport = 0.0f;
+		ReportMovement();
+	}
+}
+
+void ACorsairsPlayerCharacter::ReportMovement()
+{
+	if (Session == nullptr || Session->GetStage() != ECorsairsLoginStage::InWorld)
+	{
+		return;
+	}
+
+	const FIntPoint Current = ToMapCoordinates(GetActorLocation());
+
+	if (!bHasReported)
+	{
+		// Первое сообщение отсчитывается от места, куда персонажа поставил
+		// сервер, а не от нуля: иначе первый же путь пройдёт через полкарты.
+		ReportedPosition = Current;
+		bHasReported = true;
+		return;
+	}
+
+	const FVector2D Delta(Current.X - ReportedPosition.X, Current.Y - ReportedPosition.Y);
+	if (Delta.SizeSquared() < ReportDistance * ReportDistance)
+	{
+		return;
+	}
+
+	TArray<FIntPoint> Path;
+	Path.Add(ReportedPosition);
+	Path.Add(Current);
+	if (Session->SendMovePath(Path))
+	{
+		ReportedPosition = Current;
+	}
 }
 
 void ACorsairsPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)

@@ -108,7 +108,31 @@ def main(report):
         {unreal.CorsairsLoginStage.IN_WORLD, unreal.CorsairsLoginStage.FAILED})
 
     if stage == unreal.CorsairsLoginStage.IN_WORLD:
-        report.line("УСПЕХ: получен MC_ENTERMAP от GameServer, клиент в мире")
+        spawn = session.get_spawn_position()
+        report.line(f"В МИРЕ: карта {session.get_map_name()}, "
+                    f"позиция ({spawn.x}, {spawn.y}), worldId {session.get_world_id()}")
+
+        # Движение проверяется отдельно: вход в мир его не затрагивает, а
+        # сервер принимает путь, а не мгновенное положение — и отвергает
+        # перемещение через непроходимые клетки.
+        target = unreal.IntPoint(spawn.x + 200, spawn.y)
+        sent = session.send_move_path([spawn, target])
+        report.line(f"путь отправлен: {sent}")
+
+        if not sent:
+            report.error("ПРОВАЛ: путь движения не отправился")
+            return
+
+        # Ответ приходит командой NOTIACTION; сюда она не разбирается, но
+        # разрыв соединения означал бы отвергнутый пакет.
+        for _ in range(40):
+            session.poll()
+            if session.get_stage() != unreal.CorsairsLoginStage.IN_WORLD:
+                report.error("ПРОВАЛ: сервер разорвал связь после команды движения")
+                return
+            time.sleep(POLL_INTERVAL)
+
+        report.line("УСПЕХ: клиент в мире, команда движения принята сервером")
     elif stage == unreal.CorsairsLoginStage.FAILED:
         report.error("ПРОВАЛ: вход в мир отклонён")
     else:

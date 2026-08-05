@@ -6,6 +6,7 @@
 #include "CorsairsPlayerCharacter.generated.h"
 
 class UCameraComponent;
+class UCorsairsSession;
 class USpringArmComponent;
 
 /**
@@ -34,6 +35,11 @@ public:
 	bool SetBodyMesh(const FString& AssetPath);
 
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
+	virtual void Tick(float DeltaSeconds) override;
+
+	/** Кому отправлять путь движения. Задаётся режимом игры после входа. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	void AttachSession(UCorsairsSession* InSession);
 
 protected:
 	/** Камера на кронштейне: обзор от третьего лица, как в оригинале. */
@@ -44,8 +50,25 @@ protected:
 	TObjectPtr<UCameraComponent> FollowCamera;
 
 private:
+	/** Отправляет серверу путь от предыдущего сообщённого положения к текущему.
+	 *
+	 *  Сервер ждёт путь, а не мгновенную позицию: он сам проигрывает
+	 *  перемещение по времени и проверяет проходимость. Отправка идёт не
+	 *  каждый кадр, а по накоплению смещения — иначе канал забивается
+	 *  сообщениями о сдвиге в сантиметр. */
+	void ReportMovement();
+
 	void MoveForward(float Value);
 	void MoveRight(float Value);
 	void TurnCamera(float Value);
 	void PitchCamera(float Value);
+
+	UPROPERTY()
+	TObjectPtr<UCorsairsSession> Session;
+
+	/** Положение, о котором серверу уже сообщено, в координатах карты. */
+	FIntPoint ReportedPosition = FIntPoint::ZeroValue;
+	bool bHasReported = false;
+
+	float TimeSinceReport = 0.0f;
 };
