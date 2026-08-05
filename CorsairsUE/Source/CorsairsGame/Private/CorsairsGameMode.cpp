@@ -37,14 +37,26 @@ void ACorsairsGameMode::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Сессия создаётся всегда: экран входа опирается на её стадию, и без
+	// объекта ему нечего показывать даже до подключения.
+	Session = NewObject<UCorsairsSession>(this);
+	Session->OnStageChanged.AddDynamic(this, &ACorsairsGameMode::HandleStageChanged);
+
 	if (!bAutoLogin)
 	{
 		UE_LOG(LogCorsairsGameMode, Log, TEXT("автоматический вход выключен"));
 		return;
 	}
 
-	Session = NewObject<UCorsairsSession>(this);
-	Session->OnStageChanged.AddDynamic(this, &ACorsairsGameMode::HandleStageChanged);
+	StartLogin();
+}
+
+void ACorsairsGameMode::StartLogin()
+{
+	if (Session == nullptr)
+	{
+		return;
+	}
 	Session->Login(Host, Port, Account, Password);
 }
 

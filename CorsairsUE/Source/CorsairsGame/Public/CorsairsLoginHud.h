@@ -31,6 +31,25 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Corsairs")
 	bool bShowSessionState = true;
 
+	/** Ввод символа в активное поле. Вызывается контроллером. */
+	void AppendCharacter(const FString& Character);
+	void EraseCharacter();
+
+	/** Переключает поле ввода: учётная запись, пароль, вход. */
+	void NextField();
+
+	/** Отправляет введённые данные на вход. */
+	void SubmitLogin();
+
+	bool IsAcceptingInput() const;
+
 private:
 	FString DescribeStage(ECorsairsLoginStage Stage) const;
+	void DrawLoginForm(class UFont* Font);
+
+	/** Что редактируется сейчас. Полей всего два, поэтому хватает флага. */
+	bool bEditingPassword = false;
+
+	FString AccountInput;
+	FString PasswordInput;
 };

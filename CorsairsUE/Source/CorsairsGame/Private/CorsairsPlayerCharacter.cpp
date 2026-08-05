@@ -1,6 +1,7 @@
 #include "CorsairsPlayerCharacter.h"
 
 #include "Camera/CameraComponent.h"
+#include "CorsairsLoginHud.h"
 #include "CorsairsSession.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -157,6 +158,64 @@ void ACorsairsPlayerCharacter::SetupPlayerInputComponent(UInputComponent* Player
 								   &ACorsairsPlayerCharacter::TurnCamera);
 	PlayerInputComponent->BindAxis(TEXT("LookUp"), this,
 								   &ACorsairsPlayerCharacter::PitchCamera);
+
+	// Клавиши для экрана входа. Перебираются буквы, цифры и служебные:
+	// заводить действие под каждую бессмысленно, а UMG с полями ввода
+	// потребовал бы ассета, который из кода не создать.
+	TArray<FKey> TypedKeys;
+	for (TCHAR Letter = 'A'; Letter <= 'Z'; ++Letter)
+	{
+		TypedKeys.Add(FKey(*FString::Chr(Letter)));
+	}
+	for (TCHAR Digit = '0'; Digit <= '9'; ++Digit)
+	{
+		TypedKeys.Add(FKey(*FString::Chr(Digit)));
+	}
+	TypedKeys.Append({EKeys::BackSpace, EKeys::Tab, EKeys::Enter});
+
+	for (const FKey& Key : TypedKeys)
+	{
+		FInputKeyBinding Binding(FInputChord(Key, false, false, false, false), IE_Pressed);
+		Binding.bConsumeInput = false;
+		Binding.KeyDelegate.GetDelegateForManualSet().BindLambda(
+			[this, Key]() { HandleTypedKey(Key); });
+		PlayerInputComponent->KeyBindings.Emplace(MoveTemp(Binding));
+	}
+}
+
+void ACorsairsPlayerCharacter::HandleTypedKey(FKey Key)
+{
+	ACorsairsLoginHud* Hud = Controller != nullptr
+		? Cast<ACorsairsLoginHud>(Cast<APlayerController>(Controller)->GetHUD())
+		: nullptr;
+	if (Hud == nullptr || !Hud->IsAcceptingInput())
+	{
+		return;
+	}
+
+	if (Key == EKeys::BackSpace)
+	{
+		Hud->EraseCharacter();
+		return;
+	}
+	if (Key == EKeys::Tab)
+	{
+		Hud->NextField();
+		return;
+	}
+	if (Key == EKeys::Enter)
+	{
+		Hud->SubmitLogin();
+		return;
+	}
+
+	// Имя клавиши совпадает с символом для букв и цифр. Регистр приводится к
+	// нижнему: учётные записи в базе записаны строчными.
+	const FString Name = Key.GetFName().ToString();
+	if (Name.Len() == 1)
+	{
+		Hud->AppendCharacter(Name.ToLower());
+	}
 }
 
 void ACorsairsPlayerCharacter::MoveForward(float Value)

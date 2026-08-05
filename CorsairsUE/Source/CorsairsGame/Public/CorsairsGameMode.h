@@ -47,6 +47,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
 	UCorsairsSession* GetSession() const { return Session; }
 
+	/** Начинает вход с текущими Account и Password.
+	 *
+	 *  Вызывается и при старте уровня, когда включён bAutoLogin, и с экрана
+	 *  входа после ввода. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	void StartLogin();
+
 private:
 	UFUNCTION()
 	void HandleStageChanged(ECorsairsLoginStage Stage, const FString& Message);

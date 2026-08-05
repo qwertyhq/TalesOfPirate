@@ -58,6 +58,13 @@ private:
 	 *  сообщениями о сдвиге в сантиметр. */
 	void ReportMovement();
 
+	/** Передаёт нажатие экрану входа, пока тот принимает ввод.
+	 *
+	 *  Символы приходят через KeyPressed компонента ввода, а не через привязки
+	 *  действий: под каждую букву заводить действие бессмысленно, а UMG с его
+	 *  полями ввода потребовал бы ассета, который из кода не создать. */
+	void HandleTypedKey(FKey Key);
+
 	void MoveForward(float Value);
 	void MoveRight(float Value);
 	void TurnCamera(float Value);
