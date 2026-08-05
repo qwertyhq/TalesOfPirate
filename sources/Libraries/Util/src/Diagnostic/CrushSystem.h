@@ -6,7 +6,8 @@
 #define  WIN32_LEAN_AND_MEAN
 #define  NOMINMAX
 #include <winsock2.h>
-#include <windows.h>
+// Windows-заголовки только на Windows; на POSIX — словарь совместимости.
+#include "PlatformCompat.h"
 
 //     Win32 API ( )
 void SetThreadName(const std::string& name);

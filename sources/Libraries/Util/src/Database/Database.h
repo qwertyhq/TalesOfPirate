@@ -11,8 +11,8 @@
 //   OdbcException   — исключение с SQL state и native error
 
 #define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+// Windows-заголовки только на Windows; на POSIX — словарь совместимости.
+#include "PlatformCompat.h"
 #include <sql.h>
 #include <sqltypes.h>
 #include <sqlext.h>

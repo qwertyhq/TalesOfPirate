@@ -58,6 +58,19 @@ namespace Corsairs::Util {
 		// Получить секцию по имени. Если не найдена — создаёт пустую.
 		IniSection& operator[](std::string_view sectname);
 
+		// Доступ по порядковому номеру, для обхода всех секций.
+		//
+		// Именованный метод, а не перегрузка operator[]: с целочисленной
+		// перегрузкой вызов `cfg[0]` стал бы неоднозначным — литерал 0
+		// одинаково подходит и под int, и под const char* для string_view.
+		IniSection& SectionAt(int index) {
+			return m_sections.at(static_cast<std::size_t>(index));
+		}
+
+		const IniSection& SectionAt(int index) const {
+			return m_sections.at(static_cast<std::size_t>(index));
+		}
+
 		// Сохранить в файл (по умолчанию — в тот же, из которого загружали).
 		void Save(std::string_view filename = "") const;
 

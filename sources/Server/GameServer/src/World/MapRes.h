@@ -8,7 +8,8 @@
 #ifndef MAPRES_H
 #define MAPRES_H
 
-#include <tchar.h>
+// tchar.h нужен только на Windows; TCHAR даёт словарь совместимости.
+#include "PlatformCompat.h"
 #include <stdio.h>
 #include "World/TerrainAttrib.h"
 #include "World/BlockData.h"

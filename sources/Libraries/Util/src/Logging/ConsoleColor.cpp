@@ -3,7 +3,8 @@
 
 #include "ConsoleColor.h"
 #include <algorithm>
-#include <windows.h>
+// Windows-заголовки только на Windows; на POSIX — словарь совместимости.
+#include "PlatformCompat.h"
 
 namespace Corsairs::Util {
 

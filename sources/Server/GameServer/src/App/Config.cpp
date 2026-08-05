@@ -305,7 +305,7 @@ bool CGameCommand::Load(const char *pszFileName)
 	// Ищем по всем секциям
 	auto tryGet = [&]<size_t N>(const char* key, char (&dest)[N]) {
 		for (int i = 0; i < cfg.SectCount(); i++) {
-			auto val = cfg[i].GetString(key);
+			auto val = cfg.SectionAt(i).GetString(key);
 			if (!val.empty()) {
 				strncpy_s(dest, val.c_str(), _TRUNCATE);
 				return;

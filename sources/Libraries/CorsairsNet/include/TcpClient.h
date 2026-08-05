@@ -17,8 +17,13 @@
 //   ICryptoProvider (  ).
 
 #include "Packet.h"
-#include <WinSock2.h>
+// Windows-сокеты только на Windows; на POSIX — словарь совместимости.
+#include "PlatformCompat.h"
+#ifdef _WIN32
 #include <ws2tcpip.h>
+#else
+#include <netdb.h>
+#endif
 #include <atomic>
 #include <mutex>
 #include <queue>

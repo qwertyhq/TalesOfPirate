@@ -3,7 +3,8 @@
 #ifndef SUBMAP_H
 #define SUBMAP_H
 #include "App/GameAppNet.h"
-#include <tchar.h>
+// tchar.h нужен только на Windows; TCHAR даёт словарь совместимости.
+#include "PlatformCompat.h"
 #include <stdio.h>
 #include "Entity/EntitySpawn.h"
 #include "World/SwitchMapRecord.h"

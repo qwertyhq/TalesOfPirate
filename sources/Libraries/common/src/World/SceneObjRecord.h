@@ -2,8 +2,8 @@
 
 #include <string>
 #include <cstdint>
-#define NOMINMAX
-#include <windows.h>
+// Windows-заголовки только на Windows; на POSIX — словарь совместимости.
+#include "PlatformCompat.h"
 
 // Запись таблицы объектов сцены
 

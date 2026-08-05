@@ -9,6 +9,11 @@
 
 #include <source_location>
 
+// Предобъявления: заголовок обязан быть самодостаточным. Раньше эти типы
+// приходили случайным порядком включения через PCH, и смена компилятора
+// это вскрыла.
+class CPassengerMgr;
+
 class CCharacter;
 class CMoveAble;
 class CFightAble;

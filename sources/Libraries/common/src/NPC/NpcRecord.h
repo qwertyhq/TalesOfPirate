@@ -5,7 +5,8 @@
 #ifndef _NPCRECORD_H_
 #define _NPCRECORD_H_
 
-#include <tchar.h>
+// tchar.h нужен только на Windows; TCHAR даёт словарь совместимости.
+#include "PlatformCompat.h"
 #include "util.h"
 #include "Database/TableData.h"
 

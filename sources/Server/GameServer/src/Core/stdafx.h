@@ -12,10 +12,9 @@
 #define _WIN32_WINDOWS _WIN32_WINNT_WIN7
 #endif
 
-#include <winsock2.h>
-#define NOMINMAX
-#include <windows.h>
-#include <tchar.h>
+// Windows-заголовки подключаются только на Windows; на POSIX их место
+// занимает словарь совместимости. Подробности — в самом файле.
+#include "PlatformCompat.h"
 
 //  C standard 
 #include <cstdio>
@@ -54,7 +53,7 @@
 
 using Corsairs::Util::ThrowRuntimeError;
 #include "Localization/i18n.h"
-#include "point.h"
+#include "Math/Point.h"
 #include "Core/Timer.h"
 #include "Network/CompCommand.h"
 #include "Item/ItemContent.h"

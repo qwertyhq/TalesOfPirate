@@ -3,13 +3,13 @@
 
 #include "CrushSystem.h"
 
-#include <tchar.h>
 #include <dbghelp.h>
 #include <filesystem>
 #include <functional>
 #include <iostream>
 #include <stacktrace>
-#include <windows.h>
+// Windows-заголовки только на Windows; на POSIX — словарь совместимости.
+#include "PlatformCompat.h"
 
 static std::string g_dumpFilePath{};
 static std::optional<std::function<void()>> g_crushFunction{};

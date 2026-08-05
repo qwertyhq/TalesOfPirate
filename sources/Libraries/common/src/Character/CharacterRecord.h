@@ -11,7 +11,8 @@
 #include <cstdint>
 #include <source_location>
 #include <string>
-#include <tchar.h>
+// tchar.h нужен только на Windows; TCHAR даёт словарь совместимости.
+#include "PlatformCompat.h"
 #include "util.h"
 #include "Database/TableData.h"
 

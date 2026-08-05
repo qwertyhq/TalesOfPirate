@@ -13,8 +13,8 @@
 #include <queue>
 #include <string>
 #include <tuple>
-#define NOMINMAX
-#include <windows.h>
+// Windows-заголовки только на Windows; на POSIX — словарь совместимости.
+#include "PlatformCompat.h"
 
 // P2905 (C++26): std::make_format_args требует lvalue-аргументы.
 // SafeVFormat принимает ар��ументы по значению (= lvalues внутри функции).

@@ -8,7 +8,8 @@
 #ifndef SWITCHMAPRECORD_H
 #define SWITCHMAPRECORD_H
 
-#include <tchar.h>
+// tchar.h нужен только на Windows; TCHAR даёт словарь совместимости.
+#include "PlatformCompat.h"
 #include "Database/TableData.h"
 #include "point.h"
 

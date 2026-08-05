@@ -1,8 +1,8 @@
 #pragma once
 
 #include "Database/TableData.h"
-#define NOMINMAX
-#include <windows.h>
+// Windows-заголовки только на Windows; на POSIX — словарь совместимости.
+#include "PlatformCompat.h"
 #include <array>
 
 // Запись таблицы маунтов (mountinfo)

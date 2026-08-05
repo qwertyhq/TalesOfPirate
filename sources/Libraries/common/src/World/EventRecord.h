@@ -8,7 +8,8 @@
 #ifndef EVENTRECORD_H
 #define EVENTRECORD_H
 
-#include <tchar.h>
+// tchar.h нужен только на Windows; TCHAR даёт словарь совместимости.
+#include "PlatformCompat.h"
 #include "util.h"
 #include "Database/TableData.h"
 #include "point.h"

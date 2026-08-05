@@ -8,7 +8,8 @@
 #ifndef	ITEMRECORD_H
 #define ITEMRECORD_H
 
-#include <tchar.h>
+// tchar.h нужен только на Windows; TCHAR даёт словарь совместимости.
+#include "PlatformCompat.h"
 #include <string>
 #include <array>
 #include <cstdint>

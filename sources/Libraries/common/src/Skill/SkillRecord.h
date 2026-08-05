@@ -8,7 +8,8 @@
 #ifndef	SKILLRECORD_H
 #define	SKILLRECORD_H
 
-#include <tchar.h>
+// tchar.h нужен только на Windows; TCHAR даёт словарь совместимости.
+#include "PlatformCompat.h"
 #include <string>
 #include <source_location>
 #include "util.h"

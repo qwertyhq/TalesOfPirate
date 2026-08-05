@@ -5,7 +5,8 @@
 #ifndef _FORGERECORD_H_
 #define _FORGERECORD_H_
 
-#include <tchar.h>
+// tchar.h нужен только на Windows; TCHAR даёт словарь совместимости.
+#include "PlatformCompat.h"
 #include "util.h"
 #include "Database/TableData.h"
 
