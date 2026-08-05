@@ -24,3 +24,6 @@ CorsairsUE/Intermediate/
 CorsairsUE/Saved/
 CorsairsUE/Content/
 sources/Server/GameServer/build-posix/
+
+# Промежуточные результаты конвертации ассетов (пересоздаются AssetConverter)
+/artifacts/
