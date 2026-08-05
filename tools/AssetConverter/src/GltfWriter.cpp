@@ -147,14 +147,16 @@ void CollectImages(const LgoGeomObj& obj, const GltfTextureOptions& textures,
 } // namespace
 
 void ConvertMatrixToGltf(const float* in, float* out) {
-    // Единственная нужная операция — S*M*S: отрицаются элементы, у которых
-    // ровно один индекс равен 2. Транспонировать НЕ нужно, см. комментарий
-    // к объявлению функции.
+    // Замена базиса P*M*P, где P переставляет оси Y и Z. P обратна самой себе,
+    // поэтому обе стороны — она же. На уровне элементов это значит взять
+    // элемент с переставленными индексами строки и столбца.
+    //
+    // Транспонировать НЕ нужно, см. комментарий к объявлению функции.
+    constexpr auto swapAxis = [](int index) { return index == 1 ? 2 : (index == 2 ? 1 : index); };
+
     for (int row = 0; row < 4; ++row) {
         for (int col = 0; col < 4; ++col) {
-            const float value = in[row * 4 + col];
-            const bool negate = (row == 2) != (col == 2);
-            out[row * 4 + col] = negate ? -value : value;
+            out[row * 4 + col] = in[swapAxis(row) * 4 + swapAxis(col)];
         }
     }
 }
@@ -168,18 +170,29 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         return GltfStatus::EMPTY_MESH;
     }
 
-    // Преобразование левосторонней системы координат в правостороннюю.
+    // Перевод в систему координат glTF перестановкой Y и Z.
+    //
+    // MindPower3D держит высоту по Z и левосторонен. Спецификация glTF
+    // фиксирует «вверх — это +Y» и не предусматривает метаданных об
+    // ориентации: импортёр не спрашивает, а знает. Перестановка двух осей
+    // делает сразу обе нужные вещи — ставит высоту на Y и меняет рукость,
+    // потому что определитель такой замены базиса равен минус единице.
+    //
+    // Прежний вариант отрицал Z. Рукость он менял правильно, но роли осей
+    // оставлял как есть, и модели приезжали в UE лежащими на боку. Blender
+    // это скрывал: его импортёр glTF позволяет выбрать ось вверх и
+    // подстраивается, поэтому проверка через него ошибку пропускала.
     std::vector<Vector3> positions = mesh.Positions;
     for (Vector3& p : positions) {
-        p.Z = -p.Z;
+        std::swap(p.Y, p.Z);
     }
 
     std::vector<Vector3> normals = mesh.Normals;
     for (Vector3& n : normals) {
-        n.Z = -n.Z;
+        std::swap(n.Y, n.Z);
     }
 
-    // Смена порядка обхода треугольника — парная операция к инверсии Z.
+    // Смена порядка обхода треугольника — парная операция к смене рукости.
     std::vector<std::uint32_t> indices = mesh.Indices;
     for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
         const std::uint32_t tmp = indices[i + 1];

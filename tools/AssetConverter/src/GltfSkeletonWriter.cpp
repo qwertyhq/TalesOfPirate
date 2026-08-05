@@ -58,9 +58,13 @@ void WriteFloatArray(JsonWriter& json, const float* values, std::size_t count) {
 } // namespace
 
 void ConvertQuaternionToGltf(const Quaternion& in, float* out) {
+    // Замена базиса перестановкой осей Y и Z. Для поворота с осью a и углом
+    // θ новая ось равна det(P) * P*a при том же угле; определитель
+    // перестановки двух осей равен минус единице, поэтому вектор кватерниона
+    // переставляется и меняет знак, а скалярная часть остаётся.
     out[0] = -in.X;
-    out[1] = -in.Y;
-    out[2] = in.Z;
+    out[1] = -in.Z;
+    out[2] = -in.Y;
     out[3] = in.W;
 
     // glTF требует нормализованных кватернионов в каналах поворота.
@@ -169,9 +173,11 @@ GltfSkeletonStatus WriteSkeletonGltf(const LabAnimation& anim,
 
         for (std::uint32_t f = 0; f < frameNum; ++f) {
             if (hasTrs) {
+                // Та же перестановка Y и Z, что и для вершин: высота в
+                // MindPower3D лежит по Z, в glTF — по Y.
                 translations[b][f * 3 + 0] = track.Positions[f].X;
-                translations[b][f * 3 + 1] = track.Positions[f].Y;
-                translations[b][f * 3 + 2] = -track.Positions[f].Z;
+                translations[b][f * 3 + 1] = track.Positions[f].Z;
+                translations[b][f * 3 + 2] = track.Positions[f].Y;
                 ConvertQuaternionToGltf(track.Rotations[f], rotations[b].data() + f * 4);
             }
             else {

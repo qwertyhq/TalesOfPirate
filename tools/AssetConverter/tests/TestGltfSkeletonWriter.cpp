@@ -24,21 +24,31 @@ bool NearlyEqual(float a, float b) {
     return std::fabs(a - b) < 1e-5f;
 }
 
-CORSAIRS_TEST(GltfSkeleton_QuaternionConversionNegatesXY) {
+CORSAIRS_TEST(GltfSkeleton_QuaternionConversionSwapsYZandNegatesVector) {
     const AC::Quaternion in{0.1f, 0.2f, 0.3f, 0.9273618f};
     float out[4]{};
     AC::ConvertQuaternionToGltf(in, out);
 
-    // Отрицаются X и Y, Z и W сохраняют знак.
-    REQUIRE(out[0] < 0.0f);
-    REQUIRE(out[1] < 0.0f);
-    REQUIRE(out[2] > 0.0f);
-    REQUIRE(out[3] > 0.0f);
+    // Перестановка осей Y и Z с отрицанием векторной части; скаляр не трогаем.
+    REQUIRE(NearlyEqual(out[0], -0.1f));
+    REQUIRE(NearlyEqual(out[1], -0.3f));   // пришёл из Z
+    REQUIRE(NearlyEqual(out[2], -0.2f));   // пришёл из Y
+    REQUIRE(NearlyEqual(out[3], 0.9273618f));
 
     // Результат нормализован.
     const float len = std::sqrt(out[0] * out[0] + out[1] * out[1] +
                                 out[2] * out[2] + out[3] * out[3]);
     REQUIRE(NearlyEqual(len, 1.0f));
+}
+
+CORSAIRS_TEST(GltfSkeleton_QuaternionConversionKeepsRotationAngle) {
+    // Замена базиса меняет ось поворота, но не его угол: скалярная часть
+    // кватерниона обязана сохраниться в точности, иначе анимация «поедет».
+    const AC::Quaternion in{0.5f, 0.5f, 0.5f, 0.5f};
+    float out[4]{};
+    AC::ConvertQuaternionToGltf(in, out);
+
+    REQUIRE(NearlyEqual(out[3], 0.5f));
 }
 
 CORSAIRS_TEST(GltfSkeleton_QuaternionConversionHandlesZeroLength) {

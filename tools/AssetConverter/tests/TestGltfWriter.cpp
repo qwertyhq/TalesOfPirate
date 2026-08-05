@@ -85,8 +85,9 @@ CORSAIRS_TEST(GltfWriter_MatrixConversionKeepsIdentity) {
     }
 }
 
-CORSAIRS_TEST(GltfWriter_MatrixConversionNegatesTranslationZ) {
+CORSAIRS_TEST(GltfWriter_MatrixConversionSwapsTranslationYandZ) {
     // DirectX row-major: перенос в последней строке (индексы 12,13,14).
+    // Высота в MindPower3D лежит по Z и обязана оказаться на Y.
     const float translate[16] = {
         1, 0, 0, 0,
         0, 1, 0, 0,
@@ -96,14 +97,13 @@ CORSAIRS_TEST(GltfWriter_MatrixConversionNegatesTranslationZ) {
     float out[16]{};
     AC::ConvertMatrixToGltf(translate, out);
 
-    // После транспонирования перенос в glTF column-major остаётся на 12,13,14.
     REQUIRE_EQ(out[12], 2.0f);
-    REQUIRE_EQ(out[13], 3.0f);
-    REQUIRE_EQ(out[14], -5.0f);
+    REQUIRE_EQ(out[13], 5.0f);   // была высота Z
+    REQUIRE_EQ(out[14], 3.0f);   // был Y
     REQUIRE_EQ(out[15], 1.0f);
 }
 
-CORSAIRS_TEST(GltfWriter_MatrixConversionFlipsRotationOffDiagonals) {
+CORSAIRS_TEST(GltfWriter_MatrixConversionMovesRotationToSwappedAxes) {
     // Поворот на 90° вокруг Y в левосторонней системе.
     const float rotY90[16] = {
         0, 0, -1, 0,
@@ -114,13 +114,34 @@ CORSAIRS_TEST(GltfWriter_MatrixConversionFlipsRotationOffDiagonals) {
     float out[16]{};
     AC::ConvertMatrixToGltf(rotY90, out);
 
-    // S*M*S отрицает ровно те элементы, где один индекс равен 2: (0,2) и (2,0).
-    // Диагональные и не связанные с Z остаются как были.
-    REQUIRE_EQ(out[2], 1.0f);    // было -1
-    REQUIRE_EQ(out[8], -1.0f);   // было +1
-    REQUIRE_EQ(out[5], 1.0f);    // не затронут
-    REQUIRE_EQ(out[10], 0.0f);   // m22 не отрицается
+    // P*M*P переставляет индексы строк и столбцов 1 и 2. Элемент (0,2)
+    // приходит из (0,1), элемент (0,1) — из (0,2), и так далее.
+    REQUIRE_EQ(out[1], -1.0f);   // (0,1) <- (0,2)
+    REQUIRE_EQ(out[2], 0.0f);    // (0,2) <- (0,1)
+    REQUIRE_EQ(out[4], 1.0f);    // (1,0) <- (2,0)
+    REQUIRE_EQ(out[8], 0.0f);    // (2,0) <- (1,0)
+    REQUIRE_EQ(out[10], 1.0f);   // (2,2) <- (1,1)
     REQUIRE_EQ(out[15], 1.0f);
+}
+
+CORSAIRS_TEST(GltfWriter_MatrixConversionIsItsOwnInverse) {
+    // Перестановка двух осей обратна самой себе: двойное применение обязано
+    // вернуть исходную матрицу. Это ловит перекос в индексах, который на
+    // симметричных примерах незаметен.
+    const float source[16] = {
+         1,  2,  3,  4,
+         5,  6,  7,  8,
+         9, 10, 11, 12,
+        13, 14, 15, 16,
+    };
+    float once[16]{};
+    float twice[16]{};
+    AC::ConvertMatrixToGltf(source, once);
+    AC::ConvertMatrixToGltf(once, twice);
+
+    for (int i = 0; i < 16; ++i) {
+        REQUIRE_EQ(twice[i], source[i]);
+    }
 }
 
 CORSAIRS_TEST(GltfWriter_EmitsDummyAttachPointsAsNodes) {
