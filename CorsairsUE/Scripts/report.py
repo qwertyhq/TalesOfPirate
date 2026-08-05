@@ -17,6 +17,7 @@
 """
 
 import os
+import subprocess
 import traceback
 
 try:
@@ -61,3 +62,37 @@ class Reporter:
 
     def close(self):
         self._handle.close()
+
+
+def EditorIsOpen() -> bool:
+    """Запущен ли редактор с графическим интерфейсом.
+
+    Коммандлет и открытый редактор пишут одни и те же файлы `.uasset`, и
+    редактор к тому же держит прежнюю версию в памяти: при выходе он сохранит
+    её поверх свежезаписанного. Проверка отделяет графический `UnrealEditor`
+    от собственного процесса `UnrealEditor-Cmd`, под которым идёт скрипт.
+    """
+    try:
+        output = subprocess.run(
+            ["pgrep", "-fl", "UnrealEditor"],
+            capture_output=True, text=True, timeout=10).stdout
+    except Exception:      # noqa: BLE001 — без pgrep проверку просто пропускаем
+        return False
+
+    for line in output.splitlines():
+        if "UnrealEditor-Cmd" in line:
+            continue
+        if "UnrealEditor" in line:
+            return True
+    return False
+
+
+def RefuseIfEditorOpen(report) -> bool:
+    """Сообщает в отчёт и возвращает True, если продолжать нельзя."""
+    if EditorIsOpen():
+        report.error(
+            "редактор открыт — закройте его перед запуском. Иначе он сохранит "
+            "свою версию поверх результата, а параллельная запись .uasset "
+            "может испортить файлы")
+        return True
+    return False

@@ -27,7 +27,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import unreal                                   # noqa: E402
-from report import Reporter                     # noqa: E402
+from report import Reporter, RefuseIfEditorOpen  # noqa: E402
 
 
 def load_manifest(path):
@@ -193,6 +193,9 @@ def spawn_instanced(asset_path, transforms):
 
 
 def main(report):
+    if RefuseIfEditorOpen(report):
+        return
+
     args = sys.argv[1:]
     if len(args) < 2:
         report.error("нужны аргументы: <манифест> <путь-уровня> [лимит]")

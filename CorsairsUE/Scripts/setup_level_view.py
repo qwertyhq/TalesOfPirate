@@ -21,7 +21,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import unreal                                   # noqa: E402
-from report import Reporter                     # noqa: E402
+from report import Reporter, RefuseIfEditorOpen  # noqa: E402
 
 # Сколько инстансов у каждого компонента опрашивать для оценки границ.
 # Полный обход сотни тысяч трансформаций ничего не уточнит, а времени займёт
@@ -92,6 +92,9 @@ def spawn_once(report, actor_class, label):
 
 
 def main(report):
+    if RefuseIfEditorOpen(report):
+        return
+
     level_path = sys.argv[1] if len(sys.argv) > 1 else "/Game/Maps/Garner"
 
     subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
