@@ -24,6 +24,8 @@ enum class LgoStatus : std::uint32_t {
     BLOCK_SIZES_INCONSISTENT,
     MTL_BLOCK_MALFORMED,
     MESH_BLOCK_MALFORMED,
+    HELPER_BLOCK_MALFORMED,
+    HELPER_SECTION_UNSUPPORTED,
 };
 
 [[nodiscard]] std::string_view ToString(LgoStatus status);
@@ -62,11 +64,21 @@ struct LgoMesh {
     std::vector<VertexElement> VertexElements;
 };
 
+// Helper-данные объекта. Dummy — точки крепления оружия и эффектов; bounding
+// box/sphere — объёмы для отсечения и попаданий.
+struct LgoHelper {
+    std::uint32_t Type{0};
+    std::vector<HelperDummyInfo> Dummies;
+    std::vector<BoundingBoxInfo> BoundingBoxes;
+    std::vector<BoundingSphereInfo> BoundingSpheres;
+};
+
 struct LgoGeomObj {
     std::uint32_t Version{0};
     GeomObjHeader Header{};
     std::vector<LgoMaterial> Materials;
     LgoMesh Mesh;
+    LgoHelper Helper;
 };
 
 // Разбирает .lgo целиком. std::nullopt — файл непригоден; причина в diag.

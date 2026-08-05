@@ -70,6 +70,87 @@ CORSAIRS_TEST(GltfWriter_GltfDeclaresVersionAndMeshCounts) {
     REQUIRE(text.find(R"("primitives")") != std::string::npos);
 }
 
+CORSAIRS_TEST(GltfWriter_MatrixConversionKeepsIdentity) {
+    const float identity[16] = {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    };
+    float out[16]{};
+    AC::ConvertMatrixToGltf(identity, out);
+
+    for (int i = 0; i < 16; ++i) {
+        REQUIRE_EQ(out[i], identity[i]);
+    }
+}
+
+CORSAIRS_TEST(GltfWriter_MatrixConversionNegatesTranslationZ) {
+    // DirectX row-major: перенос в последней строке (индексы 12,13,14).
+    const float translate[16] = {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        2, 3, 5, 1,
+    };
+    float out[16]{};
+    AC::ConvertMatrixToGltf(translate, out);
+
+    // После транспонирования перенос в glTF column-major остаётся на 12,13,14.
+    REQUIRE_EQ(out[12], 2.0f);
+    REQUIRE_EQ(out[13], 3.0f);
+    REQUIRE_EQ(out[14], -5.0f);
+    REQUIRE_EQ(out[15], 1.0f);
+}
+
+CORSAIRS_TEST(GltfWriter_MatrixConversionFlipsRotationOffDiagonals) {
+    // Поворот на 90° вокруг Y в левосторонней системе.
+    const float rotY90[16] = {
+        0, 0, -1, 0,
+        0, 1,  0, 0,
+        1, 0,  0, 0,
+        0, 0,  0, 1,
+    };
+    float out[16]{};
+    AC::ConvertMatrixToGltf(rotY90, out);
+
+    // S*M*S отрицает ровно те элементы, где один индекс равен 2: (0,2) и (2,0).
+    // Диагональные и не связанные с Z остаются как были.
+    REQUIRE_EQ(out[2], 1.0f);    // было -1
+    REQUIRE_EQ(out[8], -1.0f);   // было +1
+    REQUIRE_EQ(out[5], 1.0f);    // не затронут
+    REQUIRE_EQ(out[10], 0.0f);   // m22 не отрицается
+    REQUIRE_EQ(out[15], 1.0f);
+}
+
+CORSAIRS_TEST(GltfWriter_EmitsDummyAttachPointsAsNodes) {
+    // character/04090084.lgo содержит 5 dummy-точек крепления.
+    const auto bytes = AC::ReadWholeFile(
+        std::filesystem::path{CORSAIRS_REPO_ROOT} / "Client" / "model" /
+        "character" / "04090084.lgo");
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+    REQUIRE_EQ(obj->Helper.Dummies.size(), 5u);
+
+    std::filesystem::create_directories(OutputDir());
+    const std::filesystem::path gltfPath = OutputDir() / "dummies.gltf";
+
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(*obj, gltfPath, detail)),
+               static_cast<std::uint32_t>(AC::GltfStatus::OK));
+
+    const auto written = AC::ReadWholeFile(gltfPath);
+    REQUIRE(written.has_value());
+    const std::string text{reinterpret_cast<const char*>(written->data()), written->size()};
+
+    REQUIRE(text.find(R"("dummy_0")") != std::string::npos);
+    REQUIRE(text.find(R"("dummy_4")") != std::string::npos);
+    REQUIRE(text.find(R"("matrix")") != std::string::npos);
+}
+
 CORSAIRS_TEST(GltfWriter_RejectsMeshWithoutVertices) {
     AC::LgoGeomObj empty;
     empty.Version = 0x1004u;

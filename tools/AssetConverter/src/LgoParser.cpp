@@ -17,6 +17,8 @@ std::string_view ToString(LgoStatus status) {
     case LgoStatus::BLOCK_SIZES_INCONSISTENT: return "BLOCK_SIZES_INCONSISTENT";
     case LgoStatus::MTL_BLOCK_MALFORMED:      return "MTL_BLOCK_MALFORMED";
     case LgoStatus::MESH_BLOCK_MALFORMED:     return "MESH_BLOCK_MALFORMED";
+    case LgoStatus::HELPER_BLOCK_MALFORMED:   return "HELPER_BLOCK_MALFORMED";
+    case LgoStatus::HELPER_SECTION_UNSUPPORTED: return "HELPER_SECTION_UNSUPPORTED";
     }
     return "UNKNOWN";
 }
@@ -396,6 +398,129 @@ bool ParseMeshBlockV0(BinaryReader& reader, std::uint32_t meshSize, LgoMesh& mes
     return true;
 }
 
+// Разбирает helper-блок. Секции идут в фиксированном порядке по битам Type,
+// каждая начинается со своего счётчика. Проверяется точный расход байт.
+//
+// Раскладка dummy зависит от версии: в 0x1001+ это 140 байт (Mat + MatLocal +
+// родитель), в 0x0000..0x1000 — 68 байт (только Id + Mat).
+bool ParseHelperBlock(BinaryReader& reader, std::uint32_t helperSize,
+                      std::uint32_t version, LgoHelper& helper, LgoDiagnostics& diag) {
+    const std::size_t blockStart = reader.Offset();
+
+    if (version == kLegacyVersion) {
+        std::uint32_t innerVersion = 0;
+        if (!reader.Read(innerVersion)) {
+            diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+            diag.Detail = "не прочитана вложенная версия helper-блока";
+            return false;
+        }
+    }
+
+    if (!reader.Read(helper.Type)) {
+        diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+        diag.Detail = "не прочитан Type helper-блока";
+        return false;
+    }
+
+    if (HasHelper(helper.Type, HelperType::DUMMY)) {
+        std::uint32_t count = 0;
+        if (!reader.Read(count)) {
+            diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+            diag.Detail = "не прочитан счётчик dummy";
+            return false;
+        }
+
+        helper.Dummies.resize(count);
+        if (version >= 0x1001u) {
+            if (!reader.ReadArray(helper.Dummies.data(), count)) {
+                diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+                diag.Detail = "не прочитан массив dummy";
+                return false;
+            }
+        }
+        else {
+            // Короткая раскладка: локальная матрица и родитель отсутствуют,
+            // движок оставляет их нулевыми — делаем так же.
+            std::vector<HelperDummyInfoV1000> legacy(count);
+            if (count > 0 && !reader.ReadArray(legacy.data(), count)) {
+                diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+                diag.Detail = "не прочитан массив dummy (короткая раскладка)";
+                return false;
+            }
+            for (std::uint32_t i = 0; i < count; ++i) {
+                helper.Dummies[i] = HelperDummyInfo{};
+                helper.Dummies[i].Id = legacy[i].Id;
+                for (std::size_t k = 0; k < 16; ++k) {
+                    helper.Dummies[i].Mat[k] = legacy[i].Mat[k];
+                }
+            }
+        }
+    }
+
+    // Секции BOX и MESH в датасете не встречаются ни разу (проверено по всем
+    // 6672 файлам). Их раскладка переменной длины, поэтому вместо догадок
+    // возвращаем явную ошибку — она попадёт в отчёт, если такой файл появится.
+    if (HasHelper(helper.Type, HelperType::BOX) || HasHelper(helper.Type, HelperType::MESH)) {
+        diag.Status = LgoStatus::HELPER_SECTION_UNSUPPORTED;
+        diag.Detail = std::format(
+            "helper-секции BOX/MESH не реализованы (Type=0x{:04X})", helper.Type);
+        return false;
+    }
+
+    if (HasHelper(helper.Type, HelperType::BOUNDING_BOX)) {
+        std::uint32_t count = 0;
+        if (!reader.Read(count)) {
+            diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+            diag.Detail = "не прочитан счётчик bounding box";
+            return false;
+        }
+        if (!ReadVector(reader, helper.BoundingBoxes, count)) {
+            diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+            diag.Detail = "не прочитан массив bounding box";
+            return false;
+        }
+
+        // В версиях <= 0x1001 бокс хранился как (точка, размер); приводим к
+        // (центр, радиус), как делает движок.
+        if (version <= 0x1001u) {
+            for (BoundingBoxInfo& box : helper.BoundingBoxes) {
+                const Vector3 point = box.BoundBox.Center;
+                const Vector3 size = box.BoundBox.Radius;
+                box.BoundBox.Radius = Vector3{size.X / 2.0f, size.Y / 2.0f, size.Z / 2.0f};
+                box.BoundBox.Center = Vector3{point.X + box.BoundBox.Radius.X,
+                                              point.Y + box.BoundBox.Radius.Y,
+                                              point.Z + box.BoundBox.Radius.Z};
+            }
+        }
+    }
+
+    if (HasHelper(helper.Type, HelperType::BOUNDING_SPHERE)) {
+        std::uint32_t count = 0;
+        if (!reader.Read(count)) {
+            diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+            diag.Detail = "не прочитан счётчик bounding sphere";
+            return false;
+        }
+        if (!ReadVector(reader, helper.BoundingSpheres, count)) {
+            diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+            diag.Detail = "не прочитан массив bounding sphere";
+            return false;
+        }
+    }
+
+    const std::size_t consumed = reader.Offset() - blockStart;
+    if (consumed != helperSize) {
+        diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+        diag.Detail = std::format(
+            "прочитано {} байт, заголовок объявил HelperSize={} (Type=0x{:04X}, "
+            "dummy={}, bbox={}, bsphere={})",
+            consumed, helperSize, helper.Type, helper.Dummies.size(),
+            helper.BoundingBoxes.size(), helper.BoundingSpheres.size());
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 std::optional<LgoGeomObj> ParseLgo(std::span<const std::uint8_t> bytes,
@@ -471,10 +596,10 @@ std::optional<LgoGeomObj> ParseLgo(std::span<const std::uint8_t> bytes,
         }
     }
 
-    if (obj.Header.HelperSize > 0 && !reader.Skip(obj.Header.HelperSize)) {
-        diag.Status = LgoStatus::BLOCK_SIZES_INCONSISTENT;
-        diag.Detail = "блок helper выходит за границы файла";
-        return std::nullopt;
+    if (obj.Header.HelperSize > 0) {
+        if (!ParseHelperBlock(reader, obj.Header.HelperSize, obj.Version, obj.Helper, diag)) {
+            return std::nullopt;
+        }
     }
 
     if (obj.Header.AnimSize > 0 && !reader.Skip(obj.Header.AnimSize)) {

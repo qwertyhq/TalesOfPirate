@@ -3,6 +3,7 @@
 #include "Corsairs/Tools/AssetConverter/JsonWriter.h"
 
 #include <cstring>
+#include <format>
 #include <fstream>
 #include <limits>
 #include <vector>
@@ -81,6 +82,19 @@ bool WriteFile(const std::filesystem::path& path, const void* data, std::size_t 
 }
 
 } // namespace
+
+void ConvertMatrixToGltf(const float* in, float* out) {
+    // Единственная нужная операция — S*M*S: отрицаются элементы, у которых
+    // ровно один индекс равен 2. Транспонировать НЕ нужно, см. комментарий
+    // к объявлению функции.
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            const float value = in[row * 4 + col];
+            const bool negate = (row == 2) != (col == 2);
+            out[row * 4 + col] = negate ? -value : value;
+        }
+    }
+}
 
 GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPath,
                      std::string& detail) {
@@ -296,12 +310,33 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     json.EndObject();
     json.EndArray();
 
+    // Узел 0 — сам меш. Следом по узлу на каждую dummy-точку крепления:
+    // так UE и Blender видят их как обычные объекты сцены с трансформацией,
+    // и к ним можно привязывать оружие и эффекты.
     json.Key("nodes");
     json.BeginArray();
     json.BeginObject();
     json.Key("mesh");
     json.Value(static_cast<std::int64_t>(0));
+    json.Key("name");
+    json.Value("mesh");
     json.EndObject();
+
+    for (std::size_t i = 0; i < obj.Helper.Dummies.size(); ++i) {
+        float matrix[16]{};
+        ConvertMatrixToGltf(obj.Helper.Dummies[i].Mat, matrix);
+
+        json.BeginObject();
+        json.Key("name");
+        json.Value(std::format("dummy_{}", i));
+        json.Key("matrix");
+        json.BeginArray();
+        for (const float value : matrix) {
+            json.Value(static_cast<double>(value));
+        }
+        json.EndArray();
+        json.EndObject();
+    }
     json.EndArray();
 
     json.Key("scenes");
@@ -309,7 +344,9 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     json.BeginObject();
     json.Key("nodes");
     json.BeginArray();
-    json.Value(static_cast<std::int64_t>(0));
+    for (std::size_t i = 0; i <= obj.Helper.Dummies.size(); ++i) {
+        json.Value(static_cast<std::int64_t>(i));
+    }
     json.EndArray();
     json.EndObject();
     json.EndArray();

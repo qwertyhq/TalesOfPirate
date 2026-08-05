@@ -251,4 +251,64 @@ CORSAIRS_TEST(LgoParser_LegacyMaterialCarriesTextureName) {
     REQUIRE(!obj->Materials[0].TextureName(0).empty());
 }
 
+// --- Helper-блок: точки крепления и объёмы -----------------------------------
+
+CORSAIRS_TEST(LgoParser_ParsesBoundingSphereHelper) {
+    const auto bytes = AC::ReadWholeFile(SampleLgoPath());
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+
+    // helperSize=92 = 4 (type) + 4 (num) + 84 (одна сфера)
+    REQUIRE_EQ(obj->Helper.Type, 0x0020u);
+    REQUIRE_EQ(obj->Helper.BoundingSpheres.size(), 1u);
+    REQUIRE(obj->Helper.Dummies.empty());
+    REQUIRE(obj->Helper.BoundingSpheres[0].BoundSphere.Radius > 0.0f);
+}
+
+CORSAIRS_TEST(LgoParser_ParsesDummyAttachPointsWithBoundingBox) {
+    const auto bytes = AC::ReadWholeFile(ModelPath("character/04090084.lgo"));
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+
+    // helperSize=804 = 4 (type) + 4 + 140*5 (dummy) + 4 + 92*1 (bbox)
+    REQUIRE_EQ(obj->Helper.Type, 0x0011u);
+    REQUIRE_EQ(obj->Helper.Dummies.size(), 5u);
+    REQUIRE_EQ(obj->Helper.BoundingBoxes.size(), 1u);
+}
+
+CORSAIRS_TEST(LgoParser_ParsesDummyOnlyHelper) {
+    const auto bytes = AC::ReadWholeFile(ModelPath("character/0009000100.lgo"));
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+
+    // helperSize=428 = 4 (type) + 4 + 140*3
+    REQUIRE_EQ(obj->Helper.Type, 0x0001u);
+    REQUIRE_EQ(obj->Helper.Dummies.size(), 3u);
+}
+
+CORSAIRS_TEST(LgoParser_ParsesLegacyDummyWithShortLayout) {
+    const auto bytes = AC::ReadWholeFile(ModelPath("character/2000000000.lgo"));
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+
+    // В версии 0x0000 dummy занимает 68 байт (id + mat), а не 140:
+    // helperSize=388 = 4 (вложенная версия) + 4 (type) + 4 + 68*3 + 4 + 84*2
+    REQUIRE_EQ(obj->Version, 0x0000u);
+    REQUIRE_EQ(obj->Helper.Type, 0x0021u);
+    REQUIRE_EQ(obj->Helper.Dummies.size(), 3u);
+    REQUIRE_EQ(obj->Helper.BoundingSpheres.size(), 2u);
+}
+
 } // namespace

@@ -159,6 +159,62 @@ struct VertexElement {
     std::uint8_t UsageIndex;
 };
 
+// --- Helper-блок -------------------------------------------------------------
+// Секции присутствуют в блоке по битам поля Type и всегда в этом порядке:
+// DUMMY, BOX, MESH, BOUNDINGBOX, BOUNDINGSPHERE. Каждая начинается со своего
+// счётчика. Dummy — точки крепления оружия и эффектов к модели.
+
+enum class HelperType : std::uint32_t {
+    DUMMY           = 0x0001,
+    BOX             = 0x0002,
+    MESH            = 0x0004,
+    BOUNDING_BOX    = 0x0010,
+    BOUNDING_SPHERE = 0x0020,
+};
+
+[[nodiscard]] inline bool HasHelper(std::uint32_t type, HelperType flag) {
+    const std::uint32_t bits = static_cast<std::uint32_t>(flag);
+    return (type & bits) != 0;
+}
+
+struct Box {
+    Vector3 Center;
+    Vector3 Radius;
+};
+
+struct Sphere {
+    Vector3 Center;
+    float Radius;
+};
+
+// Точка крепления. `Mat` — мировая матрица относительно объекта, `MatLocal` —
+// локальная; ParentType: 0 обычный, 1 родитель-кость, 2 родитель-dummy кости.
+struct HelperDummyInfo {
+    std::uint32_t Id;
+    float Mat[16];
+    float MatLocal[16];
+    std::uint32_t ParentType;
+    std::uint32_t ParentId;
+};
+
+// Раскладка dummy в версиях <= 0x1000: только Id и матрица.
+struct HelperDummyInfoV1000 {
+    std::uint32_t Id;
+    float Mat[16];
+};
+
+struct BoundingBoxInfo {
+    std::uint32_t Id;
+    Box BoundBox;
+    float Mat[16];
+};
+
+struct BoundingSphereInfo {
+    std::uint32_t Id;
+    Sphere BoundSphere;
+    float Mat[16];
+};
+
 // --- Легаси-формат version = 0x0000 -----------------------------------------
 // Ранняя раскладка, встречающаяся у 91 файла в датасете. Отличается от 0x1004+
 // набором полей и порядком массивов. Источник — lwExpObj.h (lwTexInfo_0000,
@@ -232,5 +288,15 @@ static_assert(sizeof(RenderStateSet2x8) == 128, "RenderStateSet2x8: 2*8*8 = 128 
 static_assert(sizeof(TexInfoV0) == 208, "TexInfoV0: раскладка на диске 208 байт");
 static_assert(sizeof(MtlTexInfoV0) == 1028, "MtlTexInfoV0: раскладка на диске 1028 байт");
 static_assert(sizeof(MeshInfoHeaderV0) == 152, "MeshInfoHeaderV0: раскладка на диске 152 байта");
+
+// Helper-блок. Размеры сверены с фактическими helperSize в датасете: у
+// character/0066000000.lgo helperSize=92 = 4 (type) + 4 (num) + 84 (сфера);
+// у character/04090084.lgo helperSize=804 = 4 + 4 + 140*5 + 4 + 92*1.
+static_assert(sizeof(Box) == 24, "Box: раскладка на диске 24 байта");
+static_assert(sizeof(Sphere) == 16, "Sphere: раскладка на диске 16 байт");
+static_assert(sizeof(HelperDummyInfo) == 140, "HelperDummyInfo: раскладка на диске 140 байт");
+static_assert(sizeof(HelperDummyInfoV1000) == 68, "HelperDummyInfoV1000: раскладка на диске 68 байт");
+static_assert(sizeof(BoundingBoxInfo) == 92, "BoundingBoxInfo: раскладка на диске 92 байта");
+static_assert(sizeof(BoundingSphereInfo) == 84, "BoundingSphereInfo: раскладка на диске 84 байта");
 
 } // namespace Corsairs::Tools::AssetConverter
