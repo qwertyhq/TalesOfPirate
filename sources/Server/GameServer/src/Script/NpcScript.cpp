@@ -1126,7 +1126,11 @@ int ChaPlayEffect(CCharacter* pChar, int nEffectID)
 	return LUA_TRUE;
 }
 
-inline int RegisterNpcScript()
+// Без inline: функция вызывается из Script.cpp, а inline-функция обязана быть
+// определена в каждой единице трансляции, которая её использует. Здесь
+// определение одно, поэтому inline означал бы отсутствие символа при
+// компоновке — MSVC это прощал, clang нет.
+int RegisterNpcScript()
 {
 	lua_State* L = g_pLuaState;
 

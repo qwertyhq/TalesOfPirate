@@ -12,6 +12,9 @@ using namespace Corsairs::Common::NPC;
 #include <assert.h>
 #include "Script/Script.h"
 #include "Script/lua_gamectrl.h"
+
+// Определена в Script/NpcScript.cpp на глобальном уровне.
+luabridge::LuaRef BuildNpcActionTable(lua_State*, Corsairs::Net::RPacket&);
 //---------------------------------------------------------
 
 // #define ROLE_DEBUG_INFO
@@ -283,8 +286,12 @@ namespace Corsairs::Common::Mission
 
 		//      Lua-  packet.
 		//     Corsairs::Net::RPacket  Lua.
-		extern luabridge::LuaRef BuildNpcActionTable(lua_State*, Corsairs::Net::RPacket&);
-		luabridge::LuaRef action = BuildNpcActionTable(g_pLuaState, packet);
+		// Через ::, потому что объявление ниже — глобальное. Блочный extern
+		// внутри namespace объявил бы функцию в ЭТОМ пространстве имён
+		// (Corsairs::Common::Mission), а определение лежит в глобальном.
+		// MSVC клал такие объявления в глобальное — это отступление от
+		// стандарта, из-за которого код собирался только там.
+		luabridge::LuaRef action = ::BuildNpcActionTable(g_pLuaState, packet);
 
 		luabridge::push( g_pLuaState, &character );
 		luabridge::push( g_pLuaState, static_cast<Corsairs::Common::Mission::CNpc*>(this) );

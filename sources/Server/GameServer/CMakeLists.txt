@@ -38,6 +38,8 @@ if(NOT WIN32)
     # CrushSystem — обработчик аварий на SEH и dbghelp, механизмы Windows. На
     # POSIX его роль играют обработчики сигналов; это отдельная задача.
     list(FILTER UTIL_SOURCES EXCLUDE REGEX "Diagnostic/CrushSystem\\.cpp$")
+else()
+    list(FILTER UTIL_SOURCES EXCLUDE REGEX "Diagnostic/CrushSystemPosix\\.cpp$")
 endif()
 
 # mpack собирается отдельной библиотекой и БЕЗ принудительного stdafx.h.
@@ -120,10 +122,14 @@ endif()
 
 # LuaJIT собирается своим Makefile:
 #   MACOSX_DEPLOYMENT_TARGET=15.0 make -C Libraries/LuaJIT/src
-find_library(LUAJIT_LIBRARY NAMES luajit
-    HINTS "${SOURCES_ROOT}/Libraries/LuaJIT/src" NO_DEFAULT_PATH)
-if(NOT LUAJIT_LIBRARY)
-    message(FATAL_ERROR "libluajit.a не найдена: соберите Libraries/LuaJIT/src")
+# Указываем статическую библиотеку напрямую: find_library предпочитает .dylib,
+# и бинарник получал зависимость от /usr/local/lib/libluajit-5.1.2.dylib,
+# которой в системе нет.
+set(LUAJIT_LIBRARY "${SOURCES_ROOT}/Libraries/LuaJIT/src/libluajit.a")
+if(NOT EXISTS "${LUAJIT_LIBRARY}")
+    message(FATAL_ERROR
+        "libluajit.a не найдена. Соберите её:\n"
+        "  MACOSX_DEPLOYMENT_TARGET=15.0 make -C Libraries/LuaJIT/src")
 endif()
 target_link_libraries(GameServer PRIVATE "${LUAJIT_LIBRARY}")
 
