@@ -43,4 +43,16 @@ struct LmoModel {
 [[nodiscard]] std::optional<LmoModel> ParseLmo(std::span<const std::uint8_t> bytes,
                                                LgoDiagnostics& diag);
 
+// Заполняет `MatModel` каждого объекта его положением в пространстве модели:
+// `MatModel = MatLocal * MatModel(родителя)`, как делает `lwNodeObject` в
+// движке. Объекты без родителя сохраняют собственную `MatLocal`.
+//
+// Родитель адресуется полем `Id`, а не индексом, и в исходных данных `Id`
+// иногда повторяются — при совпадении берётся первый. Цикл и ссылка на
+// отсутствующего родителя обрываются: объект остаётся корневым. Это хуже
+// потерянного сдвига, но не зацикливает конвертацию.
+//
+// Вызывается из ParseLmo; отдельно объявлена ради проверки в тестах.
+void ResolveModelMatrices(std::vector<LgoGeomObj>& objects);
+
 } // namespace Corsairs::Tools::AssetConverter

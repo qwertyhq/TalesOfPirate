@@ -2,6 +2,7 @@
 
 #include "Corsairs/Tools/AssetConverter/JsonWriter.h"
 
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <fstream>
@@ -562,6 +563,36 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     if (hasSkin) {
         json.Key("skin");
         json.Value(static_cast<std::int64_t>(0));
+    }
+
+    // Положение объекта внутри модели. Без него все части `.lmo` схлопываются
+    // в начало координат: у 417 моделей из 639 матрица неединичная, а у зданий
+    // из нескольких объектов это означает груду деталей в одной точке.
+    //
+    // Скиннутый меш исключён намеренно: по спецификации glTF трансформ узла
+    // скиннутого меша игнорируется, вершины полностью задаются суставами.
+    // Записывать туда матрицу бессмысленно, а вводить в заблуждение — вредно.
+    if (!hasSkin) {
+        float matrix[16]{};
+        ConvertMatrixToGltf(obj.MatModel, matrix);
+
+        constexpr float kIdentity[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        bool isIdentity = true;
+        for (std::size_t i = 0; i < 16; ++i) {
+            if (std::fabs(matrix[i] - kIdentity[i]) > 1e-6f) {
+                isIdentity = false;
+                break;
+            }
+        }
+
+        if (!isIdentity) {
+            json.Key("matrix");
+            json.BeginArray();
+            for (const float value : matrix) {
+                json.Value(static_cast<double>(value));
+            }
+            json.EndArray();
+        }
     }
     json.EndObject();
 

@@ -2,9 +2,88 @@
 
 #include "Corsairs/Tools/AssetConverter/BinaryReader.h"
 
+#include <algorithm>
 #include <format>
+#include <unordered_map>
+#include <vector>
 
 namespace Corsairs::Tools::AssetConverter {
+
+namespace {
+
+constexpr std::uint32_t kNoParent = 0xFFFFFFFFu;
+
+// Перемножение 4x4 в порядке движка: lwMatrix44Multiply(&out, &a, &b) даёт
+// out = a * b при строчных векторах DirectX, то есть сначала применяется `a`.
+void Multiply(const float* a, const float* b, float* out) {
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; ++k) {
+                sum += a[row * 4 + k] * b[k * 4 + col];
+            }
+            out[row * 4 + col] = sum;
+        }
+    }
+}
+
+} // namespace
+
+void ResolveModelMatrices(std::vector<LgoGeomObj>& objects) {
+    std::unordered_map<std::uint32_t, std::size_t> byId;
+    for (std::size_t i = 0; i < objects.size(); ++i) {
+        byId.emplace(objects[i].Header.Id, i);
+    }
+
+    std::vector<char> done(objects.size(), 0);
+
+    // Итеративный подъём вместо рекурсии: глубина деревьев не ограничена
+    // форматом, а стек — ограничен.
+    for (std::size_t start = 0; start < objects.size(); ++start) {
+        if (done[start]) {
+            continue;
+        }
+
+        std::vector<std::size_t> chain;
+        std::vector<char> visiting(objects.size(), 0);
+        std::size_t current = start;
+
+        while (!done[current]) {
+            if (visiting[current]) {
+                // Цикл: обрываем, оставляя уже накопленное.
+                break;
+            }
+            visiting[current] = 1;
+            chain.push_back(current);
+
+            const std::uint32_t parentId = objects[current].Header.ParentId;
+            if (parentId == kNoParent) {
+                break;
+            }
+            const auto it = byId.find(parentId);
+            if (it == byId.end() || it->second == current) {
+                break;
+            }
+            current = it->second;
+        }
+
+        // Идём от самого верхнего к исходному, домножая на уже готовую матрицу
+        // родителя.
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            const std::size_t index = *it;
+            const std::uint32_t parentId = objects[index].Header.ParentId;
+            const auto parent = byId.find(parentId);
+            if (parentId != kNoParent && parent != byId.end() &&
+                parent->second != index && done[parent->second]) {
+                float composed[16]{};
+                Multiply(objects[index].Header.MatLocal,
+                         objects[parent->second].MatModel, composed);
+                std::copy_n(composed, 16, objects[index].MatModel);
+            }
+            done[index] = 1;
+        }
+    }
+}
 
 std::optional<LmoModel> ParseLmo(std::span<const std::uint8_t> bytes,
                                  LgoDiagnostics& diag) {
@@ -114,6 +193,8 @@ std::optional<LmoModel> ParseLmo(std::span<const std::uint8_t> bytes,
             return std::nullopt;
         }
     }
+
+    ResolveModelMatrices(model.Objects);
 
     diag.Status = worst;
     diag.Detail.clear();

@@ -563,6 +563,10 @@ bool ParseGeomObjBody(BinaryReader& reader, std::uint32_t version,
         return false;
     }
 
+    // Пока родитель неизвестен, положение в модели равно локальному. Для
+    // `.lgo` так и остаётся, для `.lmo` цепочку родителей досчитывает ParseLmo.
+    std::copy_n(obj.Header.MatLocal, 16, obj.MatModel);
+
     const std::uint64_t blocksSum =
         static_cast<std::uint64_t>(obj.Header.MtlSize) +
         static_cast<std::uint64_t>(obj.Header.MeshSize) +

@@ -88,6 +88,18 @@ struct LgoGeomObj {
     std::vector<LgoMaterial> Materials;
     LgoMesh Mesh;
     LgoHelper Helper;
+
+    // Положение объекта в пространстве модели. Для `.lgo`, где объект один,
+    // совпадает с `Header.MatLocal`; для `.lmo` в неё свёрнута цепочка
+    // родителей по `ParentId`. Движок делает то же самое: `lwNodeObject`
+    // держит `_mat_local` из файла и вычисляет
+    // `_mat_world = _mat_local * mat_parent`, а без родителя просто
+    // `_mat_world = _mat_local`.
+    //
+    // Поле отдельное, а не переписанный `Header.MatLocal`: заголовок должен
+    // оставаться тем, что лежит на диске, иначе разбор перестаёт быть
+    // проверяемым по исходным байтам.
+    float MatModel[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 };
 
 // Разбирает .lgo целиком. std::nullopt — файл непригоден; причина в diag.
