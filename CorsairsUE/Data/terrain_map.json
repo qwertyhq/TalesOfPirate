@@ -1,0 +1,298 @@
+{
+ "layers": {
+  "1": {
+   "attr": 0,
+   "source": "texture/terrain/subtract.bmp",
+   "texture": "/Game/Terrain/Textures/subtract",
+   "type": 1
+  },
+  "10": {
+   "attr": 1,
+   "source": "texture/terrain/grass03.bmp",
+   "texture": "/Game/Terrain/Textures/grass03",
+   "type": 1
+  },
+  "11": {
+   "attr": 1,
+   "source": "texture/terrain/snow05.bmp",
+   "texture": "/Game/Terrain/Textures/snow05",
+   "type": 2
+  },
+  "12": {
+   "attr": 1,
+   "source": "texture/terrain/grass07.bmp",
+   "texture": "/Game/Terrain/Textures/grass07",
+   "type": 1
+  },
+  "13": {
+   "attr": 1,
+   "source": "texture/terrain/brick09.bmp",
+   "texture": "/Game/Terrain/Textures/brick09",
+   "type": 3
+  },
+  "14": {
+   "attr": 1,
+   "source": "texture/terrain/sand03.bmp",
+   "texture": "/Game/Terrain/Textures/sand03",
+   "type": 3
+  },
+  "15": {
+   "attr": 1,
+   "source": "texture/terrain/sand02.bmp",
+   "texture": "/Game/Terrain/Textures/sand02",
+   "type": 3
+  },
+  "16": {
+   "attr": 1,
+   "source": "texture/terrain/sand01.bmp",
+   "texture": "/Game/Terrain/Textures/sand01",
+   "type": 1
+  },
+  "17": {
+   "attr": 1,
+   "source": "texture/terrain/dirt03.bmp",
+   "texture": "/Game/Terrain/Textures/dirt03",
+   "type": 3
+  },
+  "18": {
+   "attr": 1,
+   "source": "texture/terrain/dirt04.bmp",
+   "texture": "/Game/Terrain/Textures/dirt04",
+   "type": 1
+  },
+  "19": {
+   "attr": 1,
+   "source": "texture/terrain/dirt05.bmp",
+   "texture": "/Game/Terrain/Textures/dirt05",
+   "type": 1
+  },
+  "2": {
+   "attr": 0,
+   "source": "texture/terrain/brick01.bmp",
+   "texture": "/Game/Terrain/Textures/brick01",
+   "type": 1
+  },
+  "20": {
+   "attr": 0,
+   "source": "texture/terrain/brick02.bmp",
+   "texture": "/Game/Terrain/Textures/brick02",
+   "type": 1
+  },
+  "21": {
+   "attr": 0,
+   "source": "texture/terrain/brick03.bmp",
+   "texture": "/Game/Terrain/Textures/brick03",
+   "type": 1
+  },
+  "22": {
+   "attr": 1,
+   "source": "texture/terrain/brick06.bmp",
+   "texture": "/Game/Terrain/Textures/brick06",
+   "type": 1
+  },
+  "23": {
+   "attr": 1,
+   "source": "texture/terrain/dirt07.bmp",
+   "texture": "/Game/Terrain/Textures/dirt07",
+   "type": 3
+  },
+  "24": {
+   "attr": 1,
+   "source": "texture/terrain/rock01.bmp",
+   "texture": "/Game/Terrain/Textures/rock01",
+   "type": 1
+  },
+  "25": {
+   "attr": 0,
+   "source": "texture/terrain/rock02.bmp",
+   "texture": "/Game/Terrain/Textures/rock02",
+   "type": 1
+  },
+  "26": {
+   "attr": 1,
+   "source": "texture/terrain/snow01.bmp",
+   "texture": "/Game/Terrain/Textures/snow01",
+   "type": 2
+  },
+  "27": {
+   "attr": 1,
+   "source": "texture/terrain/snow02.bmp",
+   "texture": "/Game/Terrain/Textures/snow02",
+   "type": 2
+  },
+  "28": {
+   "attr": 1,
+   "source": "texture/terrain/snow03.bmp",
+   "texture": "/Game/Terrain/Textures/snow03",
+   "type": 2
+  },
+  "29": {
+   "attr": 1,
+   "source": "texture/terrain/snow04.bmp",
+   "texture": "/Game/Terrain/Textures/snow04",
+   "type": 2
+  },
+  "3": {
+   "attr": 0,
+   "source": "texture/terrain/brick04.bmp",
+   "texture": "/Game/Terrain/Textures/brick04",
+   "type": 1
+  },
+  "30": {
+   "attr": 1,
+   "source": "texture/terrain/grass10.bmp",
+   "texture": "/Game/Terrain/Textures/grass10",
+   "type": 1
+  },
+  "31": {
+   "attr": 1,
+   "source": "texture/terrain/dirt06.bmp",
+   "texture": "/Game/Terrain/Textures/dirt06",
+   "type": 1
+  },
+  "32": {
+   "attr": 1,
+   "source": "texture/terrain/snow06.bmp",
+   "texture": "/Game/Terrain/Textures/snow06",
+   "type": 2
+  },
+  "33": {
+   "attr": 1,
+   "source": "texture/terrain/grass09.bmp",
+   "texture": "/Game/Terrain/Textures/grass09",
+   "type": 3
+  },
+  "34": {
+   "attr": 1,
+   "source": "texture/terrain/sand05.bmp",
+   "texture": "/Game/Terrain/Textures/sand05",
+   "type": 3
+  },
+  "35": {
+   "attr": 1,
+   "source": "texture/terrain/sand06.bmp",
+   "texture": "/Game/Terrain/Textures/sand06",
+   "type": 3
+  },
+  "36": {
+   "attr": 1,
+   "source": "texture/terrain/sand07.bmp",
+   "texture": "/Game/Terrain/Textures/sand07",
+   "type": 3
+  },
+  "37": {
+   "attr": 0,
+   "source": "texture/terrain/brick08.bmp",
+   "texture": "/Game/Terrain/Textures/brick08",
+   "type": 3
+  },
+  "38": {
+   "attr": 1,
+   "source": "texture/terrain/snow07.bmp",
+   "texture": "/Game/Terrain/Textures/snow07",
+   "type": 2
+  },
+  "39": {
+   "attr": 1,
+   "source": "texture/terrain/drit08.bmp",
+   "texture": "/Game/Terrain/Textures/drit08",
+   "type": 3
+  },
+  "4": {
+   "attr": 0,
+   "source": "texture/terrain/brick05.bmp",
+   "texture": "/Game/Terrain/Textures/brick05",
+   "type": 1
+  },
+  "40": {
+   "attr": 1,
+   "source": "texture/terrain/drit09.bmp",
+   "texture": "/Game/Terrain/Textures/drit09",
+   "type": 3
+  },
+  "41": {
+   "attr": 0,
+   "source": "texture/terrain/snow08.bmp",
+   "texture": "/Game/Terrain/Textures/snow08",
+   "type": 2
+  },
+  "42": {
+   "attr": 1,
+   "source": "texture/terrain/dirt02.bmp",
+   "texture": "/Game/Terrain/Textures/dirt02",
+   "type": 3
+  },
+  "43": {
+   "attr": 1,
+   "source": "texture/terrain/dirt01.bmp",
+   "texture": "/Game/Terrain/Textures/dirt01",
+   "type": 3
+  },
+  "44": {
+   "attr": 1,
+   "source": "texture/terrain/sand08.BMP",
+   "texture": "/Game/Terrain/Textures/sand08",
+   "type": 3
+  },
+  "45": {
+   "attr": 1,
+   "source": "texture/terrain/sand09.BMP",
+   "texture": "/Game/Terrain/Textures/sand09",
+   "type": 3
+  },
+  "46": {
+   "attr": 1,
+   "source": "texture/terrain/drit10.bmp",
+   "texture": "/Game/Terrain/Textures/drit10",
+   "type": 3
+  },
+  "47": {
+   "attr": 0,
+   "source": "texture/terrain/brick10.bmp",
+   "texture": "/Game/Terrain/Textures/brick10",
+   "type": 1
+  },
+  "48": {
+   "attr": 0,
+   "source": "texture/terrain/brick109.bmp",
+   "texture": "/Game/Terrain/Textures/brick109",
+   "type": 1
+  },
+  "49": {
+   "attr": 0,
+   "source": "texture/terrain/brick110.bmp",
+   "texture": "/Game/Terrain/Textures/brick110",
+   "type": 1
+  },
+  "5": {
+   "attr": 1,
+   "source": "texture/terrain/grass05.bmp",
+   "texture": "/Game/Terrain/Textures/grass05",
+   "type": 1
+  },
+  "6": {
+   "attr": 1,
+   "source": "texture/terrain/grass11.bmp",
+   "texture": "/Game/Terrain/Textures/grass11",
+   "type": 3
+  },
+  "7": {
+   "attr": 1,
+   "source": "texture/terrain/grass04.bmp",
+   "texture": "/Game/Terrain/Textures/grass04",
+   "type": 1
+  },
+  "8": {
+   "attr": 1,
+   "source": "texture/terrain/grass02.bmp",
+   "texture": "/Game/Terrain/Textures/grass02",
+   "type": 1
+  },
+  "9": {
+   "attr": 1,
+   "source": "texture/terrain/grass01.bmp",
+   "texture": "/Game/Terrain/Textures/grass01",
+   "type": 1
+  }
+ }
+}
