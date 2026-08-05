@@ -148,6 +148,11 @@ bool ConvertTerrain(const std::filesystem::path& input, const std::filesystem::p
         return false;
     }
 
+    if (AC::WriteTerrainLayers(*terrain, output, detail) != AC::MapWriteStatus::OK) {
+        report.AddFailure(relative, "LAYERS_FAILED", detail);
+        return false;
+    }
+
     // Рельеф пишется ещё и мешами: ландшафт Unreal собирается инструментами
     // редактора, недоступными в headless-режиме, а обычные статические меши
     // импортируются тем же путём, что и все модели.

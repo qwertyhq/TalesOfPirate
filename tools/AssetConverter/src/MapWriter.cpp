@@ -10,6 +10,24 @@ namespace Corsairs::Tools::AssetConverter {
 
 namespace {
 
+// Раскладка TileInfo: три верхних слоя, у каждого 6 бит номера текстуры и 4
+// бита прозрачности. Базовый слой лежит отдельным полем BaseTex и всегда
+// непрозрачен. Значения совпадают с MPMapDef.h — они и есть спецификация.
+constexpr int kTileTex1Shift = 26;
+constexpr int kTileAlpha1Shift = 22;
+constexpr int kTileTex2Shift = 16;
+constexpr int kTileAlpha2Shift = 12;
+constexpr int kTileTex3Shift = 6;
+constexpr int kTileAlpha3Shift = 2;
+constexpr std::uint32_t kTileTexMask = 0x3Fu;
+constexpr std::uint32_t kTileAlphaMask = 0x0Fu;
+constexpr std::uint8_t kBaseAlphaOpaque = 15;
+
+} // namespace
+
+
+namespace {
+
 bool WriteBinary(const std::filesystem::path& path, const void* data, std::size_t bytes) {
     std::ofstream stream{path, std::ios::binary | std::ios::trunc};
     if (!stream) {
@@ -188,6 +206,50 @@ MapWriteStatus WriteSceneManifest(const SceneObjects& scene,
 
     if (!WriteText(WithSuffix(basePath, ".objects.json"), json.Str())) {
         detail = "не удалось записать .objects.json";
+        return MapWriteStatus::WRITE_FAILED;
+    }
+
+    detail.clear();
+    return MapWriteStatus::OK;
+}
+
+
+MapWriteStatus WriteTerrainLayers(const MapTerrain& terrain,
+                                  const std::filesystem::path& basePath,
+                                  std::string& detail) {
+    // Восемь байт на клетку: четыре пары «номер текстуры, прозрачность».
+    // Плоский двоичный формат выбран по той же причине, что и для карты
+    // высот: Unreal читает сырые данные без кодеков, а конвертер обходится
+    // без внешних зависимостей.
+    std::vector<std::uint8_t> layers;
+    layers.resize(terrain.Tiles.size() * 8);
+
+    for (std::size_t i = 0; i < terrain.Tiles.size(); ++i) {
+        const MapTile& tile = terrain.Tiles[i];
+        std::uint8_t* out = layers.data() + i * 8;
+
+        out[0] = tile.BaseTex;
+        out[1] = kBaseAlphaOpaque;
+        out[2] = static_cast<std::uint8_t>((tile.TileInfo >> kTileTex1Shift) & kTileTexMask);
+        out[3] = static_cast<std::uint8_t>((tile.TileInfo >> kTileAlpha1Shift) & kTileAlphaMask);
+        out[4] = static_cast<std::uint8_t>((tile.TileInfo >> kTileTex2Shift) & kTileTexMask);
+        out[5] = static_cast<std::uint8_t>((tile.TileInfo >> kTileAlpha2Shift) & kTileAlphaMask);
+        out[6] = static_cast<std::uint8_t>((tile.TileInfo >> kTileTex3Shift) & kTileTexMask);
+        out[7] = static_cast<std::uint8_t>((tile.TileInfo >> kTileAlpha3Shift) & kTileAlphaMask);
+    }
+
+    std::filesystem::path path = basePath;
+    path.replace_filename(basePath.filename().string() + ".layers.raw");
+
+    std::ofstream stream{path, std::ios::binary | std::ios::trunc};
+    if (!stream) {
+        detail = "не удалось открыть файл слоёв";
+        return MapWriteStatus::WRITE_FAILED;
+    }
+    stream.write(reinterpret_cast<const char*>(layers.data()),
+                 static_cast<std::streamsize>(layers.size()));
+    if (!stream) {
+        detail = "не удалось записать слои";
         return MapWriteStatus::WRITE_FAILED;
     }
 

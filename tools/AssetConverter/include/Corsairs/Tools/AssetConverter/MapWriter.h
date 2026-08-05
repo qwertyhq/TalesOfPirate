@@ -34,6 +34,16 @@ enum class MapWriteStatus : std::uint32_t {
                                           const std::filesystem::path& basePath,
                                           std::string& detail);
 
+// Пишет слои текстур рельефа: `<base>.layers.raw`, по восемь байт на клетку —
+// четыре пары «номер текстуры, прозрачность». Базовый слой лежит в отдельном
+// поле и всегда непрозрачен, три верхних упакованы в TileInfo по 6 и 4 бита.
+//
+// Номер разворачивается в файл через таблицу `terrains` игровых данных.
+// Смешивание слоёв — задача материала в UE; сюда доносятся исходные данные.
+[[nodiscard]] MapWriteStatus WriteTerrainLayers(const MapTerrain& terrain,
+                                                const std::filesystem::path& basePath,
+                                                std::string& detail);
+
 // Пишет манифест объектов сцены: <base>.objects.json. Позиции остаются в
 // исходных целочисленных координатах карты — пересчёт в единицы UE делается
 // при импорте, где известен масштаб мира.
