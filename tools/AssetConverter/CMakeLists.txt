@@ -38,6 +38,8 @@ add_library(AssetConverterLib STATIC
     src/GltfWriter.cpp
     src/GltfSkeletonWriter.cpp
     src/ConversionReport.cpp
+    src/DdsDecoder.cpp
+    src/PngWriter.cpp
 )
 target_include_directories(AssetConverterLib PUBLIC include)
 corsairs_set_target_options(AssetConverterLib)
@@ -56,6 +58,7 @@ add_executable(AssetConverterTests
     tests/TestJsonWriter.cpp
     tests/TestGltfWriter.cpp
     tests/TestConversionReport.cpp
+    tests/TestImageCodec.cpp
     tests/TestLabParser.cpp
     tests/TestGltfSkeletonWriter.cpp
     tests/TestLmoParser.cpp

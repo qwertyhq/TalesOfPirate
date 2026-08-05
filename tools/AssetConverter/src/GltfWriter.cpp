@@ -1,7 +1,10 @@
 #include "Corsairs/Tools/AssetConverter/GltfWriter.h"
 
+#include "Corsairs/Tools/AssetConverter/BinaryReader.h"
+#include "Corsairs/Tools/AssetConverter/ImageCodec.h"
 #include "Corsairs/Tools/AssetConverter/JsonWriter.h"
 
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -96,6 +99,35 @@ struct GltfImage {
 // лайтмапы и слои смешивания фиксированного конвейера DX9, которым в PBR-модели
 // нет прямого соответствия. По решению из спеки материалы всё равно делаются
 // заново средствами UE, здесь важно донести базовую текстуру и имена.
+// Расширение сравнивается без учёта регистра: в исходных данных встречается
+// и .dds, и .DDS.
+bool IsDdsFile(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    for (char& c : extension) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return extension == ".dds";
+}
+
+// Распаковывает DDS и пишет PNG. Неудача не прерывает конвертацию: модель
+// получит ссылку на несуществующий файл и останется без текстуры — ровно то
+// же, что было бы при копировании нечитаемого DDS, но без остановки прогона.
+bool ConvertDdsToPng(const std::filesystem::path& source,
+                     const std::filesystem::path& target) {
+    const auto bytes = ReadWholeFile(source);
+    if (!bytes) {
+        return false;
+    }
+
+    DdsStatus status = DdsStatus::OK;
+    const auto image = DecodeDds(*bytes, status);
+    if (!image) {
+        return false;
+    }
+
+    return WritePng(target, *image);
+}
+
 void CollectImages(const LgoGeomObj& obj, const GltfTextureOptions& textures,
                    const std::filesystem::path& gltfDir,
                    std::vector<GltfImage>& images,
@@ -113,13 +145,38 @@ void CollectImages(const LgoGeomObj& obj, const GltfTextureOptions& textures,
 
         std::filesystem::path target = source;
         if (!textures.CopyTo.empty()) {
-            target = textures.CopyTo / source.filename();
             std::error_code ec;
             std::filesystem::create_directories(textures.CopyTo, ec);
-            // copy_options::skip_existing — текстура может быть общей для
-            // множества моделей, копировать её каждый раз незачем.
-            std::filesystem::copy_file(source, target,
-                                       std::filesystem::copy_options::skip_existing, ec);
+
+            // DDS распаковывается в PNG, остальное копируется как есть.
+            //
+            // Спецификация glTF 2.0 допускает в image только PNG и JPEG;
+            // ссылка на .dds делает файл формально невалидным. Interchange
+            // такое изображение молча пропускает, материал остаётся без
+            // текстуры, и модель выглядит белой — так и было со всеми 2005
+            // моделями сцены из 2021.
+            if (IsDdsFile(source)) {
+                target = textures.CopyTo / source.filename();
+                target.replace_extension(".png");
+                if (!std::filesystem::exists(target)) {
+                    ConvertDdsToPng(source, target);
+                }
+            }
+            else {
+                target = textures.CopyTo / source.filename();
+                // copy_options::skip_existing — текстура может быть общей для
+                // множества моделей, копировать её каждый раз незачем.
+                std::filesystem::copy_file(source, target,
+                                           std::filesystem::copy_options::skip_existing, ec);
+            }
+
+            // Ссылка на несуществующий файл хуже отсутствия ссылки: glTF
+            // становится формально битым, а модель выглядит так же — белой.
+            // Один раз распаковка молча не срабатывала на всех файлах сразу, и
+            // заметить это удалось только по пустому каталогу текстур.
+            if (!std::filesystem::exists(target)) {
+                continue;
+            }
         }
 
         std::error_code ec;
