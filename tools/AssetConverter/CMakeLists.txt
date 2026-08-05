@@ -10,8 +10,10 @@ get_filename_component(CORSAIRS_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." AB
 
 add_library(AssetConverterLib STATIC
     src/LgoParser.cpp
+    src/LabParser.cpp
     src/JsonWriter.cpp
     src/GltfWriter.cpp
+    src/GltfSkeletonWriter.cpp
     src/ConversionReport.cpp
 )
 target_include_directories(AssetConverterLib PUBLIC include)
@@ -35,6 +37,8 @@ add_executable(AssetConverterTests
     tests/TestJsonWriter.cpp
     tests/TestGltfWriter.cpp
     tests/TestConversionReport.cpp
+    tests/TestLabParser.cpp
+    tests/TestGltfSkeletonWriter.cpp
 )
 target_link_libraries(AssetConverterTests PRIVATE AssetConverterLib)
 target_include_directories(AssetConverterTests PRIVATE tests)

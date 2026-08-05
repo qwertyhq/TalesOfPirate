@@ -1,6 +1,8 @@
 #include "Corsairs/Tools/AssetConverter/BinaryReader.h"
 #include "Corsairs/Tools/AssetConverter/ConversionReport.h"
+#include "Corsairs/Tools/AssetConverter/GltfSkeletonWriter.h"
 #include "Corsairs/Tools/AssetConverter/GltfWriter.h"
+#include "Corsairs/Tools/AssetConverter/LabParser.h"
 #include "Corsairs/Tools/AssetConverter/LgoParser.h"
 
 #include <cctype>
@@ -19,9 +21,50 @@ void PrintUsage() {
         "Использование:\n"
         "  AssetConverter <входной-каталог> <выходной-каталог> [--report <файл.csv>]\n"
         "\n"
-        "Рекурсивно обходит входной каталог, конвертирует каждый .lgo в glTF 2.0\n"
-        "и сохраняет результат с той же относительной структурой каталогов.\n"
+        "Рекурсивно обходит входной каталог и конвертирует в glTF 2.0:\n"
+        "  .lgo — геометрия, материалы и точки крепления;\n"
+        "  .lab — скелет и анимационная дорожка.\n"
+        "Результат сохраняется с той же относительной структурой каталогов.\n"
         "Код возврата: 0 — все файлы обработаны, 1 — есть ошибки, 2 — неверные аргументы.\n";
+}
+
+// Конвертирует один .lab: скелет плюс одна анимационная дорожка. Имя дорожки
+// берётся из имени файла — в исходных данных другого источника имени нет.
+bool ConvertAnimation(const std::filesystem::path& input,
+                      const std::filesystem::path& output,
+                      std::string_view relative, AC::ConversionReport& report) {
+    const auto bytes = AC::ReadWholeFile(input);
+    if (!bytes) {
+        report.AddFailure(relative, "FILE_READ_FAILED", "файл не открылся");
+        return false;
+    }
+
+    AC::LabDiagnostics diag;
+    const auto anim = AC::ParseLab(*bytes, diag);
+    if (!anim) {
+        report.AddFailure(relative, AC::ToString(diag.Status), diag.Detail);
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(output.parent_path(), ec);
+    if (ec) {
+        report.AddFailure(relative, "OUTPUT_DIR_FAILED", ec.message());
+        return false;
+    }
+
+    std::string detail;
+    const AC::GltfSkeletonStatus status =
+        AC::WriteSkeletonGltf(*anim, input.stem().string(), output, detail);
+    if (status != AC::GltfSkeletonStatus::OK) {
+        const std::string_view name =
+            status == AC::GltfSkeletonStatus::EMPTY_SKELETON ? "EMPTY_SKELETON" : "WRITE_FAILED";
+        report.AddFailure(relative, name, detail);
+        return false;
+    }
+
+    report.AddSuccess(relative, AC::ToString(diag.Status));
+    return true;
 }
 
 // Конвертирует один файл, добавляя результат в отчёт. Возвращает false при
@@ -101,7 +144,9 @@ int main(int argc, char** argv) {
         for (char& c : extension) {
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         }
-        if (extension != ".lgo") {
+        const bool isGeometry = extension == ".lgo";
+        const bool isAnimation = extension == ".lab";
+        if (!isGeometry && !isAnimation) {
             continue;
         }
 
@@ -110,7 +155,12 @@ int main(int argc, char** argv) {
         std::filesystem::path output = outputRoot / relative;
         output.replace_extension(".gltf");
 
-        ConvertOne(entry.path(), output, relative.generic_string(), report);
+        if (isGeometry) {
+            ConvertOne(entry.path(), output, relative.generic_string(), report);
+        }
+        else {
+            ConvertAnimation(entry.path(), output, relative.generic_string(), report);
+        }
     }
 
     std::cout << report.Summary();
