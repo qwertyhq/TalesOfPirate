@@ -24,23 +24,41 @@ import json
 import os
 import sys
 
-import unreal
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import unreal                                   # noqa: E402
+from report import Reporter                     # noqa: E402
 
 
 def load_manifest(path):
+    """Читает манифест через C++-биндинг.
+
+    Путь приводится к абсолютному: рабочий каталог редактора — это
+    Engine/Binaries/Mac, а не каталог проекта, и относительный путь
+    указывает в пустоту.
+    """
+    path = os.path.abspath(path)
+    if not os.path.exists(path):
+        return None, f"файла нет: {path}"
+
     library = unreal.CorsairsSceneManifestLibrary
     result = library.load_scene_manifest(path)
+
+    # У функции, возвращающей bool при выходных параметрах, UE отдаёт None,
+    # когда bool равен false, и кортеж выходных значений, когда true.
+    if result is None:
+        return None, f"биндинг вернул отказ для {path}"
     if isinstance(result, tuple) and len(result) == 3:
         ok, manifest, error = result
-    elif isinstance(result, tuple) and len(result) == 2:
+        if not ok:
+            return None, error
+        return manifest, ""
+    if isinstance(result, tuple) and len(result) == 2:
         manifest, error = result
-        ok = not error
-    else:
-        return None, f"неожиданный ответ биндинга: {type(result)}"
-
-    if not ok:
-        return None, error
-    return manifest, ""
+        if error:
+            return None, error
+        return manifest, ""
+    return None, f"неожиданный ответ биндинга: {type(result)}"
 
 
 def load_model_map(script_dir):
@@ -79,41 +97,99 @@ def group_by_mesh(objects, models):
     return groups, unresolved
 
 
+def add_hism_component(actor):
+    """Добавляет актёру компонент инстансированных мешей.
+
+    У `unreal.Actor` нет метода добавления компонента: в UE5 это делается
+    через SubobjectDataSubsystem — ту же подсистему, которой пользуется
+    панель компонентов редактора. Возвращает компонент либо None.
+    """
+    subsystem = unreal.get_engine_subsystem(unreal.SubobjectDataSubsystem)
+    handles = subsystem.k2_gather_subobject_data_for_instance(actor)
+    if not handles:
+        return None
+
+    params = unreal.AddNewSubobjectParams(
+        parent_handle=handles[0],
+        new_class=unreal.HierarchicalInstancedStaticMeshComponent,
+        blueprint_context=None)
+
+    handle, fail_reason = subsystem.add_new_subobject(params)
+    if not fail_reason.is_empty():
+        return None
+
+    data = subsystem.k2_find_subobject_data_from_handle(handle)
+    component = unreal.SubobjectDataBlueprintFunctionLibrary.get_object(data)
+    if isinstance(component, unreal.HierarchicalInstancedStaticMeshComponent):
+        return component
+    return None
+
+
 def spawn_instanced(asset_path, transforms):
     """Ставит все вхождения одного меша одним актёром с инстансами.
 
-    Возвращает число размещённых инстансов; 0 — если меш не загрузился.
+    Возвращает (число_инстансов, способ). Способ — "инстансы" либо
+    "актёры": если компонент добавить не удалось, объекты ставятся
+    обычными StaticMeshActor. Это медленнее и тяжелее, но мир виден —
+    молча ставить ноль объектов хуже.
     """
-    mesh = unreal.load_asset(asset_path)
-    if not isinstance(mesh, unreal.StaticMesh):
-        return 0
-
     actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+
+    mesh = unreal.load_asset(asset_path)
+
+    # 79 моделей сцены несут скиннинг — это анимированные объекты вроде
+    # мельниц, и Interchange импортирует их скелетными мешами. Инстансирование
+    # к ним неприменимо, ставятся обычными актёрами.
+    if mesh is None:
+        skeletal_path = asset_path.replace("/StaticMeshes/", "/SkeletalMeshes/")
+        mesh = unreal.load_asset(skeletal_path)
+
+    if isinstance(mesh, unreal.SkeletalMesh):
+        placed = 0
+        for transform in transforms:
+            actor = actor_subsystem.spawn_actor_from_class(
+                unreal.SkeletalMeshActor, transform.translation,
+                transform.rotation.rotator())
+            if actor is None:
+                continue
+            actor.skeletal_mesh_component.set_skeletal_mesh(mesh)
+            placed += 1
+        return placed, "скелетные актёры"
+
+    if not isinstance(mesh, unreal.StaticMesh):
+        return 0, "нет меша"
     actor = actor_subsystem.spawn_actor_from_class(
         unreal.Actor, unreal.Vector(0.0, 0.0, 0.0), unreal.Rotator(0.0, 0.0, 0.0))
     if actor is None:
-        return 0
+        return 0, "актёр не создан"
 
     actor.set_actor_label(f"Inst_{os.path.basename(asset_path)}")
 
-    component = actor.add_component_by_class(
-        unreal.HierarchicalInstancedStaticMeshComponent,
-        False, unreal.Transform(), False)
-    if component is None:
-        actor_subsystem.destroy_actor(actor)
-        return 0
+    component = add_hism_component(actor)
+    if component is not None:
+        component.set_static_mesh(mesh)
+        for transform in transforms:
+            component.add_instance(transform, True)
+        return len(transforms), "инстансы"
 
-    component.set_static_mesh(mesh)
+    actor_subsystem.destroy_actor(actor)
+
+    placed = 0
     for transform in transforms:
-        component.add_instance(transform, True)
+        single = actor_subsystem.spawn_actor_from_class(
+            unreal.StaticMeshActor, transform.translation,
+            transform.rotation.rotator())
+        if single is None:
+            continue
+        single.static_mesh_component.set_static_mesh(mesh)
+        placed += 1
+    return placed, "актёры"
 
-    return len(transforms)
 
-
-def main():
+def main(report):
     args = sys.argv[1:]
     if len(args) < 2:
-        unreal.log_error("нужны аргументы: <манифест> <путь-уровня> [лимит]")
+        report.error("нужны аргументы: <манифест> <путь-уровня> [лимит]")
         return
 
     manifest_path, level_path = args[0], args[1]
@@ -122,12 +198,12 @@ def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     models, error = load_model_map(script_dir)
     if models is None:
-        unreal.log_error(f"ТАБЛИЦА_ОШИБКА {error}")
+        report.error(f"ТАБЛИЦА_ОШИБКА {error}")
         return
 
     manifest, error = load_manifest(manifest_path)
     if manifest is None:
-        unreal.log_error(f"МАНИФЕСТ_ОШИБКА {error}")
+        report.error(f"МАНИФЕСТ_ОШИБКА {error}")
         return
 
     objects = list(manifest.objects)
@@ -142,29 +218,38 @@ def main():
 
     placed = 0
     failed_assets = []
+    methods = {}
     for asset_path, transforms in sorted(groups.items()):
-        count = spawn_instanced(asset_path, transforms)
+        count, method = spawn_instanced(asset_path, transforms)
+        methods[method] = methods.get(method, 0) + 1
         if count == 0:
-            failed_assets.append(asset_path)
+            failed_assets.append(f"{asset_path} ({method})")
         placed += count
+    report.line(f"СПОСОБ размещения по мешам: {methods}")
 
     subsystem.save_current_level()
 
     skipped = sum(unresolved.values())
-    unreal.log(f"РАССТАВЛЕНО инстансов={placed} мешей={len(groups)} "
-               f"уровень={level_path}")
-    unreal.log(f"ОБЪЕКТОВ обработано={len(objects)} в_манифесте={total_in_manifest}")
+    report.line(f"РАССТАВЛЕНО инстансов={placed} мешей={len(groups)} "
+                f"уровень={level_path}")
+    report.line(f"ОБЪЕКТОВ обработано={len(objects)} "
+                f"в_манифесте={total_in_manifest}")
 
     # Пропуски печатаются всегда: молчаливое сокращение выглядит как полный
     # охват, хотя часть мира на уровень не попала.
     if skipped:
         top = sorted(unresolved.items(), key=lambda kv: -kv[1])[:5]
-        unreal.log_warning(
-            f"ПРОПУЩЕНО объектов={skipped} без записи в scene_objects; "
-            f"частые id: {top}")
+        report.warn(f"ПРОПУЩЕНО объектов={skipped} без записи в scene_objects; "
+                    f"частые id: {top}")
     if failed_assets:
-        unreal.log_warning(
-            f"НЕ_ЗАГРУЗИЛОСЬ мешей={len(failed_assets)}: {failed_assets[:5]}")
+        report.warn(f"НЕ_ЗАГРУЗИЛОСЬ мешей={len(failed_assets)}: "
+                    f"{failed_assets[:5]}")
 
 
-main()
+report = Reporter("place_objects")
+try:
+    main(report)
+except Exception as exc:                        # noqa: BLE001
+    report.exception(exc)
+finally:
+    report.close()
