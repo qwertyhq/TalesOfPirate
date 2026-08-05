@@ -34,6 +34,7 @@ add_executable(AssetConverterTests
     tests/TestLgoParser.cpp
     tests/TestJsonWriter.cpp
     tests/TestGltfWriter.cpp
+    tests/TestConversionReport.cpp
 )
 target_link_libraries(AssetConverterTests PRIVATE AssetConverterLib)
 target_include_directories(AssetConverterTests PRIVATE tests)
