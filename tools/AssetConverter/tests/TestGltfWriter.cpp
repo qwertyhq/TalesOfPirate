@@ -209,6 +209,71 @@ CORSAIRS_TEST(GltfWriter_SkipsSkinningForStaticMesh) {
     REQUIRE(text.find(R"("skins")") == std::string::npos);
 }
 
+CORSAIRS_TEST(GltfWriter_EmitsMaterialWithTexture) {
+    const auto bytes = AC::ReadWholeFile(SampleLgo());
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+    REQUIRE_EQ(obj->Materials.size(), 1u);
+
+    std::filesystem::create_directories(OutputDir());
+    const std::filesystem::path gltfPath = OutputDir() / "textured.gltf";
+
+    AC::GltfTextureOptions options;
+    options.ResolvedTextures.resize(1);
+    options.ResolvedTextures[0].push_back(
+        std::filesystem::path{CORSAIRS_REPO_ROOT} / "Client" / "texture" /
+        "character" / "0066000000.png");
+    options.CopyTo = OutputDir() / "textures";
+
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(*obj, gltfPath, detail, options)),
+               static_cast<std::uint32_t>(AC::GltfStatus::OK));
+
+    // Текстура скопирована рядом с результатом.
+    REQUIRE(std::filesystem::exists(OutputDir() / "textures" / "0066000000.png"));
+
+    const auto written = AC::ReadWholeFile(gltfPath);
+    REQUIRE(written.has_value());
+    const std::string text{reinterpret_cast<const char*>(written->data()), written->size()};
+
+    REQUIRE(text.find(R"("materials")") != std::string::npos);
+    REQUIRE(text.find(R"("images")") != std::string::npos);
+    REQUIRE(text.find(R"("textures")") != std::string::npos);
+    REQUIRE(text.find(R"("baseColorTexture")") != std::string::npos);
+    REQUIRE(text.find(R"("uri":"textures/0066000000.png")") != std::string::npos);
+    // Подсет связан с материалом.
+    REQUIRE(text.find(R"("material":0)") != std::string::npos);
+}
+
+CORSAIRS_TEST(GltfWriter_EmitsMaterialWithoutTextureWhenUnresolved) {
+    const auto bytes = AC::ReadWholeFile(SampleLgo());
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto obj = AC::ParseLgo(*bytes, diag);
+    REQUIRE(obj.has_value());
+
+    std::filesystem::create_directories(OutputDir());
+    const std::filesystem::path gltfPath = OutputDir() / "untextured.gltf";
+
+    // Без разрешённых текстур материал всё равно пишется — с именем и цветом.
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(*obj, gltfPath, detail)),
+               static_cast<std::uint32_t>(AC::GltfStatus::OK));
+
+    const auto written = AC::ReadWholeFile(gltfPath);
+    REQUIRE(written.has_value());
+    const std::string text{reinterpret_cast<const char*>(written->data()), written->size()};
+
+    REQUIRE(text.find(R"("materials")") != std::string::npos);
+    REQUIRE(text.find(R"("baseColorFactor")") != std::string::npos);
+    REQUIRE(text.find(R"("images")") == std::string::npos);
+    REQUIRE(text.find(R"("baseColorTexture")") == std::string::npos);
+}
+
 CORSAIRS_TEST(GltfWriter_RejectsMeshWithoutVertices) {
     AC::LgoGeomObj empty;
     empty.Version = 0x1004u;

@@ -8,6 +8,7 @@
 #include "Corsairs/Tools/AssetConverter/MapParser.h"
 #include "Corsairs/Tools/AssetConverter/MapWriter.h"
 #include "Corsairs/Tools/AssetConverter/SceneObjParser.h"
+#include "Corsairs/Tools/AssetConverter/TextureResolver.h"
 
 #include <cctype>
 #include <filesystem>
@@ -24,12 +25,43 @@ void PrintUsage() {
     std::cout <<
         "Использование:\n"
         "  AssetConverter <входной-каталог> <выходной-каталог> [--report <файл.csv>]\n"
+        "                  [--textures <каталог-текстур>]\n"
         "\n"
         "Рекурсивно обходит входной каталог и конвертирует в glTF 2.0:\n"
         "  .lgo — геометрия, материалы и точки крепления;\n"
         "  .lab — скелет и анимационная дорожка.\n"
         "Результат сохраняется с той же относительной структурой каталогов.\n"
+        "С --textures материалы получают ссылки на текстуры, а сами файлы\n"
+        "копируются в <выход>/textures/ с сохранением категорий.\n"
         "Код возврата: 0 — все файлы обработаны, 1 — есть ошибки, 2 — неверные аргументы.\n";
+}
+
+// Разрешает текстуры всех материалов объекта. Категория — подкаталог модели
+// относительно корня входа: `character/X.lgo` ищет текстуры в
+// `<textureRoot>/character/`.
+AC::GltfTextureOptions BuildTextureOptions(const AC::LgoGeomObj& obj,
+                                           const AC::TextureResolver& resolver,
+                                           const std::filesystem::path& relative,
+                                           const std::filesystem::path& outputRoot) {
+    AC::GltfTextureOptions options;
+    if (!resolver.Enabled()) {
+        return options;
+    }
+
+    const std::filesystem::path category = relative.parent_path();
+    options.ResolvedTextures.resize(obj.Materials.size());
+
+    for (std::size_t m = 0; m < obj.Materials.size(); ++m) {
+        options.ResolvedTextures[m].resize(AC::kMaxTextureStageNum);
+        for (std::size_t stage = 0; stage < AC::kMaxTextureStageNum; ++stage) {
+            if (const auto found = resolver.Resolve(category, obj.Materials[m].TextureName(stage))) {
+                options.ResolvedTextures[m][stage] = *found;
+            }
+        }
+    }
+
+    options.CopyTo = outputRoot / "textures" / category;
+    return options;
 }
 
 // Конвертирует террейн .map в набор сырых карт плюс метаданные.
@@ -104,7 +136,10 @@ bool ConvertSceneObjects(const std::filesystem::path& input,
 // в один файл требует общего буфера и переиндексации, что относится к работе
 // со сценами, а не к разбору формата.
 bool ConvertModel(const std::filesystem::path& input, const std::filesystem::path& output,
-                  std::string_view relative, AC::ConversionReport& report) {
+                  const std::filesystem::path& relativePath, AC::ConversionReport& report,
+                  const AC::TextureResolver& resolver,
+                  const std::filesystem::path& outputRoot) {
+    const std::string relative = relativePath.generic_string();
     const auto bytes = AC::ReadWholeFile(input);
     if (!bytes) {
         report.AddFailure(relative, "FILE_READ_FAILED", "файл не открылся");
@@ -137,8 +172,12 @@ bool ConvertModel(const std::filesystem::path& input, const std::filesystem::pat
                 std::format("{}_{}.gltf", output.stem().string(), i));
         }
 
+        const AC::GltfTextureOptions textures =
+            BuildTextureOptions(model->Objects[i], resolver, relativePath, outputRoot);
+
         std::string detail;
-        const AC::GltfStatus status = AC::WriteGltf(model->Objects[i], part, detail);
+        const AC::GltfStatus status =
+            AC::WriteGltf(model->Objects[i], part, detail, textures);
         if (status != AC::GltfStatus::OK) {
             const std::string_view name =
                 status == AC::GltfStatus::EMPTY_MESH ? "EMPTY_MESH" : "WRITE_FAILED";
@@ -193,7 +232,11 @@ bool ConvertAnimation(const std::filesystem::path& input,
 // Конвертирует один файл, добавляя результат в отчёт. Возвращает false при
 // любой ошибке разбора или записи.
 bool ConvertOne(const std::filesystem::path& input, const std::filesystem::path& output,
-                std::string_view relative, AC::ConversionReport& report) {
+                const std::filesystem::path& relativePath, AC::ConversionReport& report,
+                const AC::TextureResolver& resolver,
+                const std::filesystem::path& outputRoot) {
+    const std::string relative = relativePath.generic_string();
+
     const auto bytes = AC::ReadWholeFile(input);
     if (!bytes) {
         report.AddFailure(relative, "FILE_READ_FAILED", "файл не открылся");
@@ -214,8 +257,11 @@ bool ConvertOne(const std::filesystem::path& input, const std::filesystem::path&
         return false;
     }
 
+    const AC::GltfTextureOptions textures =
+        BuildTextureOptions(*obj, resolver, relativePath, outputRoot);
+
     std::string detail;
-    const AC::GltfStatus status = AC::WriteGltf(*obj, output, detail);
+    const AC::GltfStatus status = AC::WriteGltf(*obj, output, detail, textures);
     if (status != AC::GltfStatus::OK) {
         const std::string_view name =
             status == AC::GltfStatus::EMPTY_MESH ? "EMPTY_MESH" : "WRITE_FAILED";
@@ -238,11 +284,16 @@ int main(int argc, char** argv) {
     const std::filesystem::path inputRoot{argv[1]};
     const std::filesystem::path outputRoot{argv[2]};
     std::filesystem::path reportPath;
+    std::filesystem::path textureRoot;
 
     for (int i = 3; i < argc; ++i) {
         const std::string_view arg{argv[i]};
         if (arg == "--report" && i + 1 < argc) {
             reportPath = argv[i + 1];
+            ++i;
+        }
+        else if (arg == "--textures" && i + 1 < argc) {
+            textureRoot = argv[i + 1];
             ++i;
         }
         else {
@@ -257,6 +308,7 @@ int main(int argc, char** argv) {
     }
 
     AC::ConversionReport report;
+    const AC::TextureResolver resolver{textureRoot};
 
     for (const auto& entry : std::filesystem::recursive_directory_iterator{inputRoot}) {
         if (!entry.is_regular_file()) {
@@ -298,10 +350,10 @@ int main(int argc, char** argv) {
         output.replace_extension(".gltf");
 
         if (isGeometry) {
-            ConvertOne(entry.path(), output, relativeText, report);
+            ConvertOne(entry.path(), output, relative, report, resolver, outputRoot);
         }
         else if (isModel) {
-            ConvertModel(entry.path(), output, relativeText, report);
+            ConvertModel(entry.path(), output, relative, report, resolver, outputRoot);
         }
         else {
             ConvertAnimation(entry.path(), output, relativeText, report);

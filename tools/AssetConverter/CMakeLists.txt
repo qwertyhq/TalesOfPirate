@@ -33,6 +33,7 @@ add_library(AssetConverterLib STATIC
     src/MapParser.cpp
     src/SceneObjParser.cpp
     src/MapWriter.cpp
+    src/TextureResolver.cpp
     src/JsonWriter.cpp
     src/GltfWriter.cpp
     src/GltfSkeletonWriter.cpp
@@ -59,6 +60,7 @@ add_executable(AssetConverterTests
     tests/TestGltfSkeletonWriter.cpp
     tests/TestLmoParser.cpp
     tests/TestMapParser.cpp
+    tests/TestTextureResolver.cpp
 )
 target_link_libraries(AssetConverterTests PRIVATE AssetConverterLib)
 target_include_directories(AssetConverterTests PRIVATE tests)

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace Corsairs::Tools::AssetConverter {
 
@@ -33,6 +34,18 @@ enum class GltfStatus : std::uint32_t {
 // `in` и `out` — по 16 float, перекрываться не должны.
 void ConvertMatrixToGltf(const float* in, float* out);
 
+// Настройки записи текстур. Если ResolvedTextures пуст, материалы пишутся без
+// изображений — с именами и цветами, но без ссылок на файлы.
+struct GltfTextureOptions {
+    // Разрешённые пути к файлам текстур по стадиям каждого материала.
+    // Внешний индекс — материал, внутренний — стадия (0..3). Пустой путь
+    // означает «текстуры для этой стадии нет».
+    std::vector<std::vector<std::filesystem::path>> ResolvedTextures;
+    // Куда копировать текстуры. Пустой путь — не копировать, ссылаться на
+    // исходное расположение относительным путём.
+    std::filesystem::path CopyTo;
+};
+
 // Пишет gltfPath и парный .bin рядом (то же имя, расширение .bin).
 // detail заполняется человекочитаемой причиной при неуспехе.
 //
@@ -41,6 +54,7 @@ void ConvertMatrixToGltf(const float* in, float* out);
 // меняется на противоположный. Обе операции обязательны вместе.
 [[nodiscard]] GltfStatus WriteGltf(const LgoGeomObj& obj,
                                    const std::filesystem::path& gltfPath,
-                                   std::string& detail);
+                                   std::string& detail,
+                                   const GltfTextureOptions& textures = {});
 
 } // namespace Corsairs::Tools::AssetConverter

@@ -82,6 +82,67 @@ bool WriteFile(const std::filesystem::path& path, const void* data, std::size_t 
     return static_cast<bool>(stream);
 }
 
+// Изображение, попавшее в glTF: URI относительно каталога .gltf.
+struct GltfImage {
+    std::string Uri;
+};
+
+// Готовит список изображений и отображение «материал -> индекс текстуры».
+// Одна и та же текстура, использованная несколькими материалами, попадает в
+// список один раз.
+//
+// В glTF записывается только стадия 0: остальные стадии в MindPower3D — это
+// лайтмапы и слои смешивания фиксированного конвейера DX9, которым в PBR-модели
+// нет прямого соответствия. По решению из спеки материалы всё равно делаются
+// заново средствами UE, здесь важно донести базовую текстуру и имена.
+void CollectImages(const LgoGeomObj& obj, const GltfTextureOptions& textures,
+                   const std::filesystem::path& gltfDir,
+                   std::vector<GltfImage>& images,
+                   std::vector<std::int64_t>& materialToImage) {
+    materialToImage.assign(obj.Materials.size(), -1);
+
+    for (std::size_t m = 0; m < obj.Materials.size(); ++m) {
+        if (m >= textures.ResolvedTextures.size() || textures.ResolvedTextures[m].empty()) {
+            continue;
+        }
+        const std::filesystem::path& source = textures.ResolvedTextures[m][0];
+        if (source.empty()) {
+            continue;
+        }
+
+        std::filesystem::path target = source;
+        if (!textures.CopyTo.empty()) {
+            target = textures.CopyTo / source.filename();
+            std::error_code ec;
+            std::filesystem::create_directories(textures.CopyTo, ec);
+            // copy_options::skip_existing — текстура может быть общей для
+            // множества моделей, копировать её каждый раз незачем.
+            std::filesystem::copy_file(source, target,
+                                       std::filesystem::copy_options::skip_existing, ec);
+        }
+
+        std::error_code ec;
+        std::filesystem::path relative = std::filesystem::relative(target, gltfDir, ec);
+        const std::string uri = ec || relative.empty()
+            ? target.generic_string()
+            : relative.generic_string();
+
+        // Дедупликация по итоговому URI.
+        std::int64_t existing = -1;
+        for (std::size_t i = 0; i < images.size(); ++i) {
+            if (images[i].Uri == uri) {
+                existing = static_cast<std::int64_t>(i);
+                break;
+            }
+        }
+        if (existing < 0) {
+            existing = static_cast<std::int64_t>(images.size());
+            images.push_back(GltfImage{uri});
+        }
+        materialToImage[m] = existing;
+    }
+}
+
 } // namespace
 
 void ConvertMatrixToGltf(const float* in, float* out) {
@@ -98,7 +159,7 @@ void ConvertMatrixToGltf(const float* in, float* out) {
 }
 
 GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPath,
-                     std::string& detail) {
+                     std::string& detail, const GltfTextureOptions& textures) {
     const LgoMesh& mesh = obj.Mesh;
 
     if (mesh.Positions.empty() || mesh.Indices.empty() || mesh.Subsets.empty()) {
@@ -223,6 +284,10 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
 
     const std::int64_t indexViewIndex = static_cast<std::int64_t>(views.size());
     views.push_back(indexView);
+
+    std::vector<GltfImage> images;
+    std::vector<std::int64_t> materialToImage;
+    CollectImages(obj, textures, gltfPath.parent_path(), images, materialToImage);
 
     JsonWriter json;
     json.BeginObject();
@@ -358,6 +423,91 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     }
     json.EndArray();
 
+    if (!images.empty()) {
+        json.Key("images");
+        json.BeginArray();
+        for (const GltfImage& image : images) {
+            json.BeginObject();
+            json.Key("uri");
+            json.Value(image.Uri);
+            json.EndObject();
+        }
+        json.EndArray();
+
+        // Один сэмплер на всё: исходный движок не хранит режимы фильтрации
+        // отдельно по текстурам в переносимом виде.
+        json.Key("samplers");
+        json.BeginArray();
+        json.BeginObject();
+        json.Key("wrapS");
+        json.Value(static_cast<std::int64_t>(10497));   // REPEAT
+        json.Key("wrapT");
+        json.Value(static_cast<std::int64_t>(10497));
+        json.EndObject();
+        json.EndArray();
+
+        json.Key("textures");
+        json.BeginArray();
+        for (std::size_t i = 0; i < images.size(); ++i) {
+            json.BeginObject();
+            json.Key("source");
+            json.Value(static_cast<std::int64_t>(i));
+            json.Key("sampler");
+            json.Value(static_cast<std::int64_t>(0));
+            json.EndObject();
+        }
+        json.EndArray();
+    }
+
+    if (!obj.Materials.empty()) {
+        json.Key("materials");
+        json.BeginArray();
+        for (std::size_t m = 0; m < obj.Materials.size(); ++m) {
+            const LgoMaterial& material = obj.Materials[m];
+
+            json.BeginObject();
+            json.Key("name");
+            json.Value(material.TextureName(0).empty()
+                           ? std::format("material_{}", m)
+                           : material.TextureName(0));
+
+            json.Key("pbrMetallicRoughness");
+            json.BeginObject();
+            if (m < materialToImage.size() && materialToImage[m] >= 0) {
+                json.Key("baseColorTexture");
+                json.BeginObject();
+                json.Key("index");
+                json.Value(materialToImage[m]);
+                json.EndObject();
+            }
+            json.Key("baseColorFactor");
+            json.BeginArray();
+            json.Value(static_cast<double>(material.Mtl.Dif.R));
+            json.Value(static_cast<double>(material.Mtl.Dif.G));
+            json.Value(static_cast<double>(material.Mtl.Dif.B));
+            json.Value(static_cast<double>(material.Opacity));
+            json.EndArray();
+            // Исходные материалы — фиксированный конвейер DX9 без PBR.
+            // Металличность нулевая, шероховатость максимальная: это
+            // нейтральная отправная точка, поверх которой в UE делается
+            // настоящий материал.
+            json.Key("metallicFactor");
+            json.Value(0.0);
+            json.Key("roughnessFactor");
+            json.Value(1.0);
+            json.EndObject();
+
+            if (material.Opacity < 1.0f) {
+                json.Key("alphaMode");
+                json.Value("BLEND");
+            }
+            json.Key("doubleSided");
+            json.Value(true);
+            json.EndObject();
+        }
+        json.EndArray();
+    }
+
     json.Key("meshes");
     json.BeginArray();
     json.BeginObject();
@@ -386,6 +536,11 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         json.EndObject();
         json.Key("indices");
         json.Value(firstSubsetAccessor + static_cast<std::int64_t>(i));
+        // Подсет i рисуется материалом i — так их связывает движок.
+        if (i < obj.Materials.size()) {
+            json.Key("material");
+            json.Value(static_cast<std::int64_t>(i));
+        }
         json.Key("mode");
         json.Value(kModeTriangles);
         json.EndObject();
