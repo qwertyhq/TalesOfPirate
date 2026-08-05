@@ -6,6 +6,7 @@
 namespace Corsairs::Tools::AssetConverter {
 
 inline constexpr std::size_t kMaxName = 64;
+inline constexpr std::size_t kCharName32 = 32;
 inline constexpr std::size_t kMaxTextureStageNum = 4;
 inline constexpr std::size_t kTexTssNum = 8;
 inline constexpr std::size_t kMtlRsNum = 8;
@@ -209,6 +210,47 @@ struct BoundingBoxInfo {
     float Mat[16];
 };
 
+// Плоскость (a, b, c, d).
+struct Plane {
+    float A;
+    float B;
+    float C;
+    float D;
+};
+
+// Грань helper-меша: индексы вершин, индексы смежных граней, плоскость, центр.
+struct HelperMeshFaceInfo {
+    std::uint32_t Vertex[3];
+    std::uint32_t AdjFace[3];
+    Plane FacePlane;
+    Vector3 Center;
+};
+
+// Заголовок helper-меша. Порядок полей — порядок чтения в
+// LgoLoader::LoadHelperMeshSection, а не порядок объявления HelperMeshInfo
+// в движке: они различаются, и на диске лежит именно этот порядок.
+struct HelperMeshHeader {
+    std::uint32_t Id;
+    std::uint32_t Type;
+    std::uint32_t SubType;
+    char Name[kCharName32];
+    std::uint32_t State;
+    float Mat[16];
+    Box BoundBox;
+    std::uint32_t VertexNum;
+    std::uint32_t FaceNum;
+};
+
+// Helper-бокс: объём с матрицей и именем.
+struct HelperBoxInfo {
+    std::uint32_t Id;
+    std::uint32_t Type;
+    std::uint32_t State;
+    Box BoundBox;
+    float Mat[16];
+    char Name[kCharName32];
+};
+
 struct BoundingSphereInfo {
     std::uint32_t Id;
     Sphere BoundSphere;
@@ -257,6 +299,45 @@ struct MeshInfoHeaderV0 {
     RenderStateSet2x8 RsSet;
 };
 
+// Заголовок геометрии промежуточных версий (вложенная 0x0001 и внешние
+// 0x1000..0x1003): те же поля, но render states уже в компактном формате
+// RenderStateAtom, и ещё нет BoneInflFactor / VertexElementNum.
+struct MeshInfoHeaderV3 {
+    std::uint32_t Fvf;
+    std::uint32_t PtType;
+    std::uint32_t VertexNum;
+    std::uint32_t IndexNum;
+    std::uint32_t SubsetNum;
+    std::uint32_t BoneIndexNum;
+    RenderStateAtom RsSet[kMeshRsNum];
+};
+
+// Текстура промежуточной версии материалов (вложенная 0x0001).
+struct TexInfoV1 {
+    std::uint32_t Stage;
+    std::uint32_t Level;
+    std::uint32_t Usage;
+    std::uint32_t Format;
+    std::uint32_t Pool;
+    std::uint32_t ByteAlignmentFlag;
+    std::uint32_t Type;
+    std::uint32_t Width;
+    std::uint32_t Height;
+    std::uint32_t ColorkeyType;
+    std::uint32_t Colorkey;
+    char FileName[kMaxName];
+    std::uint32_t ReservedData;
+    RenderStateSet2x8 TssSet;
+};
+
+struct MtlTexInfoV1 {
+    float Opacity;
+    std::uint32_t TranspType;
+    Material Mtl;
+    RenderStateSet2x8 RsSet;
+    TexInfoV1 TexSeq[kMaxTextureStageNum];
+};
+
 #pragma pack(pop)
 
 inline constexpr std::size_t kGeomObjHeaderSize = sizeof(GeomObjHeader);
@@ -288,6 +369,9 @@ static_assert(sizeof(RenderStateSet2x8) == 128, "RenderStateSet2x8: 2*8*8 = 128 
 static_assert(sizeof(TexInfoV0) == 208, "TexInfoV0: раскладка на диске 208 байт");
 static_assert(sizeof(MtlTexInfoV0) == 1028, "MtlTexInfoV0: раскладка на диске 1028 байт");
 static_assert(sizeof(MeshInfoHeaderV0) == 152, "MeshInfoHeaderV0: раскладка на диске 152 байта");
+static_assert(sizeof(MeshInfoHeaderV3) == 120, "MeshInfoHeaderV3: раскладка на диске 120 байт");
+static_assert(sizeof(TexInfoV1) == 240, "TexInfoV1: раскладка на диске 240 байт");
+static_assert(sizeof(MtlTexInfoV1) == 1164, "MtlTexInfoV1: раскладка на диске 1164 байта");
 
 // Helper-блок. Размеры сверены с фактическими helperSize в датасете: у
 // character/0066000000.lgo helperSize=92 = 4 (type) + 4 (num) + 84 (сфера);
@@ -298,5 +382,9 @@ static_assert(sizeof(HelperDummyInfo) == 140, "HelperDummyInfo: раскладк
 static_assert(sizeof(HelperDummyInfoV1000) == 68, "HelperDummyInfoV1000: раскладка на диске 68 байт");
 static_assert(sizeof(BoundingBoxInfo) == 92, "BoundingBoxInfo: раскладка на диске 92 байта");
 static_assert(sizeof(BoundingSphereInfo) == 84, "BoundingSphereInfo: раскладка на диске 84 байта");
+static_assert(sizeof(Plane) == 16, "Plane: раскладка на диске 16 байт");
+static_assert(sizeof(HelperMeshFaceInfo) == 52, "HelperMeshFaceInfo: раскладка на диске 52 байта");
+static_assert(sizeof(HelperMeshHeader) == 144, "HelperMeshHeader: раскладка на диске 144 байта");
+static_assert(sizeof(HelperBoxInfo) == 132, "HelperBoxInfo: раскладка на диске 132 байта");
 
 } // namespace Corsairs::Tools::AssetConverter

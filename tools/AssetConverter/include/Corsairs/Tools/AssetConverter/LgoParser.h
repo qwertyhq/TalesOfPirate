@@ -64,11 +64,20 @@ struct LgoMesh {
     std::vector<VertexElement> VertexElements;
 };
 
+// Helper-меш: геометрия столкновений или зоны, отдельная от видимой модели.
+struct LgoHelperMesh {
+    HelperMeshHeader Header{};
+    std::vector<Vector3> Vertices;
+    std::vector<HelperMeshFaceInfo> Faces;
+};
+
 // Helper-данные объекта. Dummy — точки крепления оружия и эффектов; bounding
-// box/sphere — объёмы для отсечения и попаданий.
+// box/sphere — объёмы для отсечения и попаданий; Meshes — геометрия зон.
 struct LgoHelper {
     std::uint32_t Type{0};
     std::vector<HelperDummyInfo> Dummies;
+    std::vector<HelperBoxInfo> Boxes;
+    std::vector<LgoHelperMesh> Meshes;
     std::vector<BoundingBoxInfo> BoundingBoxes;
     std::vector<BoundingSphereInfo> BoundingSpheres;
 };
@@ -82,9 +91,30 @@ struct LgoGeomObj {
 };
 
 // Разбирает .lgo целиком. std::nullopt — файл непригоден; причина в diag.
-// Блоки helper и anim пропускаются по объявленному размеру: они не нужны для
-// статической геометрии, но их размеры участвуют в проверке целостности.
+// Блок anim пропускается по объявленному размеру: он не нужен для статической
+// геометрии, но его размер участвует в проверке целостности.
 [[nodiscard]] std::optional<LgoGeomObj> ParseLgo(std::span<const std::uint8_t> bytes,
                                                  LgoDiagnostics& diag);
+
+// Реализована ли раскладка блоков для этой версии.
+[[nodiscard]] bool IsSupportedGeomVersion(std::uint32_t version);
+
+// Разбирает тело геометрического объекта — заголовок и четыре блока — из
+// текущей позиции reader'а. Версия передаётся снаружи: в `.lgo` она лежит в
+// начале файла, в `.lmo` относится ко всем объектам сразу.
+//
+// `availableBytes` — сколько байт отведено объекту: для `.lgo` это размер
+// файла минус префикс версии, для `.lmo` — поле `Size` записи оглавления.
+// Именно против него проверяется согласованность размеров блоков.
+[[nodiscard]] bool ParseGeomObjBody(class BinaryReader& reader, std::uint32_t version,
+                                    std::size_t availableBytes, LgoGeomObj& obj,
+                                    LgoDiagnostics& diag);
+
+// Разбирает helper-блок из текущей позиции reader'а и проверяет, что потрачено
+// ровно helperSize байт. Используется и внутри геометрического объекта, и как
+// отдельная запись оглавления `.lmo`.
+[[nodiscard]] bool ParseHelperBlock(class BinaryReader& reader, std::uint32_t helperSize,
+                                    std::uint32_t version, LgoHelper& helper,
+                                    LgoDiagnostics& diag);
 
 } // namespace Corsairs::Tools::AssetConverter

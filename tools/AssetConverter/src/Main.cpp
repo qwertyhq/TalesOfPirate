@@ -4,6 +4,7 @@
 #include "Corsairs/Tools/AssetConverter/GltfWriter.h"
 #include "Corsairs/Tools/AssetConverter/LabParser.h"
 #include "Corsairs/Tools/AssetConverter/LgoParser.h"
+#include "Corsairs/Tools/AssetConverter/LmoParser.h"
 
 #include <cctype>
 #include <filesystem>
@@ -26,6 +27,58 @@ void PrintUsage() {
         "  .lab — скелет и анимационная дорожка.\n"
         "Результат сохраняется с той же относительной структурой каталогов.\n"
         "Код возврата: 0 — все файлы обработаны, 1 — есть ошибки, 2 — неверные аргументы.\n";
+}
+
+// Конвертирует один .lmo — модель из нескольких геометрических объектов.
+// Каждый объект пишется отдельным glTF рядом, с суффиксом номера: объединение
+// в один файл требует общего буфера и переиндексации, что относится к работе
+// со сценами, а не к разбору формата.
+bool ConvertModel(const std::filesystem::path& input, const std::filesystem::path& output,
+                  std::string_view relative, AC::ConversionReport& report) {
+    const auto bytes = AC::ReadWholeFile(input);
+    if (!bytes) {
+        report.AddFailure(relative, "FILE_READ_FAILED", "файл не открылся");
+        return false;
+    }
+
+    AC::LgoDiagnostics diag;
+    const auto model = AC::ParseLmo(*bytes, diag);
+    if (!model) {
+        report.AddFailure(relative, AC::ToString(diag.Status), diag.Detail);
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(output.parent_path(), ec);
+    if (ec) {
+        report.AddFailure(relative, "OUTPUT_DIR_FAILED", ec.message());
+        return false;
+    }
+
+    if (model->Objects.empty()) {
+        report.AddFailure(relative, "EMPTY_MODEL", "в модели нет геометрических объектов");
+        return false;
+    }
+
+    for (std::size_t i = 0; i < model->Objects.size(); ++i) {
+        std::filesystem::path part = output;
+        if (model->Objects.size() > 1) {
+            part.replace_filename(
+                std::format("{}_{}.gltf", output.stem().string(), i));
+        }
+
+        std::string detail;
+        const AC::GltfStatus status = AC::WriteGltf(model->Objects[i], part, detail);
+        if (status != AC::GltfStatus::OK) {
+            const std::string_view name =
+                status == AC::GltfStatus::EMPTY_MESH ? "EMPTY_MESH" : "WRITE_FAILED";
+            report.AddFailure(relative, name, std::format("объект {}: {}", i, detail));
+            return false;
+        }
+    }
+
+    report.AddSuccess(relative, AC::ToString(diag.Status));
+    return true;
 }
 
 // Конвертирует один .lab: скелет плюс одна анимационная дорожка. Имя дорожки
@@ -146,7 +199,8 @@ int main(int argc, char** argv) {
         }
         const bool isGeometry = extension == ".lgo";
         const bool isAnimation = extension == ".lab";
-        if (!isGeometry && !isAnimation) {
+        const bool isModel = extension == ".lmo";
+        if (!isGeometry && !isAnimation && !isModel) {
             continue;
         }
 
@@ -157,6 +211,9 @@ int main(int argc, char** argv) {
 
         if (isGeometry) {
             ConvertOne(entry.path(), output, relative.generic_string(), report);
+        }
+        else if (isModel) {
+            ConvertModel(entry.path(), output, relative.generic_string(), report);
         }
         else {
             ConvertAnimation(entry.path(), output, relative.generic_string(), report);

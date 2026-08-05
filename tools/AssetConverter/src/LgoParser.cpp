@@ -43,10 +43,81 @@ std::string FixedName(const char* name) {
     return std::string{name, length};
 }
 
-// Разбирает блок материалов и проверяет, что потрачено ровно mtlSize байт.
+// Читает vector<T> длиной count. false — данные за границей буфера.
+template <typename T>
+bool ReadVector(BinaryReader& reader, std::vector<T>& out, std::uint32_t count) {
+    if (count == 0) {
+        return true;
+    }
+    out.resize(count);
+    return reader.ReadArray(out.data(), count);
+}
+
+// Эффективная версия блока. Для внешней версии 0x0000 настоящая версия лежит
+// вложенным DWORD в начале блока; для остальных совпадает с внешней.
+bool ReadEffectiveVersion(BinaryReader& reader, std::uint32_t outerVersion,
+                          std::uint32_t& effective, std::string_view what,
+                          LgoStatus failStatus, LgoDiagnostics& diag) {
+    if (outerVersion != kLegacyVersion) {
+        effective = outerVersion;
+        return true;
+    }
+    if (!reader.Read(effective)) {
+        diag.Status = failStatus;
+        diag.Detail = std::format("не прочитана вложенная версия блока {}", what);
+        return false;
+    }
+    return true;
+}
+
+// Размер одной записи материала на диске для данной эффективной версии.
+// 0x0000 — 1028 байт (нет прозрачности), 0x0001 — 1164 (расширенные текстуры),
+// 0x0002 и 0x1000+ — 1004 (текущий формат).
+bool MaterialRecordSize(std::uint32_t effective, std::size_t& size) {
+    if (effective >= 0x1000u || effective == 0x0002u) {
+        size = kMtlTexInfoSize;
+        return true;
+    }
+    if (effective == 0x0001u) {
+        size = sizeof(MtlTexInfoV1);
+        return true;
+    }
+    if (effective == 0x0000u) {
+        size = kMtlTexInfoV0Size;
+        return true;
+    }
+    return false;
+}
+
+// Копирует имена текстур и параметры материала в версионно-независимый вид.
+template <typename RawT>
+void FillMaterial(const RawT& raw, LgoMaterial& out) {
+    out.Mtl = raw.Mtl;
+    for (std::size_t stage = 0; stage < kMaxTextureStageNum; ++stage) {
+        out.Textures[stage] = FixedName(raw.TexSeq[stage].FileName);
+    }
+}
+
+// Разбирает блок материалов любой известной версии и проверяет, что потрачено
+// ровно mtlSize байт.
 bool ParseMaterialBlock(BinaryReader& reader, std::uint32_t mtlSize,
-                        std::vector<LgoMaterial>& out, LgoDiagnostics& diag) {
+                        std::uint32_t outerVersion, std::vector<LgoMaterial>& out,
+                        LgoDiagnostics& diag) {
     const std::size_t blockStart = reader.Offset();
+
+    std::uint32_t effective = 0;
+    if (!ReadEffectiveVersion(reader, outerVersion, effective, "материалов",
+                              LgoStatus::MTL_BLOCK_MALFORMED, diag)) {
+        return false;
+    }
+
+    std::size_t recordSize = 0;
+    if (!MaterialRecordSize(effective, recordSize)) {
+        diag.Status = LgoStatus::MTL_BLOCK_MALFORMED;
+        diag.Detail = std::format("версия блока материалов 0x{:04X} не поддерживается",
+                                  effective);
+        return false;
+    }
 
     std::uint32_t mtlNum = 0;
     if (!reader.Read(mtlNum)) {
@@ -55,28 +126,51 @@ bool ParseMaterialBlock(BinaryReader& reader, std::uint32_t mtlSize,
         return false;
     }
 
-    const std::size_t expected = 4 + kMtlTexInfoSize * mtlNum;
+    const std::size_t prefix = reader.Offset() - blockStart;
+    const std::size_t expected = prefix + recordSize * mtlNum;
     if (expected != mtlSize) {
         diag.Status = LgoStatus::MTL_BLOCK_MALFORMED;
         diag.Detail = std::format(
-            "MtlNum={} даёт {} байт, заголовок объявил MtlSize={}",
-            mtlNum, expected, mtlSize);
+            "версия 0x{:04X}: MtlNum={} даёт {} байт, заголовок объявил MtlSize={}",
+            effective, mtlNum, expected, mtlSize);
         return false;
     }
 
     out.resize(mtlNum);
     for (std::uint32_t i = 0; i < mtlNum; ++i) {
-        MtlTexInfo raw{};
-        if (!reader.Read(raw)) {
-            diag.Status = LgoStatus::MTL_BLOCK_MALFORMED;
-            diag.Detail = std::format("не прочитан MtlTexInfo[{}]", i);
-            return false;
+        bool ok = false;
+        if (recordSize == kMtlTexInfoSize) {
+            MtlTexInfo raw{};
+            ok = reader.Read(raw);
+            if (ok) {
+                out[i].Opacity = raw.Opacity;
+                out[i].TranspType = raw.TranspType;
+                FillMaterial(raw, out[i]);
+            }
         }
-        out[i].Opacity = raw.Opacity;
-        out[i].TranspType = raw.TranspType;
-        out[i].Mtl = raw.Mtl;
-        for (std::size_t stage = 0; stage < kMaxTextureStageNum; ++stage) {
-            out[i].Textures[stage] = FixedName(raw.TexSeq[stage].FileName);
+        else if (recordSize == sizeof(MtlTexInfoV1)) {
+            MtlTexInfoV1 raw{};
+            ok = reader.Read(raw);
+            if (ok) {
+                out[i].Opacity = raw.Opacity;
+                out[i].TranspType = raw.TranspType;
+                FillMaterial(raw, out[i]);
+            }
+        }
+        else {
+            // Версия 0x0000: полей прозрачности нет, движок оставляет
+            // значения по умолчанию — делаем так же.
+            MtlTexInfoV0 raw{};
+            ok = reader.Read(raw);
+            if (ok) {
+                FillMaterial(raw, out[i]);
+            }
+        }
+
+        if (!ok) {
+            diag.Status = LgoStatus::MTL_BLOCK_MALFORMED;
+            diag.Detail = std::format("не прочитан материал {}", i);
+            return false;
         }
     }
 
@@ -89,96 +183,103 @@ bool ParseMaterialBlock(BinaryReader& reader, std::uint32_t mtlSize,
     return true;
 }
 
-// Легаси-вариант блока материалов (внешняя version == 0x0000). Отличия от
-// современного: в начале блока лежит вложенная версия, а сама структура
-// материала занимает 1028 байт вместо 1004 (нет Opacity/TranspType, другой
-// формат render states и текстур).
-bool ParseMaterialBlockV0(BinaryReader& reader, std::uint32_t mtlSize,
-                          std::vector<LgoMaterial>& out, LgoDiagnostics& diag) {
+// Сколько наборов UV несёт вершина при данном FVF. Порядок проверок повторяет
+// цепочку if/else if движка: TEX1 проверяется первым, поэтому набор из четырёх
+// UV имеет флаг TEX4 и не совпадает с TEX1.
+std::uint32_t TexcoordSetCount(std::uint32_t fvf) {
+    if (HasFvf(fvf, FvfFlag::TEX1)) {
+        return 1;
+    }
+    if (HasFvf(fvf, FvfFlag::TEX2)) {
+        return 2;
+    }
+    if (HasFvf(fvf, FvfFlag::TEX3)) {
+        return 3;
+    }
+    if (HasFvf(fvf, FvfFlag::TEX4)) {
+        return 4;
+    }
+    return 0;
+}
+
+// Разбирает блок геометрии любой известной версии и проверяет, что потрачено
+// ровно meshSize байт.
+//
+// Различий между версиями два, и оба существенные:
+//   * заголовок — 128 байт в 0x1004+, 120 в промежуточных, 152 в 0x0000;
+//   * порядок массивов — в 0x1004+ подсеты идут последними, в остальных
+//     первыми, а индексы костей там однобайтовые и определяются флагом
+//     LASTBETA_UBYTE4, а не полем BoneIndexNum.
+bool ParseMeshBlock(BinaryReader& reader, std::uint32_t meshSize,
+                    std::uint32_t outerVersion, LgoMesh& mesh, LgoDiagnostics& diag) {
     const std::size_t blockStart = reader.Offset();
 
-    std::uint32_t innerVersion = 0;
-    if (!reader.Read(innerVersion)) {
-        diag.Status = LgoStatus::MTL_BLOCK_MALFORMED;
-        diag.Detail = "не прочитана вложенная версия блока материалов";
+    std::uint32_t effective = 0;
+    if (!ReadEffectiveVersion(reader, outerVersion, effective, "геометрии",
+                              LgoStatus::MESH_BLOCK_MALFORMED, diag)) {
         return false;
     }
 
-    if (innerVersion != 0) {
-        diag.Status = LgoStatus::MTL_BLOCK_MALFORMED;
-        diag.Detail = std::format(
-            "вложенная версия блока материалов 0x{:04X} не поддерживается "
-            "(реализована только 0x0000)", innerVersion);
-        return false;
-    }
+    const bool isModern = effective >= kMinSupportedVersion;
 
-    std::uint32_t mtlNum = 0;
-    if (!reader.Read(mtlNum)) {
-        diag.Status = LgoStatus::MTL_BLOCK_MALFORMED;
-        diag.Detail = "не прочитан MtlNum (легаси)";
-        return false;
-    }
-
-    const std::size_t expected = 8 + kMtlTexInfoV0Size * mtlNum;
-    if (expected != mtlSize) {
-        diag.Status = LgoStatus::MTL_BLOCK_MALFORMED;
-        diag.Detail = std::format(
-            "легаси: MtlNum={} даёт {} байт, заголовок объявил MtlSize={}",
-            mtlNum, expected, mtlSize);
-        return false;
-    }
-
-    out.resize(mtlNum);
-    for (std::uint32_t i = 0; i < mtlNum; ++i) {
-        MtlTexInfoV0 raw{};
-        if (!reader.Read(raw)) {
-            diag.Status = LgoStatus::MTL_BLOCK_MALFORMED;
-            diag.Detail = std::format("не прочитан MtlTexInfoV0[{}]", i);
+    if (isModern) {
+        if (!reader.Read(mesh.Header)) {
+            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+            diag.Detail = "не прочитан MeshInfoHeader";
             return false;
         }
-        // В легаси-структуре нет прозрачности — движок оставляет значения по
-        // умолчанию, делаем так же.
-        out[i].Mtl = raw.Mtl;
-        for (std::size_t stage = 0; stage < kMaxTextureStageNum; ++stage) {
-            out[i].Textures[stage] = FixedName(raw.TexSeq[stage].FileName);
+    }
+    else if (effective >= 0x1000u || effective == 0x0001u) {
+        MeshInfoHeaderV3 header{};
+        if (!reader.Read(header)) {
+            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+            diag.Detail = "не прочитан MeshInfoHeaderV3";
+            return false;
         }
+        mesh.Header = MeshInfoHeader{};
+        mesh.Header.Fvf = header.Fvf;
+        mesh.Header.PtType = header.PtType;
+        mesh.Header.VertexNum = header.VertexNum;
+        mesh.Header.IndexNum = header.IndexNum;
+        mesh.Header.SubsetNum = header.SubsetNum;
+        mesh.Header.BoneIndexNum = header.BoneIndexNum;
+        mesh.Header.BoneInflFactor = header.BoneIndexNum > 0 ? 2u : 0u;
     }
-
-    const std::size_t consumed = reader.Offset() - blockStart;
-    if (consumed != mtlSize) {
-        diag.Status = LgoStatus::MTL_BLOCK_MALFORMED;
-        diag.Detail = std::format("легаси: прочитано {} байт, объявлено {}", consumed, mtlSize);
-        return false;
+    else if (effective == 0x0000u) {
+        MeshInfoHeaderV0 header{};
+        if (!reader.Read(header)) {
+            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+            diag.Detail = "не прочитан MeshInfoHeaderV0";
+            return false;
+        }
+        mesh.Header = MeshInfoHeader{};
+        mesh.Header.Fvf = header.Fvf;
+        mesh.Header.PtType = header.PtType;
+        mesh.Header.VertexNum = header.VertexNum;
+        mesh.Header.IndexNum = header.IndexNum;
+        mesh.Header.SubsetNum = header.SubsetNum;
+        mesh.Header.BoneIndexNum = header.BoneIndexNum;
+        mesh.Header.BoneInflFactor = header.BoneIndexNum > 0 ? 2u : 0u;
     }
-    return true;
-}
-
-// Читает vector<T> длиной count. false — данные за границей буфера.
-template <typename T>
-bool ReadVector(BinaryReader& reader, std::vector<T>& out, std::uint32_t count) {
-    if (count == 0) {
-        return true;
-    }
-    out.resize(count);
-    return reader.ReadArray(out.data(), count);
-}
-
-// Разбирает блок геометрии для version >= 0x1004 и проверяет, что потрачено
-// ровно meshSize байт. Порядок массивов задан LgoLoader::LoadMeshInfo
-// (sources/Engine/Asset/AssetLoaders.cpp) и обязателен к соблюдению.
-bool ParseMeshBlock(BinaryReader& reader, std::uint32_t meshSize, LgoMesh& mesh,
-                    LgoDiagnostics& diag) {
-    const std::size_t blockStart = reader.Offset();
-
-    if (!reader.Read(mesh.Header)) {
+    else {
         diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-        diag.Detail = "не прочитан MeshInfoHeader";
+        diag.Detail = std::format("версия блока геометрии 0x{:04X} не поддерживается",
+                                  effective);
         return false;
     }
 
     const std::uint32_t vertexNum = mesh.Header.VertexNum;
+    const std::uint32_t texcoordSets = TexcoordSetCount(mesh.Header.Fvf);
 
-    if (!ReadVector(reader, mesh.VertexElements, mesh.Header.VertexElementNum)) {
+    // Старые версии кладут подсеты перед вершинами.
+    if (!isModern && !ReadVector(reader, mesh.Subsets, mesh.Header.SubsetNum)) {
+        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+        diag.Detail = "не прочитаны подсеты";
+        return false;
+    }
+
+    if (isModern &&
+        !ReadVector(reader, mesh.VertexElements, mesh.Header.VertexElementNum)) {
         diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
         diag.Detail = "не прочитан VertexElements";
         return false;
@@ -190,28 +291,11 @@ bool ParseMeshBlock(BinaryReader& reader, std::uint32_t meshSize, LgoMesh& mesh,
         return false;
     }
 
-    if (HasFvf(mesh.Header.Fvf, FvfFlag::NORMAL)) {
-        if (!ReadVector(reader, mesh.Normals, vertexNum)) {
-            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-            diag.Detail = "не прочитаны нормали";
-            return false;
-        }
-    }
-
-    // Порядок проверок повторяет цепочку if/else if движка: TEX1 проверяется
-    // первым, поэтому набор с четырьмя UV имеет флаг TEX4 и не совпадает с TEX1.
-    std::uint32_t texcoordSets = 0;
-    if (HasFvf(mesh.Header.Fvf, FvfFlag::TEX1)) {
-        texcoordSets = 1;
-    }
-    else if (HasFvf(mesh.Header.Fvf, FvfFlag::TEX2)) {
-        texcoordSets = 2;
-    }
-    else if (HasFvf(mesh.Header.Fvf, FvfFlag::TEX3)) {
-        texcoordSets = 3;
-    }
-    else if (HasFvf(mesh.Header.Fvf, FvfFlag::TEX4)) {
-        texcoordSets = 4;
+    if (HasFvf(mesh.Header.Fvf, FvfFlag::NORMAL) &&
+        !ReadVector(reader, mesh.Normals, vertexNum)) {
+        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+        diag.Detail = "не прочитаны нормали";
+        return false;
     }
 
     for (std::uint32_t set = 0; set < texcoordSets; ++set) {
@@ -222,24 +306,41 @@ bool ParseMeshBlock(BinaryReader& reader, std::uint32_t meshSize, LgoMesh& mesh,
         }
     }
 
-    if (HasFvf(mesh.Header.Fvf, FvfFlag::DIFFUSE)) {
-        if (!ReadVector(reader, mesh.VertexColors, vertexNum)) {
-            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-            diag.Detail = "не прочитаны цвета вершин";
-            return false;
-        }
+    if (HasFvf(mesh.Header.Fvf, FvfFlag::DIFFUSE) &&
+        !ReadVector(reader, mesh.VertexColors, vertexNum)) {
+        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+        diag.Detail = "не прочитаны цвета вершин";
+        return false;
     }
 
-    if (mesh.Header.BoneIndexNum > 0) {
+    // Наличие скиннинга: в новых версиях по счётчику костей, в старых — по
+    // флагу FVF. Индексы костей там же однобайтовые.
+    const bool hasSkin = isModern
+        ? mesh.Header.BoneIndexNum > 0
+        : HasFvf(mesh.Header.Fvf, FvfFlag::LASTBETA_UBYTE4);
+
+    if (hasSkin) {
         if (!ReadVector(reader, mesh.Blends, vertexNum)) {
             diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
             diag.Detail = "не прочитаны веса скиннинга";
             return false;
         }
-        if (!ReadVector(reader, mesh.BoneIndices, mesh.Header.BoneIndexNum)) {
-            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-            diag.Detail = "не прочитаны индексы костей";
-            return false;
+
+        if (isModern) {
+            if (!ReadVector(reader, mesh.BoneIndices, mesh.Header.BoneIndexNum)) {
+                diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+                diag.Detail = "не прочитаны индексы костей";
+                return false;
+            }
+        }
+        else {
+            std::vector<std::uint8_t> byteIndices;
+            if (!ReadVector(reader, byteIndices, mesh.Header.BoneIndexNum)) {
+                diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
+                diag.Detail = "не прочитаны однобайтовые индексы костей";
+                return false;
+            }
+            mesh.BoneIndices.assign(byteIndices.begin(), byteIndices.end());
         }
     }
 
@@ -249,7 +350,8 @@ bool ParseMeshBlock(BinaryReader& reader, std::uint32_t meshSize, LgoMesh& mesh,
         return false;
     }
 
-    if (!ReadVector(reader, mesh.Subsets, mesh.Header.SubsetNum)) {
+    // В новых версиях подсеты идут последними.
+    if (isModern && !ReadVector(reader, mesh.Subsets, mesh.Header.SubsetNum)) {
         diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
         diag.Detail = "не прочитаны подсеты";
         return false;
@@ -259,144 +361,27 @@ bool ParseMeshBlock(BinaryReader& reader, std::uint32_t meshSize, LgoMesh& mesh,
     if (consumed != meshSize) {
         diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
         diag.Detail = std::format(
-            "прочитано {} байт, заголовок объявил MeshSize={} (fvf=0x{:08X}, "
-            "vertexNum={}, indexNum={}, subsetNum={}, boneIndexNum={})",
-            consumed, meshSize, mesh.Header.Fvf, mesh.Header.VertexNum,
+            "версия 0x{:04X}: прочитано {} байт, заголовок объявил MeshSize={} "
+            "(fvf=0x{:08X}, vertexNum={}, indexNum={}, subsetNum={}, boneIndexNum={})",
+            effective, consumed, meshSize, mesh.Header.Fvf, mesh.Header.VertexNum,
             mesh.Header.IndexNum, mesh.Header.SubsetNum, mesh.Header.BoneIndexNum);
         return false;
     }
     return true;
 }
 
-// Легаси-вариант блока геометрии (внешняя version == 0x0000). Отличия от
-// современного, все три существенные:
-//   1. в начале блока вложенная версия;
-//   2. подсеты читаются ПЕРВЫМИ, а не последними;
-//   3. индексы костей однобайтовые, а наличие скиннинга определяется флагом
-//      LASTBETA_UBYTE4, а не полем BoneIndexNum.
-bool ParseMeshBlockV0(BinaryReader& reader, std::uint32_t meshSize, LgoMesh& mesh,
-                      LgoDiagnostics& diag) {
-    const std::size_t blockStart = reader.Offset();
-
-    std::uint32_t innerVersion = 0;
-    if (!reader.Read(innerVersion)) {
-        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-        diag.Detail = "не прочитана вложенная версия блока геометрии";
-        return false;
-    }
-
-    if (innerVersion != 0) {
-        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-        diag.Detail = std::format(
-            "вложенная версия блока геометрии 0x{:04X} не поддерживается "
-            "(реализована только 0x0000)", innerVersion);
-        return false;
-    }
-
-    MeshInfoHeaderV0 legacyHeader{};
-    if (!reader.Read(legacyHeader)) {
-        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-        diag.Detail = "не прочитан MeshInfoHeaderV0";
-        return false;
-    }
-
-    mesh.Header.Fvf = legacyHeader.Fvf;
-    mesh.Header.PtType = legacyHeader.PtType;
-    mesh.Header.VertexNum = legacyHeader.VertexNum;
-    mesh.Header.IndexNum = legacyHeader.IndexNum;
-    mesh.Header.SubsetNum = legacyHeader.SubsetNum;
-    mesh.Header.BoneIndexNum = legacyHeader.BoneIndexNum;
-    mesh.Header.BoneInflFactor = legacyHeader.BoneIndexNum > 0 ? 2u : 0u;
-    mesh.Header.VertexElementNum = 0;
-
-    const std::uint32_t vertexNum = mesh.Header.VertexNum;
-
-    if (!ReadVector(reader, mesh.Subsets, mesh.Header.SubsetNum)) {
-        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-        diag.Detail = "легаси: не прочитаны подсеты";
-        return false;
-    }
-
-    if (!ReadVector(reader, mesh.Positions, vertexNum)) {
-        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-        diag.Detail = "легаси: не прочитаны позиции вершин";
-        return false;
-    }
-
-    if (HasFvf(mesh.Header.Fvf, FvfFlag::NORMAL)) {
-        if (!ReadVector(reader, mesh.Normals, vertexNum)) {
-            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-            diag.Detail = "легаси: не прочитаны нормали";
-            return false;
-        }
-    }
-
-    std::uint32_t texcoordSets = 0;
-    if (HasFvf(mesh.Header.Fvf, FvfFlag::TEX1)) {
-        texcoordSets = 1;
-    }
-    else if (HasFvf(mesh.Header.Fvf, FvfFlag::TEX2)) {
-        texcoordSets = 2;
-    }
-    else if (HasFvf(mesh.Header.Fvf, FvfFlag::TEX3)) {
-        texcoordSets = 3;
-    }
-    else if (HasFvf(mesh.Header.Fvf, FvfFlag::TEX4)) {
-        texcoordSets = 4;
-    }
-
-    for (std::uint32_t set = 0; set < texcoordSets; ++set) {
-        if (!ReadVector(reader, mesh.Texcoords[set], vertexNum)) {
-            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-            diag.Detail = std::format("легаси: не прочитан UV-набор {}", set);
-            return false;
-        }
-    }
-
-    if (HasFvf(mesh.Header.Fvf, FvfFlag::DIFFUSE)) {
-        if (!ReadVector(reader, mesh.VertexColors, vertexNum)) {
-            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-            diag.Detail = "легаси: не прочитаны цвета вершин";
-            return false;
-        }
-    }
-
-    if (HasFvf(mesh.Header.Fvf, FvfFlag::LASTBETA_UBYTE4)) {
-        if (!ReadVector(reader, mesh.Blends, vertexNum)) {
-            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-            diag.Detail = "легаси: не прочитаны веса скиннинга";
-            return false;
-        }
-
-        // Индексы костей на диске однобайтовые; расширяем до 32 бит, чтобы
-        // остальной код не различал версии.
-        std::vector<std::uint8_t> byteIndices;
-        if (!ReadVector(reader, byteIndices, mesh.Header.BoneIndexNum)) {
-            diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-            diag.Detail = "легаси: не прочитаны однобайтовые индексы костей";
-            return false;
-        }
-        mesh.BoneIndices.assign(byteIndices.begin(), byteIndices.end());
-    }
-
-    if (!ReadVector(reader, mesh.Indices, mesh.Header.IndexNum)) {
-        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-        diag.Detail = "легаси: не прочитан индексный буфер";
-        return false;
-    }
-
-    const std::size_t consumed = reader.Offset() - blockStart;
-    if (consumed != meshSize) {
-        diag.Status = LgoStatus::MESH_BLOCK_MALFORMED;
-        diag.Detail = std::format(
-            "легаси: прочитано {} байт, заголовок объявил MeshSize={} (fvf=0x{:08X}, "
-            "vertexNum={}, indexNum={}, subsetNum={}, boneIndexNum={})",
-            consumed, meshSize, mesh.Header.Fvf, mesh.Header.VertexNum,
-            mesh.Header.IndexNum, mesh.Header.SubsetNum, mesh.Header.BoneIndexNum);
-        return false;
-    }
-    return true;
+// В версиях <= 0x1001 бокс хранился как (точка, размер); приводим к
+// (центр, радиус), как делает движок.
+void ConvertBoxPointSizeToCenterRadius(Box& box) {
+    const Vector3 point = box.Center;
+    const Vector3 size = box.Radius;
+    box.Radius = Vector3{size.X / 2.0f, size.Y / 2.0f, size.Z / 2.0f};
+    box.Center = Vector3{point.X + box.Radius.X,
+                         point.Y + box.Radius.Y,
+                         point.Z + box.Radius.Z};
 }
+
+} // namespace
 
 // Разбирает helper-блок. Секции идут в фиксированном порядке по битам Type,
 // каждая начинается со своего счётчика. Проверяется точный расход байт.
@@ -457,14 +442,60 @@ bool ParseHelperBlock(BinaryReader& reader, std::uint32_t helperSize,
         }
     }
 
-    // Секции BOX и MESH в датасете не встречаются ни разу (проверено по всем
-    // 6672 файлам). Их раскладка переменной длины, поэтому вместо догадок
-    // возвращаем явную ошибку — она попадёт в отчёт, если такой файл появится.
-    if (HasHelper(helper.Type, HelperType::BOX) || HasHelper(helper.Type, HelperType::MESH)) {
-        diag.Status = LgoStatus::HELPER_SECTION_UNSUPPORTED;
-        diag.Detail = std::format(
-            "helper-секции BOX/MESH не реализованы (Type=0x{:04X})", helper.Type);
-        return false;
+    if (HasHelper(helper.Type, HelperType::BOX)) {
+        std::uint32_t count = 0;
+        if (!reader.Read(count)) {
+            diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+            diag.Detail = "не прочитан счётчик helper-боксов";
+            return false;
+        }
+        if (!ReadVector(reader, helper.Boxes, count)) {
+            diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+            diag.Detail = "не прочитан массив helper-боксов";
+            return false;
+        }
+        if (version <= 0x1001u) {
+            for (HelperBoxInfo& box : helper.Boxes) {
+                ConvertBoxPointSizeToCenterRadius(box.BoundBox);
+            }
+        }
+    }
+
+    // Секция MESH переменной длины: у каждого меша свой заголовок, за которым
+    // идут вершины и грани. Встречается в .lmo сцен (530 из 639 файлов).
+    if (HasHelper(helper.Type, HelperType::MESH)) {
+        std::uint32_t count = 0;
+        if (!reader.Read(count)) {
+            diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+            diag.Detail = "не прочитан счётчик helper-мешей";
+            return false;
+        }
+
+        helper.Meshes.resize(count);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            LgoHelperMesh& mesh = helper.Meshes[i];
+            if (!reader.Read(mesh.Header)) {
+                diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+                diag.Detail = std::format("не прочитан заголовок helper-меша {}", i);
+                return false;
+            }
+            if (!ReadVector(reader, mesh.Vertices, mesh.Header.VertexNum)) {
+                diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+                diag.Detail = std::format("не прочитаны вершины helper-меша {}", i);
+                return false;
+            }
+            if (!ReadVector(reader, mesh.Faces, mesh.Header.FaceNum)) {
+                diag.Status = LgoStatus::HELPER_BLOCK_MALFORMED;
+                diag.Detail = std::format("не прочитаны грани helper-меша {}", i);
+                return false;
+            }
+        }
+
+        if (version <= 0x1001u) {
+            for (LgoHelperMesh& mesh : helper.Meshes) {
+                ConvertBoxPointSizeToCenterRadius(mesh.Header.BoundBox);
+            }
+        }
     }
 
     if (HasHelper(helper.Type, HelperType::BOUNDING_BOX)) {
@@ -480,16 +511,9 @@ bool ParseHelperBlock(BinaryReader& reader, std::uint32_t helperSize,
             return false;
         }
 
-        // В версиях <= 0x1001 бокс хранился как (точка, размер); приводим к
-        // (центр, радиус), как делает движок.
         if (version <= 0x1001u) {
             for (BoundingBoxInfo& box : helper.BoundingBoxes) {
-                const Vector3 point = box.BoundBox.Center;
-                const Vector3 size = box.BoundBox.Radius;
-                box.BoundBox.Radius = Vector3{size.X / 2.0f, size.Y / 2.0f, size.Z / 2.0f};
-                box.BoundBox.Center = Vector3{point.X + box.BoundBox.Radius.X,
-                                              point.Y + box.BoundBox.Radius.Y,
-                                              point.Z + box.BoundBox.Radius.Z};
+                ConvertBoxPointSizeToCenterRadius(box.BoundBox);
             }
         }
     }
@@ -521,45 +545,22 @@ bool ParseHelperBlock(BinaryReader& reader, std::uint32_t helperSize,
     return true;
 }
 
-} // namespace
+bool IsSupportedGeomVersion(std::uint32_t version) {
+    // Реализованы все версии, встречающиеся в датасете: легаси 0x0000 с
+    // вложенными версиями блоков, промежуточные 0x1000..0x1003 и текущие
+    // 0x1004..0x1005.
+    return IsKnownVersion(version);
+}
 
-std::optional<LgoGeomObj> ParseLgo(std::span<const std::uint8_t> bytes,
-                                   LgoDiagnostics& diag) {
-    diag = {};
-    BinaryReader reader{bytes};
-
-    LgoGeomObj obj;
-
-    if (!reader.Read(obj.Version)) {
-        diag.Status = LgoStatus::VERSION_TRUNCATED;
-        diag.Detail = "файл короче 4 байт";
-        return std::nullopt;
-    }
-    diag.Version = obj.Version;
-
-    if (!IsKnownVersion(obj.Version)) {
-        diag.Status = LgoStatus::VERSION_UNKNOWN;
-        diag.Detail = std::format("version=0x{:08X}, ожидалось 0x0000 или 0x1000..0x1005",
-                                  obj.Version);
-        return std::nullopt;
-    }
-
-    // Поддерживаются две раскладки: современная (0x1004+) и легаси (0x0000).
-    // Версии 0x1000..0x1003 в датасете отсутствуют и не реализованы.
-    const bool isLegacy = obj.Version == kLegacyVersion;
-    if (!isLegacy && obj.Version < kMinSupportedVersion) {
-        diag.Status = LgoStatus::VERSION_UNSUPPORTED;
-        diag.Detail = std::format(
-            "version=0x{:08X}: поддерживаются 0x0000 и 0x{:04X}+",
-            obj.Version, kMinSupportedVersion);
-        return std::nullopt;
-    }
+bool ParseGeomObjBody(BinaryReader& reader, std::uint32_t version,
+                      std::size_t availableBytes, LgoGeomObj& obj, LgoDiagnostics& diag) {
+    obj.Version = version;
 
     if (!reader.Read(obj.Header)) {
         diag.Status = LgoStatus::HEADER_TRUNCATED;
         diag.Detail = std::format("нужно {} байт заголовка, доступно {}",
                                   kGeomObjHeaderSize, reader.Remaining());
-        return std::nullopt;
+        return false;
     }
 
     const std::uint64_t blocksSum =
@@ -567,54 +568,88 @@ std::optional<LgoGeomObj> ParseLgo(std::span<const std::uint8_t> bytes,
         static_cast<std::uint64_t>(obj.Header.MeshSize) +
         static_cast<std::uint64_t>(obj.Header.HelperSize) +
         static_cast<std::uint64_t>(obj.Header.AnimSize);
-    const std::uint64_t expectedTotal = blocksSum + 4 + kGeomObjHeaderSize;
+    const std::uint64_t expectedTotal = blocksSum + kGeomObjHeaderSize;
 
-    if (expectedTotal > bytes.size()) {
+    if (expectedTotal > availableBytes) {
         diag.Status = LgoStatus::BLOCK_SIZES_INCONSISTENT;
         diag.Detail = std::format(
-            "mtl={} mesh={} helper={} anim={}; ожидается {} байт, файл {} байт",
+            "mtl={} mesh={} helper={} anim={}; объекту нужно {} байт, доступно {}",
             obj.Header.MtlSize, obj.Header.MeshSize, obj.Header.HelperSize,
-            obj.Header.AnimSize, expectedTotal, bytes.size());
-        return std::nullopt;
+            obj.Header.AnimSize, expectedTotal, availableBytes);
+        return false;
     }
 
     if (obj.Header.MtlSize > 0) {
-        const bool ok = isLegacy
-            ? ParseMaterialBlockV0(reader, obj.Header.MtlSize, obj.Materials, diag)
-            : ParseMaterialBlock(reader, obj.Header.MtlSize, obj.Materials, diag);
-        if (!ok) {
-            return std::nullopt;
+        if (!ParseMaterialBlock(reader, obj.Header.MtlSize, version, obj.Materials, diag)) {
+            return false;
         }
     }
 
     if (obj.Header.MeshSize > 0) {
-        const bool ok = isLegacy
-            ? ParseMeshBlockV0(reader, obj.Header.MeshSize, obj.Mesh, diag)
-            : ParseMeshBlock(reader, obj.Header.MeshSize, obj.Mesh, diag);
-        if (!ok) {
-            return std::nullopt;
+        if (!ParseMeshBlock(reader, obj.Header.MeshSize, version, obj.Mesh, diag)) {
+            return false;
         }
     }
 
     if (obj.Header.HelperSize > 0) {
-        if (!ParseHelperBlock(reader, obj.Header.HelperSize, obj.Version, obj.Helper, diag)) {
-            return std::nullopt;
+        if (!ParseHelperBlock(reader, obj.Header.HelperSize, version, obj.Helper, diag)) {
+            return false;
         }
     }
 
     if (obj.Header.AnimSize > 0 && !reader.Skip(obj.Header.AnimSize)) {
         diag.Status = LgoStatus::BLOCK_SIZES_INCONSISTENT;
-        diag.Detail = "блок анимации выходит за границы файла";
+        diag.Detail = "блок анимации выходит за границы объекта";
+        return false;
+    }
+
+    diag.Status = expectedTotal < availableBytes
+        ? LgoStatus::OK_WITH_TRAILING_DATA
+        : LgoStatus::OK;
+    return true;
+}
+
+std::optional<LgoGeomObj> ParseLgo(std::span<const std::uint8_t> bytes,
+                                   LgoDiagnostics& diag) {
+    diag = {};
+    BinaryReader reader{bytes};
+
+    std::uint32_t version = 0;
+    if (!reader.Read(version)) {
+        diag.Status = LgoStatus::VERSION_TRUNCATED;
+        diag.Detail = "файл короче 4 байт";
+        return std::nullopt;
+    }
+    diag.Version = version;
+
+    if (!IsKnownVersion(version)) {
+        diag.Status = LgoStatus::VERSION_UNKNOWN;
+        diag.Detail = std::format("version=0x{:08X}, ожидалось 0x0000 или 0x1000..0x1005",
+                                  version);
         return std::nullopt;
     }
 
-    if (expectedTotal < bytes.size()) {
-        diag.Status = LgoStatus::OK_WITH_TRAILING_DATA;
-        diag.Detail = std::format("трейлер {} байт", bytes.size() - expectedTotal);
-        return obj;
+    // Поддерживаются две раскладки: современная (0x1004+) и легаси (0x0000).
+    // Версии 0x1000..0x1003 в датасете отсутствуют и не реализованы.
+    if (!IsSupportedGeomVersion(version)) {
+        diag.Status = LgoStatus::VERSION_UNSUPPORTED;
+        diag.Detail = std::format(
+            "version=0x{:08X}: поддерживаются 0x0000 и 0x{:04X}+",
+            version, kMinSupportedVersion);
+        return std::nullopt;
     }
 
-    diag.Status = LgoStatus::OK;
+    LgoGeomObj obj;
+    if (!ParseGeomObjBody(reader, version, bytes.size() - 4, obj, diag)) {
+        return std::nullopt;
+    }
+
+    if (diag.Status == LgoStatus::OK_WITH_TRAILING_DATA) {
+        const std::uint64_t used =
+            4 + kGeomObjHeaderSize + obj.Header.MtlSize + obj.Header.MeshSize +
+            obj.Header.HelperSize + obj.Header.AnimSize;
+        diag.Detail = std::format("трейлер {} байт", bytes.size() - used);
+    }
     return obj;
 }
 
