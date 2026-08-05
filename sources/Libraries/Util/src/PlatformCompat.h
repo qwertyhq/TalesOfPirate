@@ -26,6 +26,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -175,22 +176,122 @@ using SOCKET = int;
 #define SOCKET_ERROR (-1)
 #endif
 
+// Направления для shutdown(). В POSIX это SHUT_RD/SHUT_WR/SHUT_RDWR.
+#ifndef SD_RECEIVE
+#define SD_RECEIVE SHUT_RD
+#define SD_SEND    SHUT_WR
+#define SD_BOTH    SHUT_RDWR
+#endif
+
+// ioctlsocket с FIONBIO переключает блокирующий режим. В POSIX это делается
+// через fcntl: ioctl(FIONBIO) существует не везде и считается устаревшим.
+#ifndef FIONBIO
+#define FIONBIO 0x5421
+#endif
+
+inline int ioctlsocket(SOCKET sock, long command, unsigned long* argument) {
+    if (command != FIONBIO || argument == nullptr) {
+        return SOCKET_ERROR;
+    }
+
+    const int flags = ::fcntl(sock, F_GETFL, 0);
+    if (flags < 0) {
+        return SOCKET_ERROR;
+    }
+
+    const int updated = (*argument != 0) ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+    return ::fcntl(sock, F_SETFL, updated) < 0 ? SOCKET_ERROR : 0;
+}
+
 inline int closesocket(SOCKET sock) {
     return ::close(sock);
+}
+
+inline void WSASetLastError(int code) {
+    errno = code;
+}
+
+inline void SetLastError(DWORD code) {
+    errno = static_cast<int>(code);
+}
+
+inline DWORD GetLastError() {
+    return static_cast<DWORD>(errno);
 }
 
 inline int WSAGetLastError() {
     return errno;
 }
 
-// В POSIX инициализация сетевой подсистемы не нужна.
-inline int WSAStartup(std::uint16_t /*version*/, void* /*data*/) {
+// В POSIX инициализация сетевой подсистемы не нужна; структура и макрос
+// оставлены, чтобы вызывающий код не менялся.
+struct WSADATA {
+    WORD wVersion;
+    WORD wHighVersion;
+    char szDescription[257];
+    char szSystemStatus[129];
+};
+
+#ifndef MAKEWORD
+#define MAKEWORD(low, high) \
+    (static_cast<WORD>((static_cast<BYTE>(low)) | \
+                       (static_cast<WORD>(static_cast<BYTE>(high)) << 8)))
+#endif
+
+inline int WSAStartup(WORD /*version*/, WSADATA* data) {
+    if (data != nullptr) {
+        *data = WSADATA{};
+    }
     return 0;
 }
 
 inline int WSACleanup() {
     return 0;
 }
+
+// --- Коды ошибок сокетов ---------------------------------------------------
+// WinSock нумерует ошибки своими константами; в POSIX используются значения
+// errno. Отображение один в один, поэтому код, разбирающий WSAGetLastError(),
+// работает без изменений.
+//
+// ВНИМАНИЕ: совпадение имён не означает совпадения поведения. EAGAIN и
+// EWOULDBLOCK на большинстве POSIX-систем равны, но EINTR приходит там, где
+// WinSock его не возвращает: любой системный вызов может быть прерван
+// сигналом. Циклы приёма и отправки обязаны это учитывать.
+
+#include <cerrno>
+
+#ifndef WSAEINTR
+#define WSAEINTR         EINTR
+#define WSAEACCES        EACCES
+#define WSAEFAULT        EFAULT
+#define WSAEINVAL        EINVAL
+#define WSAEMFILE        EMFILE
+#define WSAEWOULDBLOCK   EWOULDBLOCK
+#define WSAEINPROGRESS   EINPROGRESS
+#define WSAEALREADY      EALREADY
+#define WSAENOTSOCK      ENOTSOCK
+#define WSAEMSGSIZE      EMSGSIZE
+#define WSAENOBUFS       ENOBUFS
+#define WSAENOTCONN      ENOTCONN
+#define WSAESHUTDOWN     ESHUTDOWN
+#define WSAETIMEDOUT     ETIMEDOUT
+#define WSAECONNREFUSED  ECONNREFUSED
+#define WSAECONNRESET    ECONNRESET
+#define WSAECONNABORTED  ECONNABORTED
+#define WSAENETDOWN      ENETDOWN
+#define WSAENETRESET     ENETRESET
+#define WSAEHOSTDOWN     EHOSTDOWN
+#define WSAEHOSTUNREACH  EHOSTUNREACH
+// В POSIX нет кода «удалённая сторона начала закрытие» — это видно по recv(),
+// вернувшему 0. Отобразить его на ESHUTDOWN нельзя: тогда WSAEDISCON и
+// WSAESHUTDOWN совпадут и дадут два одинаковых case в switch. Берём значение
+// заведомо вне диапазона errno.
+#define WSAEDISCON       100001
+// WSANOTINITIALISED тоже без аналога: в POSIX сетевую подсистему не
+// инициализируют.
+#define WSANOTINITIALISED 100002
+#endif
 
 // --- Время -----------------------------------------------------------------
 // GetTickCount возвращает миллисекунды с момента старта. Реализуем через
@@ -222,6 +323,19 @@ inline void Sleep(DWORD milliseconds) {
 // --- Календарное время -----------------------------------------------------
 // SYSTEMTIME используется логгером для имён файлов и меток времени. Раскладка
 // полей повторяет Win32, чтобы код, читающий wYear/wMonth/..., не менялся.
+
+// POINT и RECT — базовые геометрические структуры Win32.
+struct POINT {
+    LONG x;
+    LONG y;
+};
+
+struct RECT {
+    LONG left;
+    LONG top;
+    LONG right;
+    LONG bottom;
+};
 
 struct SYSTEMTIME {
     WORD wYear;
@@ -350,6 +464,15 @@ inline int strcpy_s(char (&dest)[N], const char* src) {
 
 // --- Прочее ----------------------------------------------------------------
 
+// _access — MSVC-имя POSIX-функции access().
+inline int _access(const char* path, int mode) {
+    return ::access(path, mode);
+}
+
+inline int _unlink(const char* path) {
+    return ::unlink(path);
+}
+
 inline int _stricmp(const char* a, const char* b) {
     return ::strcasecmp(a, b);
 }
@@ -412,6 +535,34 @@ inline char* itoa(int value, char* buffer, int base) {
 #define STD_INPUT_HANDLE  (-10)
 #endif
 
+struct COORD {
+    SHORT X;
+    SHORT Y;
+};
+
+struct SMALL_RECT {
+    SHORT Left;
+    SHORT Top;
+    SHORT Right;
+    SHORT Bottom;
+};
+
+struct CONSOLE_SCREEN_BUFFER_INFO {
+    COORD dwSize;
+    COORD dwCursorPosition;
+    WORD wAttributes;
+    SMALL_RECT srWindow;
+    COORD dwMaximumWindowSize;
+};
+
+// Прочитать текущие атрибуты консоли в POSIX нельзя: ANSI-терминал не
+// сообщает свой цвет. Возвращаем неудачу — вызывающий код трактует это как
+// «цвет неизвестен».
+inline BOOL GetConsoleScreenBufferInfo(HANDLE /*handle*/,
+                                       CONSOLE_SCREEN_BUFFER_INFO* /*info*/) {
+    return FALSE;
+}
+
 inline HANDLE GetStdHandle(int /*which*/) {
     return nullptr;
 }
@@ -455,6 +606,16 @@ inline int lstrcmpi(const char* a, const char* b) {
 
 // strlwr переводит строку в нижний регистр на месте. Нестандартная функция,
 // в новом коде положено использовать std::ranges::transform.
+// _snprintf — старое имя MSVC для snprintf. Поведение при переполнении у них
+// различается (MSVC не гарантирует завершающий ноль), но код и так проверяет
+// результат, поэтому подмена безопасна.
+#ifndef _snprintf
+#define _snprintf snprintf
+#endif
+#ifndef _vsnprintf
+#define _vsnprintf vsnprintf
+#endif
+
 // _snprintf_s — вариант snprintf от Microsoft с параметром размера буфера.
 // По смыслу с _TRUNCATE совпадает с обычным snprintf.
 template <typename... Args>
@@ -479,6 +640,8 @@ inline char* strlwr(char* text) {
     return text;
 }
 
+inline BOOL SetConsoleTitleA(const char* title);
+
 inline BOOL SetConsoleTitle(const char* title) {
     if (title != nullptr) {
         // OSC 0 — установка заголовка окна терминала.
@@ -488,6 +651,41 @@ inline BOOL SetConsoleTitle(const char* title) {
 }
 
 // --- Заглушки процессов и модулей ------------------------------------------
+
+// Окна консоли в POSIX нет: терминалом управляет эмулятор, а не процесс.
+inline HWND GetConsoleWindow() {
+    return nullptr;
+}
+
+#ifndef ATTACH_PARENT_PROCESS
+#define ATTACH_PARENT_PROCESS (static_cast<DWORD>(-1))
+#endif
+
+inline BOOL AttachConsole(DWORD /*processId*/) {
+    return FALSE;
+}
+
+inline BOOL AllocConsole() {
+    return FALSE;
+}
+
+inline BOOL FreeConsole() {
+    return FALSE;
+}
+
+inline BOOL SetConsoleTitleA(const char* title) {
+    return SetConsoleTitle(title);
+}
+
+// freopen_s — вариант freopen от Microsoft с выходным параметром.
+inline int freopen_s(std::FILE** stream, const char* path, const char* mode,
+                     std::FILE* old) {
+    if (stream == nullptr) {
+        return 22;
+    }
+    *stream = std::freopen(path, mode, old);
+    return (*stream != nullptr) ? 0 : errno;
+}
 
 inline BOOL CloseHandle(HANDLE /*handle*/) {
     return TRUE;

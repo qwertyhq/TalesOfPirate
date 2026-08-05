@@ -8,6 +8,51 @@
 
 namespace Corsairs::Util {
 
+
+#ifndef _WIN32
+
+// На POSIX системная кодировка — UTF-8 (проект перешёл на неё 2026-04-19,
+// см. CLAUDE.md), поэтому «ANSI» и UTF-8 совпадают и конверсия тождественна.
+// Функции сохранены, чтобы вызывающий код не менялся.
+
+std::string AnsiToUtf8(std::string_view ansi) {
+    return std::string{ansi};
+}
+
+std::string Utf8ToAnsi(std::string_view utf8) {
+    return std::string{utf8};
+}
+
+std::string WideToUtf8(std::wstring_view wide) {
+    // wchar_t на POSIX — 4 байта (UTF-32). Преобразуем поэлементно в UTF-8.
+    std::string out;
+    out.reserve(wide.size());
+    for (const wchar_t code : wide) {
+        const char32_t c = static_cast<char32_t>(code);
+        if (c < 0x80) {
+            out += static_cast<char>(c);
+        }
+        else if (c < 0x800) {
+            out += static_cast<char>(0xC0 | (c >> 6));
+            out += static_cast<char>(0x80 | (c & 0x3F));
+        }
+        else if (c < 0x10000) {
+            out += static_cast<char>(0xE0 | (c >> 12));
+            out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (c & 0x3F));
+        }
+        else {
+            out += static_cast<char>(0xF0 | (c >> 18));
+            out += static_cast<char>(0x80 | ((c >> 12) & 0x3F));
+            out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (c & 0x3F));
+        }
+    }
+    return out;
+}
+
+#else
+
 std::string AnsiToUtf8(std::string_view ansi) {
     if (ansi.empty()) {
         return {};
@@ -144,5 +189,7 @@ std::string HexDump(std::string_view bytes, std::size_t maxBytes) {
     }
     return out;
 }
+
+#endif // _WIN32
 
 }  // namespace Corsairs::Util

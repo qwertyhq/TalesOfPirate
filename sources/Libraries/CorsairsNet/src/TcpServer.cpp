@@ -233,7 +233,9 @@ namespace Corsairs::Net {
 
 		while (_listening) {
 			sockaddr_in clientAddr{};
-			int addrLen = sizeof(clientAddr);
+			// socklen_t, а не int: accept() в POSIX принимает socklen_t*.
+			// В WinSock тип объявлен как int, поэтому запись переносима.
+			socklen_t addrLen = sizeof(clientAddr);
 
 			SOCKET clientSock = accept(_listenSocket, (sockaddr*)&clientAddr, &addrLen);
 

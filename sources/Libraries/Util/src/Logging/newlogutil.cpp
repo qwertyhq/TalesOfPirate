@@ -7,7 +7,10 @@
 #include <string>
 #include <iostream>
 #include <chrono>
+#if __has_include(<stacktrace>)
 #include <stacktrace>
+#define CORSAIRS_HAS_STACKTRACE 1
+#endif
 #include "logutil.h"
 #include "ConsoleColor.h"
 #include <cstdio>

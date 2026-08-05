@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
-project(CorsairsGameServer LANGUAGES CXX)
+# C нужен для sqlite3: он на чистом C, а не C++.
+project(CorsairsGameServer LANGUAGES C CXX)
 
 # Сборка GameServer под POSIX (Linux, macOS). Основной сборкой на Windows
 # остаётся GameServer.vcxproj — этот файл не заменяет его, а добавляет вторую
@@ -20,9 +21,48 @@ file(GLOB_RECURSE GAMESERVER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_D
 # На POSIX сервер консольный, поэтому файл из сборки исключается.
 if(NOT WIN32)
     list(FILTER GAMESERVER_SOURCES EXCLUDE REGEX "SystemDialog/SystemDialog\\.cpp$")
+else()
+    list(FILTER GAMESERVER_SOURCES EXCLUDE REGEX "SystemDialogPosix\\.cpp$")
 endif()
 
-add_executable(GameServer ${GAMESERVER_SOURCES})
+# Общие библиотеки собираются вместе с сервером: отдельных .a под POSIX нет,
+# а на Windows они приходят как проекты солюшена.
+file(GLOB_RECURSE COMMON_SOURCES CONFIGURE_DEPENDS "${SOURCES_ROOT}/Libraries/common/src/*.cpp")
+file(GLOB_RECURSE UTIL_SOURCES CONFIGURE_DEPENDS
+    "${SOURCES_ROOT}/Libraries/Util/src/*.cpp"
+    "${SOURCES_ROOT}/Libraries/Util/src/*.c")
+file(GLOB_RECURSE NET_SOURCES CONFIGURE_DEPENDS "${SOURCES_ROOT}/Libraries/CorsairsNet/src/*.cpp")
+file(GLOB MPACK_SOURCES CONFIGURE_DEPENDS "${SOURCES_ROOT}/Libraries/CorsairsNet/include/mpack-*.cpp")
+
+if(NOT WIN32)
+    # CrushSystem — обработчик аварий на SEH и dbghelp, механизмы Windows. На
+    # POSIX его роль играют обработчики сигналов; это отдельная задача.
+    list(FILTER UTIL_SOURCES EXCLUDE REGEX "Diagnostic/CrushSystem\\.cpp$")
+endif()
+
+# mpack собирается отдельной библиотекой и БЕЗ принудительного stdafx.h.
+#
+# Каждый его .cpp сначала определяет MPACK_INTERNAL, и только потом подключает
+# свои заголовки, где внутренние объявления спрятаны за #if MPACK_INTERNAL.
+# Через PCH те же заголовки попадают в трансляцию раньше — защита от повторного
+# включения не даёт обработать их снова, и внутренние функции остаются
+# необъявленными.
+# sqlite3 — амальгамация на C, собирается отдельной целью без PCH.
+file(GLOB SQLITE_SOURCES CONFIGURE_DEPENDS "${SOURCES_ROOT}/Libraries/sqlite3/*.c")
+add_library(sqlite3 STATIC ${SQLITE_SOURCES})
+target_include_directories(sqlite3 PUBLIC "${SOURCES_ROOT}/Libraries/sqlite3")
+target_compile_options(sqlite3 PRIVATE -w)
+
+add_library(mpack STATIC ${MPACK_SOURCES})
+target_include_directories(mpack PUBLIC "${SOURCES_ROOT}/Libraries/CorsairsNet/include")
+target_compile_options(mpack PRIVATE -w)
+
+add_executable(GameServer
+    ${GAMESERVER_SOURCES}
+    ${COMMON_SOURCES}
+    ${UTIL_SOURCES}
+    ${NET_SOURCES}
+)
 
 target_include_directories(GameServer PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -36,11 +76,14 @@ target_include_directories(GameServer PRIVATE
     "${SOURCES_ROOT}/Libraries/common/src"
     "${SOURCES_ROOT}/Libraries/common/src/Core"
     "${SOURCES_ROOT}/Libraries/Util/src/Math"
+    "${SOURCES_ROOT}/Libraries/Util/src/Crypto"
+    "${SOURCES_ROOT}/Libraries/common/src/Character"
     "${SOURCES_ROOT}/Libraries/Util/src/Config"
     "${SOURCES_ROOT}/Libraries/Util/src/Encoding"
     "${SOURCES_ROOT}/Libraries/Util/src/Database"
     "${SOURCES_ROOT}/Libraries/CorsairsNet/include"
     "${SOURCES_ROOT}/Libraries/LuaJIT/src"
+    "${SOURCES_ROOT}/Libraries/sqlite3"
     "${SOURCES_ROOT}/Libraries/LuaBridge/include"
     "${SOURCES_ROOT}/Libraries/LuaBridge"
 )
@@ -69,4 +112,14 @@ else()
     message(FATAL_ERROR "unixODBC не найден: brew install unixodbc (macOS) или apt install unixodbc-dev (Linux)")
 endif()
 
-target_link_libraries(GameServer PRIVATE pthread)
+# LuaJIT собирается своим Makefile:
+#   MACOSX_DEPLOYMENT_TARGET=15.0 make -C Libraries/LuaJIT/src
+find_library(LUAJIT_LIBRARY NAMES luajit
+    HINTS "${SOURCES_ROOT}/Libraries/LuaJIT/src" NO_DEFAULT_PATH)
+if(NOT LUAJIT_LIBRARY)
+    message(FATAL_ERROR "libluajit.a не найдена: соберите Libraries/LuaJIT/src")
+endif()
+target_link_libraries(GameServer PRIVATE "${LUAJIT_LIBRARY}")
+
+
+target_link_libraries(GameServer PRIVATE mpack sqlite3 pthread)

@@ -165,7 +165,10 @@ namespace Corsairs::Net {
 				}
 				else {
 					int sockErr = 0;
-					int optLen = sizeof(sockErr);
+					// socklen_t, а не int: в POSIX getsockopt принимает
+					// socklen_t*, в WinSock — int*. Тип есть в обеих системах
+					// (ws2tcpip.h объявляет его как int).
+					socklen_t optLen = sizeof(sockErr);
 					getsockopt(_socket, SOL_SOCKET, SO_ERROR, (char*)&sockErr, &optLen);
 					TCP_LOG << "[TcpClient] connect()   " << host << ":" << port << ": " <<
 						WsaErrorStr(sockErr) << std::endl;
