@@ -170,7 +170,13 @@ def spawn_instanced(asset_path, transforms):
         component.set_static_mesh(mesh)
         for transform in transforms:
             component.add_instance(transform, True)
-        return len(transforms), "инстансы"
+
+        # Считаем то, что подтвердил компонент, а не длину списка на входе:
+        # молчаливый отказ add_instance иначе выглядел бы как полный успех.
+        actual = component.get_instance_count()
+        if actual != len(transforms):
+            return actual, f"инстансы (принято {actual} из {len(transforms)})"
+        return actual, "инстансы"
 
     actor_subsystem.destroy_actor(actor)
 
