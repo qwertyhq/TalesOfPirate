@@ -134,7 +134,17 @@ namespace Corsairs::Net {
 
 		if (connectResult == SOCKET_ERROR) {
 			int err = WSAGetLastError();
-			if (err != WSAEWOULDBLOCK) {
+
+			// «Соединение устанавливается» две системы сообщают разными кодами:
+			// WinSock — WSAEWOULDBLOCK, POSIX — EINPROGRESS. Проверка только на
+			// первый код заставляла POSIX считать нормальный неблокирующий
+			// connect провалом, не дойдя до ожидания на select.
+#ifdef _WIN32
+			const bool inProgress = (err == WSAEWOULDBLOCK);
+#else
+			const bool inProgress = (err == EINPROGRESS || err == EWOULDBLOCK);
+#endif
+			if (!inProgress) {
 				TCP_LOG << "[TcpClient] connect() : " << WsaErrorStr(err) << std::endl;
 				closesocket(_socket);
 				_socket = INVALID_SOCKET;
@@ -154,7 +164,17 @@ namespace Corsairs::Net {
 			tv.tv_sec = timeoutMs / 1000;
 			tv.tv_usec = (timeoutMs % 1000) * 1000;
 
-			int selResult = select(0, nullptr, &writeSet, &exceptSet, &tv);
+			// Первый аргумент select WinSock игнорирует — там множества
+			// дескрипторов это массивы, а не битовые маски. В POSIX это nfds:
+			// номер старшего дескриптора плюс один, и с нулём select не следит
+			// ни за одним сокетом и сразу возвращает 0, что выглядело как
+			// истёкший таймаут подключения.
+#ifdef _WIN32
+			const int nfds = 0;
+#else
+			const int nfds = static_cast<int>(_socket) + 1;
+#endif
+			int selResult = select(nfds, nullptr, &writeSet, &exceptSet, &tv);
 			if (selResult <= 0 || FD_ISSET(_socket, &exceptSet)) {
 				if (selResult == 0) {
 					TCP_LOG << "[TcpClient] connect()  (" << timeoutMs << "ms)  " << host << ":" << port <<

@@ -21,10 +21,27 @@ module ServerHost =
 
     /// Создать WebApplicationBuilder с gRPC поддержкой.
     let createWebBuilder (args: string[]) =
+        // Обязательно до CreateBuilder: он сам подключает appsettings.json со
+        // слежением за файлом, а ConfigurationManager строит провайдеры сразу
+        // при добавлении источника — позже отключать уже поздно, watcher к тому
+        // моменту работает. Ключ hostBuilder:reloadConfigOnChange читается из
+        // переменных окружения с префиксом DOTNET_, двойное подчёркивание
+        // заменяет двоеточие. Причина — в комментарии к AddJsonFile ниже.
+        Environment.SetEnvironmentVariable("DOTNET_hostBuilder__reloadConfigOnChange", "false")
+
         let builder = WebApplication.CreateBuilder(args)
         builder.Configuration
             .SetBasePath(AppContext.BaseDirectory)
-            .AddJsonFile("appsettings.json", optional = false, reloadOnChange = true)
+            // reloadOnChange = false намеренно. Горячая перезагрузка ставит
+            // FileSystemWatcher на каталог и переподписывается на токен
+            // изменения после каждого срабатывания. На Windows watcher опирается
+            // на ReadDirectoryChangesW и молчит, пока файл не тронут; на macOS и
+            // Linux он реализован через FSEvents/kqueue, которые отдают события
+            // по каталогу шире — перерегистрация замыкается в бесконечную
+            // рекурсию, и процесс виснет в главном потоке ещё до инициализации
+            // логирования. Параметры сервера читаются на старте, перечитывать их
+            // на лету всё равно незачем.
+            .AddJsonFile("appsettings.json", optional = false, reloadOnChange = false)
             .AddJsonFile("appsettings.local.json", optional = true)
             .AddEnvironmentVariables("CORSAIRS_")
         |> ignore
