@@ -17,7 +17,7 @@
 
 | Каталог | Файлов | Успешно | Что делает |
 |---|---|---|---|
-| `Client/model` | 7311 | 7311 | `.lgo` и `.lmo` → glTF 2.0 + точки крепления |
+| `Client/model` | 7311 | 7311 | `.lgo` и `.lmo` → glTF 2.0: геометрия, скиннинг, материалы, точки крепления |
 | `Client/animation` | 670 | 670 | `.lab` → скелет, skin, анимация на 30 FPS |
 | `Client/map` | 99 | 99 | `.map` → heightmap/проходимость, `.obj` → манифест |
 | `Client/effect` | 7 | 7 | геометрия эффектов |
@@ -37,7 +37,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build
 **Сконвертировать датасет заново:**
 
 ```bash
-./tools/AssetConverter/build/AssetConverter Client/model     out/model     --report model.csv
+# --textures включает резолвинг текстур и копирование их в out/model/textures/
+./tools/AssetConverter/build/AssetConverter Client/model     out/model     --textures Client/texture --report model.csv
 ./tools/AssetConverter/build/AssetConverter Client/animation out/animation --report anim.csv
 ./tools/AssetConverter/build/AssetConverter Client/map       out/map       --report map.csv
 ```
@@ -140,9 +141,18 @@ X и Y, а не Z.
 исходных целых единицах карты — пересчёт в единицы UE делается при импорте, где
 известен масштаб мира.
 
-Связь `modelId` → файл модели в конвертере **не устанавливалась**: она задаётся
-игровыми данными, а не форматом файла. Это первое, что предстоит выяснить —
-искать в `server/GameServer/gamedata.sqlite` и в клиентском коде загрузки сцены.
+**Связь `modelId` → файл модели заблокирована отсутствием данных.** Она живёт в
+таблице `scene_objects` базы `server/GameServer/gamedata.sqlite`, поле
+`_dataName` (см. `SceneObjRecordStore`). В этом чекауте база весит 0 байт.
+Той же природы связь модели со скелетом: клиент берёт `pInfo->Model` и строит
+имя `{:04}.lab`.
+
+Нужен рабочий `gamedata.sqlite` с боевого сервера. До этого объекты карты
+разместить нельзя, а скиннинг мешей не с чем связать — хотя сами данные
+скиннинга уже в glTF, и имена суставов несут глобальные id костей.
+
+Координаты в манифесте — **мировые**, пересчёт из относительных уже сделан
+(в файле они относительны началу секции, множитель `sectionSize * 100`).
 
 ### Шаг E. Сетевой слой, частично
 
