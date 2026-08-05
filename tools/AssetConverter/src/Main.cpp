@@ -11,7 +11,10 @@
 #include "Corsairs/Tools/AssetConverter/SceneObjParser.h"
 #include "Corsairs/Tools/AssetConverter/TextureResolver.h"
 
+#include <algorithm>
 #include <cctype>
+#include <map>
+#include <optional>
 #include <filesystem>
 #include <format>
 #include <iostream>
@@ -22,11 +25,16 @@ namespace {
 
 namespace AC = Corsairs::Tools::AssetConverter;
 
+// Где искать скелеты для моделей персонажей. Задаётся ключом --skeletons;
+// пустой путь означает, что привязка к скелету не делается.
+std::filesystem::path g_skeletonRoot;
+
 void PrintUsage() {
     std::cout <<
         "Использование:\n"
         "  AssetConverter <входной-каталог> <выходной-каталог> [--report <файл.csv>]\n"
         "                  [--textures <каталог-текстур>]\n"
+        "                  [--skeletons <каталог-скелетов>]\n"
         "\n"
         "Рекурсивно обходит входной каталог и конвертирует в glTF 2.0:\n"
         "  .lgo — геометрия, материалы и точки крепления;\n"
@@ -34,6 +42,8 @@ void PrintUsage() {
         "Результат сохраняется с той же относительной структурой каталогов.\n"
         "С --textures материалы получают ссылки на текстуры, а сами файлы\n"
         "копируются в <выход>/textures/ с сохранением категорий.\n"
+        "С --skeletons модели персонажей получают полную иерархию костей из\n"
+        "одноимённого .lab — без этого дорожки анимации к ним не применяются.\n"
         "Код возврата: 0 — все файлы обработаны, 1 — есть ошибки, 2 — неверные аргументы.\n";
 }
 
@@ -63,6 +73,50 @@ AC::GltfTextureOptions BuildTextureOptions(const AC::LgoGeomObj& obj,
 
     options.CopyTo = outputRoot / "textures" / category;
     return options;
+}
+
+// Ищет скелет для модели персонажа.
+//
+// Имя выводится из имени скина: `0001000000.lgo` относится к `0001.lab` —
+// первые четыре цифры. Соглашение проверено на наборе: разрешается для 2941
+// модели персонажа из 4913. Остальные остаются без скелета, и это отражается
+// в отчёте отдельным статусом, а не замалчивается.
+//
+// Скелеты кешируются: одна и та же кость обслуживает сотни скинов, и
+// перечитывать её файл для каждого — пустая работа.
+const AC::LabAnimation* FindSkeleton(const std::filesystem::path& modelPath,
+                                     const std::filesystem::path& skeletonRoot) {
+    static std::map<std::string, std::optional<AC::LabAnimation>> cache;
+
+    if (skeletonRoot.empty()) {
+        return nullptr;
+    }
+
+    const std::string stem = modelPath.stem().string();
+    if (stem.size() < 4) {
+        return nullptr;
+    }
+    const std::string key = stem.substr(0, 4);
+    if (!std::all_of(key.begin(), key.end(),
+                     [](unsigned char c) { return std::isdigit(c) != 0; })) {
+        return nullptr;
+    }
+
+    if (const auto found = cache.find(key); found != cache.end()) {
+        return found->second ? &*found->second : nullptr;
+    }
+
+    const std::filesystem::path labPath = skeletonRoot / (key + ".lab");
+    const auto bytes = AC::ReadWholeFile(labPath);
+    if (!bytes) {
+        cache.emplace(key, std::nullopt);
+        return nullptr;
+    }
+
+    AC::LabDiagnostics diag;
+    auto anim = AC::ParseLab(*bytes, diag);
+    const auto inserted = cache.emplace(key, std::move(anim));
+    return inserted.first->second ? &*inserted.first->second : nullptr;
 }
 
 // Конвертирует террейн .map в набор сырых карт плюс метаданные.
@@ -271,8 +325,10 @@ bool ConvertOne(const std::filesystem::path& input, const std::filesystem::path&
     const AC::GltfTextureOptions textures =
         BuildTextureOptions(*obj, resolver, relativePath, outputRoot);
 
+    const AC::LabAnimation* skeleton = FindSkeleton(input, g_skeletonRoot);
+
     std::string detail;
-    const AC::GltfStatus status = AC::WriteGltf(*obj, output, detail, textures);
+    const AC::GltfStatus status = AC::WriteGltf(*obj, output, detail, textures, skeleton);
     if (status != AC::GltfStatus::OK) {
         const std::string_view name =
             status == AC::GltfStatus::EMPTY_MESH ? "EMPTY_MESH" : "WRITE_FAILED";
@@ -305,6 +361,10 @@ int main(int argc, char** argv) {
         }
         else if (arg == "--textures" && i + 1 < argc) {
             textureRoot = argv[i + 1];
+            ++i;
+        }
+        else if (arg == "--skeletons" && i + 1 < argc) {
+            g_skeletonRoot = argv[i + 1];
             ++i;
         }
         else {

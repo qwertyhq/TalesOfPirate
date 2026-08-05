@@ -1,9 +1,11 @@
 #include "Corsairs/Tools/AssetConverter/GltfWriter.h"
 
 #include "Corsairs/Tools/AssetConverter/BinaryReader.h"
+#include "Corsairs/Tools/AssetConverter/GltfSkeletonWriter.h"
 #include "Corsairs/Tools/AssetConverter/ImageCodec.h"
 #include "Corsairs/Tools/AssetConverter/JsonWriter.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -116,6 +118,39 @@ std::size_t SanitizeVectors(std::vector<T>& values, const T& fallback) {
         }
     }
     return fixed;
+}
+
+// Поза кости в первом кадре — она же bind-поза скелета.
+//
+// Ключи бывают двух видов: раздельные позиция с поворотом либо матрица
+// целиком. Второй вид приходится раскладывать, потому что glTF хранит узлы
+// в виде переноса, поворота и масштаба.
+void BindPoseOf(const LabAnimation& skeleton, std::uint32_t bone,
+                float translation[3], float rotation[4]) {
+    const LabBoneTrack& track = skeleton.Tracks[bone];
+
+    if (!track.Positions.empty() && !track.Rotations.empty()) {
+        // Та же перестановка Y и Z, что и для вершин.
+        translation[0] = track.Positions[0].X;
+        translation[1] = track.Positions[0].Z;
+        translation[2] = track.Positions[0].Y;
+        ConvertQuaternionToGltf(track.Rotations[0], rotation);
+        return;
+    }
+
+    if (track.Matrices.size() >= 16) {
+        float converted[16]{};
+        ConvertMatrixToGltf(track.Matrices.data(), converted);
+        const Trs trs = DecomposeGltfMatrix(converted);
+        std::copy_n(trs.Translation, 3, translation);
+        std::copy_n(trs.Rotation, 4, rotation);
+        return;
+    }
+
+    // Ключей нет вовсе: кость остаётся в начале координат без поворота.
+    translation[0] = translation[1] = translation[2] = 0.0f;
+    rotation[0] = rotation[1] = rotation[2] = 0.0f;
+    rotation[3] = 1.0f;
 }
 
 // Расширение сравнивается без учёта регистра: в исходных данных встречается
@@ -246,7 +281,8 @@ void ConvertMatrixToGltf(const float* in, float* out) {
 }
 
 GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPath,
-                     std::string& detail, const GltfTextureOptions& textures) {
+                     std::string& detail, const GltfTextureOptions& textures,
+                     const LabAnimation* skeleton) {
     const LgoMesh& mesh = obj.Mesh;
 
     if (mesh.Positions.empty() || mesh.Indices.empty() || mesh.Subsets.empty()) {
@@ -320,6 +356,18 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     // переносятся один в один без перенумерации.
     const bool hasSkin = !mesh.Blends.empty() && !mesh.BoneIndices.empty();
 
+    // Скелет прикладывается, только если его кости индексируются одним байтом:
+    // JOINTS_0 здесь пишется как UNSIGNED_BYTE, и 256-я кость в него не влезет.
+    // Ни один скелет в наборе такого размера не достигает, но молча испортить
+    // привязку хуже, чем обойтись без скелета.
+    const std::uint32_t skeletonBoneNum =
+        skeleton != nullptr ? skeleton->Header.BoneNum : 0;
+    const bool hasSkeleton = hasSkin && skeleton != nullptr &&
+                             skeletonBoneNum > 0 && skeletonBoneNum <= 256 &&
+                             skeleton->InverseBindMatrices.size() >=
+                                 static_cast<std::size_t>(skeletonBoneNum) * 16 &&
+                             skeleton->Tracks.size() >= skeletonBoneNum;
+
     BufferView jointsView{0, 0, kTargetArrayBuffer};
     BufferView weightsView{0, 0, kTargetArrayBuffer};
     if (hasSkin) {
@@ -333,7 +381,15 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
                 // Индекс вне диапазона обнуляем вместе с весом: иначе glTF
                 // невалиден, а вершина всё равно не должна им управляться.
                 const bool valid = blend.Index[k] < mesh.BoneIndices.size();
-                joints[v * 4 + k] = valid ? blend.Index[k] : 0;
+                // Со скелетом сустав адресуется номером кости в нём, без него —
+                // позицией в BoneIndices. Номер кости совпадает с её индексом в
+                // массиве: движок сравнивает ParentId именно с индексом.
+                std::uint32_t joint = valid ? blend.Index[k] : 0;
+                if (valid && hasSkeleton) {
+                    const std::uint32_t bone = mesh.BoneIndices[blend.Index[k]];
+                    joint = bone < skeletonBoneNum ? bone : 0;
+                }
+                joints[v * 4 + k] = static_cast<std::uint8_t>(joint);
                 weights[v * 4 + k] = valid ? blend.Weight[k] : 0.0f;
                 sum += weights[v * 4 + k];
             }
@@ -351,6 +407,23 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         jointsView = AppendToBuffer(buffer, joints.data(), joints.size(), kTargetArrayBuffer);
         weightsView = AppendToBuffer(buffer, weights.data(),
                                      weights.size() * sizeof(float), kTargetArrayBuffer);
+    }
+
+    // Обратные bind-матрицы скелета. Без них импортёр считает bind-позу
+    // единичной, и меш выходит смятым в точку.
+    BufferView inverseBindView{0, 0, 0};
+    std::vector<float> inverseBind;
+    if (hasSkeleton) {
+        inverseBind.resize(static_cast<std::size_t>(skeletonBoneNum) * 16);
+        for (std::uint32_t b = 0; b < skeletonBoneNum; ++b) {
+            ConvertMatrixToGltf(skeleton->InverseBindMatrices.data() +
+                                    static_cast<std::size_t>(b) * 16,
+                                inverseBind.data() + static_cast<std::size_t>(b) * 16);
+        }
+        // Цель не указывается: матрицы не идут в вершинный конвейер, и
+        // спецификация запрещает помечать такой блок как ARRAY_BUFFER.
+        inverseBindView = AppendToBuffer(buffer, inverseBind.data(),
+                                         inverseBind.size() * sizeof(float), 0);
     }
 
     const BufferView indexView = AppendToBuffer(
@@ -389,6 +462,12 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         views.push_back(jointsView);
         weightsViewIndex = static_cast<std::int64_t>(views.size());
         views.push_back(weightsView);
+    }
+
+    std::int64_t inverseBindViewIndex = -1;
+    if (hasSkeleton) {
+        inverseBindViewIndex = static_cast<std::int64_t>(views.size());
+        views.push_back(inverseBindView);
     }
 
     const std::int64_t indexViewIndex = static_cast<std::int64_t>(views.size());
@@ -510,10 +589,27 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         json.EndObject();
     }
 
+    std::int64_t inverseBindAccessor = -1;
+    if (hasSkeleton) {
+        inverseBindAccessor = 1 + (hasNormals ? 1 : 0) + (hasUv ? 1 : 0) + 2;
+
+        json.BeginObject();
+        json.Key("bufferView");
+        json.Value(inverseBindViewIndex);
+        json.Key("componentType");
+        json.Value(kComponentTypeFloat);
+        json.Key("count");
+        json.Value(static_cast<std::int64_t>(skeletonBoneNum));
+        json.Key("type");
+        json.Value("MAT4");
+        json.EndObject();
+    }
+
     // По аккессору индексов на каждый подсет: они делят один bufferView,
     // отличаясь byteOffset и count.
     const std::int64_t firstSubsetAccessor =
-        1 + (hasNormals ? 1 : 0) + (hasUv ? 1 : 0) + (hasSkin ? 2 : 0);
+        1 + (hasNormals ? 1 : 0) + (hasUv ? 1 : 0) + (hasSkin ? 2 : 0) +
+        (hasSkeleton ? 1 : 0);
 
     for (const SubsetInfo& subset : mesh.Subsets) {
         json.BeginObject();
@@ -720,15 +816,69 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         json.EndObject();
     }
 
-    // Узлы-суставы. Имя несёт ГЛОБАЛЬНЫЙ id кости из BoneIndices — по нему
-    // меш связывается с настоящим скелетом из .lab на этапе импорта. Сами
-    // узлы плоские и без трансформаций: иерархия и bind-позы живут в .lab,
-    // а какой именно .lab соответствует модели, задаётся игровыми данными.
-    for (std::size_t i = 0; i < mesh.BoneIndices.size(); ++i) {
-        json.BeginObject();
-        json.Key("name");
-        json.Value(std::format("bone_{}", mesh.BoneIndices[i]));
-        json.EndObject();
+    // Узлы-суставы.
+    //
+    // Со скелетом пишется его полная иерархия: настоящие имена костей, связи
+    // через ParentId и поза первого кадра. Импортёр строит скелет по тому, что
+    // видит в файле меша, поэтому только так дорожки анимации из того же .lab
+    // оказываются применимы.
+    //
+    // Без скелета остаётся плоский список тех костей, которыми меш реально
+    // пользуется; имя несёт глобальный номер, по которому связь можно
+    // восстановить позже.
+    if (hasSkeleton) {
+        const std::size_t firstBoneNode = 1 + obj.Helper.Dummies.size();
+
+        for (std::uint32_t b = 0; b < skeletonBoneNum; ++b) {
+            json.BeginObject();
+            json.Key("name");
+            const std::string boneName = BoneName(skeleton->Bones[b]);
+            json.Value(boneName.empty() ? std::format("bone_{}", b) : boneName);
+
+            float translation[3]{};
+            float rotation[4]{0, 0, 0, 1};
+            BindPoseOf(*skeleton, b, translation, rotation);
+
+            json.Key("translation");
+            json.BeginArray();
+            for (const float value : translation) {
+                json.Value(static_cast<double>(value));
+            }
+            json.EndArray();
+
+            json.Key("rotation");
+            json.BeginArray();
+            for (const float value : rotation) {
+                json.Value(static_cast<double>(value));
+            }
+            json.EndArray();
+
+            // Дети адресуются с учётом смещения: перед костями идут узел меша
+            // и dummy-точки крепления.
+            std::vector<std::int64_t> children;
+            for (std::uint32_t other = 0; other < skeletonBoneNum; ++other) {
+                if (skeleton->Bones[other].ParentId == b) {
+                    children.push_back(static_cast<std::int64_t>(firstBoneNode + other));
+                }
+            }
+            if (!children.empty()) {
+                json.Key("children");
+                json.BeginArray();
+                for (const std::int64_t child : children) {
+                    json.Value(child);
+                }
+                json.EndArray();
+            }
+            json.EndObject();
+        }
+    }
+    else {
+        for (std::size_t i = 0; i < mesh.BoneIndices.size(); ++i) {
+            json.BeginObject();
+            json.Key("name");
+            json.Value(std::format("bone_{}", mesh.BoneIndices[i]));
+            json.EndObject();
+        }
     }
     json.EndArray();
 
@@ -742,10 +892,16 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         json.Key("joints");
         json.BeginArray();
         const std::size_t firstJointNode = 1 + obj.Helper.Dummies.size();
-        for (std::size_t i = 0; i < mesh.BoneIndices.size(); ++i) {
+        const std::size_t jointCount =
+            hasSkeleton ? skeletonBoneNum : mesh.BoneIndices.size();
+        for (std::size_t i = 0; i < jointCount; ++i) {
             json.Value(static_cast<std::int64_t>(firstJointNode + i));
         }
         json.EndArray();
+        if (hasSkeleton) {
+            json.Key("inverseBindMatrices");
+            json.Value(inverseBindAccessor);
+        }
         json.EndObject();
         json.EndArray();
     }
@@ -756,7 +912,9 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     // отсутствие, а Interchange в UE строит скелет от корней сцены и падает на
     // ensure(SkeletonNodeUid).
     const std::size_t sceneNodeCount =
-        1 + obj.Helper.Dummies.size() + (hasSkin ? mesh.BoneIndices.size() : 0);
+        1 + obj.Helper.Dummies.size() +
+        (hasSkeleton ? skeletonBoneNum
+                     : (hasSkin ? mesh.BoneIndices.size() : 0));
 
     json.Key("scenes");
     json.BeginArray();

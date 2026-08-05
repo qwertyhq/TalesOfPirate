@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Corsairs/Tools/AssetConverter/LabParser.h"
 #include "Corsairs/Tools/AssetConverter/LgoParser.h"
 
 #include <cstdint>
@@ -49,12 +50,21 @@ struct GltfTextureOptions {
 // Пишет gltfPath и парный .bin рядом (то же имя, расширение .bin).
 // detail заполняется человекочитаемой причиной при неуспехе.
 //
-// Преобразование системы координат: MindPower3D левосторонняя, glTF —
-// правосторонняя, поэтому Z инвертируется, а порядок обхода треугольника
-// меняется на противоположный. Обе операции обязательны вместе.
+// Преобразование системы координат: MindPower3D держит высоту по Z и
+// левосторонняя, glTF — правосторонняя с высотой по Y, поэтому оси Y и Z
+// меняются местами, а порядок обхода треугольника — на противоположный. Обе
+// операции обязательны вместе.
+//
+// `skeleton` — скелет из `.lab`, к которому привязан меш. Когда он передан и
+// меш несёт скиннинг, в файл попадает полная иерархия костей с настоящими
+// именами и обратными bind-матрицами, а `JOINTS_0` ссылается на позиции в ней.
+// Без скелета суставы выходят плоским списком тех костей, которыми меш
+// пользуется, — импортёр строит по нему отдельный скелет, и дорожки анимации
+// из `.lab` к такому мешу не применяются.
 [[nodiscard]] GltfStatus WriteGltf(const LgoGeomObj& obj,
                                    const std::filesystem::path& gltfPath,
                                    std::string& detail,
-                                   const GltfTextureOptions& textures = {});
+                                   const GltfTextureOptions& textures = {},
+                                   const LabAnimation* skeleton = nullptr);
 
 } // namespace Corsairs::Tools::AssetConverter
