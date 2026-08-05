@@ -82,6 +82,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	void Logout();
 
+	/** Прокачивает соединение. Нужен там, где нет игрового цикла. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	void Poll();
+
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
 	ECorsairsLoginStage GetStage() const { return Stage; }
 

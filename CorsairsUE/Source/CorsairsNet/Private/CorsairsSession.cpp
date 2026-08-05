@@ -76,6 +76,14 @@ void UCorsairsSession::EnterWorld(int32 SlotIndex)
 			 FString::Printf(TEXT("вход персонажем %s"), *Characters[SlotIndex].Name));
 }
 
+void UCorsairsSession::Poll()
+{
+	if (Connection != nullptr)
+	{
+		Connection->Poll();
+	}
+}
+
 void UCorsairsSession::Logout()
 {
 	if (Connection != nullptr)

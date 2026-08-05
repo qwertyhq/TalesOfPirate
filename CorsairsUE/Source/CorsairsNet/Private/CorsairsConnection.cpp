@@ -133,7 +133,7 @@ bool UCorsairsConnection::Send(WPacket& Packet)
 	return true;
 }
 
-void UCorsairsConnection::Tick(float DeltaTime)
+void UCorsairsConnection::Poll()
 {
 	if (Socket == nullptr)
 	{
@@ -147,6 +147,11 @@ void UCorsairsConnection::Tick(float DeltaTime)
 	}
 
 	DispatchComplete();
+}
+
+void UCorsairsConnection::Tick(float DeltaTime)
+{
+	Poll();
 }
 
 TStatId UCorsairsConnection::GetStatId() const

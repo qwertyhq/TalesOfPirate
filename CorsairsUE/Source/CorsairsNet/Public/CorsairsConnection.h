@@ -68,6 +68,14 @@ public:
 
 	ECorsairsConnectionState GetState() const { return State; }
 
+	/** Разбирает всё пришедшее и рассылает пакеты.
+	 *
+	 *  Обычно вызывается из Tick. Отдельным методом — ради headless-прогонов:
+	 *  в коммандлете игрового цикла нет, и без явного насоса сетевой слой не
+	 *  проверить. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	void Poll();
+
 	FCorsairsPacketReceived OnPacket;
 	FCorsairsStateChanged OnStateChanged;
 
