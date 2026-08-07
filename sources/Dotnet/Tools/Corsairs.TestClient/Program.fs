@@ -19,7 +19,6 @@
 /// сами о себе сообщают.
 module Corsairs.TestClient.Program
 
-open System.Net.Sockets
 open Corsairs.TestClient.Session
 
 /// Умение обычной атаки. Значение подтверждено журналом настоящего клиента:
@@ -46,19 +45,13 @@ let main argv =
 
     log $"Подключаюсь к {host}:{port} как {account} (режим {mode})"
 
-    use client = new TcpClient()
-    client.Connect(host, port)
-    use stream = client.GetStream()
-    stream.ReadTimeout <- 15000
-    log "Соединение установлено"
-
-    match logIn stream account password with
+    match connect host port account password with
     | Error reason ->
         log $"ОШИБКА {reason}"
         1
-    | Ok live ->
+    | Ok(_, live) ->
         if mode = "mechanics" then
-            Mechanics.run live DEFAULT_SKILL DEFAULT_SUMMON
+            Mechanics.run host port account password live DEFAULT_SKILL DEFAULT_SUMMON
         else
             log "ВХОД В МИР ВЫПОЛНЕН"
             0

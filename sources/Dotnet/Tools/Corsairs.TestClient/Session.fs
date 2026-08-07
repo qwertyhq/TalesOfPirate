@@ -425,3 +425,53 @@ let talkTo (live: Live) (target: SeenActor) =
     packet.WriteInt64(NPC_ACTION_TALKPAGE)
     packet.WriteInt64(0L)                     // номер страницы: начальная
     send live &packet
+
+/// Подключается и проходит вход, возвращая соединение вместе с сессией.
+///
+/// Соединение отдаётся наружу, потому что владеть им должен вызывающий: при
+/// смене карты старое закрывается и открывается новое.
+let connect (host: string) (port: int) (account: string) (password: string)
+            : Result<NetworkStream * Live, string> =
+    let client = new TcpClient()
+    client.Connect(host, port)
+    let stream = client.GetStream()
+    stream.ReadTimeout <- 15000
+    match logIn stream account password with
+    | Ok live -> Ok(stream, live)
+    | Error reason ->
+        client.Dispose()
+        Error reason
+
+/// Ждёт, пока сервер закроет соединение.
+///
+/// При переходе на другую карту GameServer отключает игрока: карта живёт на
+/// своём сервере, и Gate направляет клиента туда заново. Разрыв здесь —
+/// штатное завершение перехода, а не сбой.
+let awaitDisconnect (live: Live) (seconds: float) : bool =
+    let deadline = DateTime.UtcNow.AddSeconds(seconds)
+    let mutable closed = false
+    live.Stream.ReadTimeout <- 500
+    while not closed && DateTime.UtcNow < deadline do
+        try
+            match readPacket live.Stream with
+            | None -> closed <- true
+            | Some packet ->
+                absorb live packet
+                packet.Dispose()
+        with
+        | :? IO.IOException -> ()
+        | :? ObjectDisposedException -> closed <- true
+    closed
+
+/// Корректно выходит из игры.
+///
+/// Без этого сервер считает игрока в сети до собственного тайм-аута, и
+/// следующий прогон упирается в отказ входа. Разрыв TCP сам по себе выходом
+/// не считается.
+let logOut (live: Live) =
+    try
+        let mutable packet = WPacket(32)
+        packet.WriteCmd(Commands.CMD_CM_LOGOUT)
+        send live &packet
+        drain live 2.0
+    with _ -> ()      // соединение могло уже закрыться — выход всё равно состоялся
