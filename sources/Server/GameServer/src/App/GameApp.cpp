@@ -792,11 +792,11 @@ CPlayer* CGameApp::GetNewPlayer() {
 }
 
 //
-CPlayer* CGameApp::GetPlayer(long lHandle) {
+CPlayer* CGameApp::GetPlayer(std::int32_t lHandle) {
 	return GamePool::Instance().FindPlayer(lHandle);
 }
 
-CPlayer* CGameApp::IsValidPlayer(long lID, long lHandle) {
+CPlayer* CGameApp::IsValidPlayer(std::int32_t lID, std::int32_t lHandle) {
 	CPlayer* pCPly = GamePool::Instance().FindPlayer(lHandle);
 	if (!pCPly)
 		return 0;
@@ -1029,12 +1029,12 @@ Corsairs::Common::Mission::CTalkNpc* CGameApp::GetNewTNpc() {
 	return GamePool::Instance().AcquireTalkNpc();
 }
 
-Entity* CGameApp::GetEntity(long lHandle) {
+Entity* CGameApp::GetEntity(std::int32_t lHandle) {
 	return GamePool::Instance().FindEntity(lHandle);
 }
 
 //
-Entity* CGameApp::IsValidEntity(unsigned long ulID, long lHandle) {
+Entity* CGameApp::IsValidEntity(std::uint32_t ulID, std::int32_t lHandle) {
 	Entity* pEnti = g_pGameApp->GetEntity(lHandle);
 	if (!pEnti)
 		return 0;
@@ -1046,7 +1046,7 @@ Entity* CGameApp::IsValidEntity(unsigned long ulID, long lHandle) {
 }
 
 //
-Entity* CGameApp::IsLiveingEntity(unsigned long ulID, long lHandle) {
+Entity* CGameApp::IsLiveingEntity(std::uint32_t ulID, std::int32_t lHandle) {
 	Entity* pEnti = IsValidEntity(ulID, lHandle);
 	if (!pEnti)
 		return 0;
@@ -1058,7 +1058,7 @@ Entity* CGameApp::IsLiveingEntity(unsigned long ulID, long lHandle) {
 }
 
 //
-Entity* CGameApp::IsMapEntity(unsigned long ulID, long lHandle) {
+Entity* CGameApp::IsMapEntity(std::uint32_t ulID, std::int32_t lHandle) {
 	Entity* pEnti = IsValidEntity(ulID, lHandle);
 	if (!pEnti)
 		return 0;
@@ -1070,7 +1070,7 @@ Entity* CGameApp::IsMapEntity(unsigned long ulID, long lHandle) {
 }
 
 //
-Entity* CGameApp::IsLifeEntity(unsigned long ulID, long lHandle) {
+Entity* CGameApp::IsLifeEntity(std::uint32_t ulID, std::int32_t lHandle) {
 	Entity* pEnti = IsValidEntity(ulID, lHandle);
 	if (!pEnti)
 		return 0;

@@ -143,16 +143,20 @@ public:
     void        ReleaseGamePlayer(CPlayer*);
 	void		GoOutGame(CPlayer* pPlayer, bool bOffLine, bool mOffLine = false);
 	CPlayer*	GetNewPlayer();
-	CPlayer*	GetPlayer(long lHandle);
-	CPlayer*	IsValidPlayer(long lID, long lHandle);
+	CPlayer*	GetPlayer(std::int32_t lHandle);
+	CPlayer*	IsValidPlayer(std::int32_t lID, std::int32_t lHandle);
     CCharacter* GetNewCharacter();
 	CItem*		GetNewItem();
 	Corsairs::Common::Mission::CTalkNpc*	GetNewTNpc();
-	Entity*		GetEntity(long lHandle);
-	Entity*		IsValidEntity(unsigned long ulID, long lHandle);
-	Entity*		IsLiveingEntity(unsigned long ulID, long lHandle);
-	Entity*		IsMapEntity(unsigned long ulID, long lHandle);
-	Entity*		IsLifeEntity(unsigned long ulID, long lHandle);
+	Entity*		GetEntity(std::int32_t lHandle);
+	// Ширина обязана быть фиксированной: у сущностей вроде NPC старший бит
+	// идентификатора установлен, клиент присылает его как знаковый int32, и на
+	// платформах с 64-битным long знаковое расширение делало сравнение с
+	// 32-битным Entity::GetID() заведомо ложным — цель не находилась никогда.
+	Entity*		IsValidEntity(std::uint32_t ulID, std::int32_t lHandle);
+	Entity*		IsLiveingEntity(std::uint32_t ulID, std::int32_t lHandle);
+	Entity*		IsMapEntity(std::uint32_t ulID, std::int32_t lHandle);
+	Entity*		IsLifeEntity(std::uint32_t ulID, std::int32_t lHandle);
 	void		AddPlayerIdx(DWORD dwDBID, CPlayer* pPlayer);
 	void		DelPlayerIdx(DWORD dwDBID);
 	CPlayer*    GetPlayerByDBID(DWORD dwDBID);

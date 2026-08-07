@@ -60,11 +60,11 @@ public:
     // Release — возврат в пул. Диспатч по тэгу handle.
     void    ReleasePlayer(CPlayer* player);
     void    ReleaseEntity(Entity* entity);
-    void    ReleaseEntityByHandle(long handle);
+    void    ReleaseEntityByHandle(std::int32_t handle);
 
     // Поиск по handle — O(1), под shared-локом.
-    CPlayer*    FindPlayer(long handle) const;
-    Entity*     FindEntity(long handle) const;
+    CPlayer*    FindPlayer(std::int32_t handle) const;
+    Entity*     FindEntity(std::int32_t handle) const;
 
     // Type-erased проверка по указателю без разыменования —
     // O(1) lookup в множестве живых указателей.
@@ -101,8 +101,8 @@ private:
     // Генерация стабильного handle: (tag:8) | (serial:24).
     // При исчерпании 24-битного серийника — циклический сброс + поиск
     // свободного значения по _entityByHandle / _playerByHandle.
-    long    NewEntityHandle(uint32_t tag);
-    long    NewPlayerHandle(uint32_t tag);
+    std::int32_t    NewEntityHandle(uint32_t tag);
+    std::int32_t    NewPlayerHandle(uint32_t tag);
 
     Corsairs::Util::TrackedPool<CPlayer>                        _playerPool{"Player"};
     Corsairs::Util::TrackedPool<CCharacter>                     _chaPool{"Character"};
@@ -112,8 +112,8 @@ private:
     Corsairs::Util::TrackedPool<Corsairs::Common::Mission::CResourceEntity>       _resourcePool{"Resource"};
 
     mutable std::shared_mutex                   _indexMutex;
-    std::unordered_map<long, Entity*>           _entityByHandle;
-    std::unordered_map<long, CPlayer*>          _playerByHandle;
+    std::unordered_map<std::int32_t, Entity*>           _entityByHandle;
+    std::unordered_map<std::int32_t, CPlayer*>          _playerByHandle;
     std::unordered_set<const Entity*>           _aliveEntityPtrs;
     std::unordered_set<const CPlayer*>          _alivePlayerPtrs;
 

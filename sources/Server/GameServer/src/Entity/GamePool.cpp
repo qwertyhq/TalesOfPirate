@@ -35,7 +35,7 @@ GamePool& GamePool::Instance()
     return instance;
 }
 
-long GamePool::NewEntityHandle(uint32_t tag)
+std::int32_t GamePool::NewEntityHandle(uint32_t tag)
 {
     auto& counter = _nextSerial[tag & 0xFFu];
     for (int probe = 0; probe < kMaxHandleProbes; ++probe)
@@ -47,7 +47,7 @@ long GamePool::NewEntityHandle(uint32_t tag)
                 "GamePool: handle serial wrap for tag {:#x}", tag);
             continue;
         }
-        long handle = static_cast<long>((tag << 24) | serial);
+        std::int32_t handle = static_cast<std::int32_t>((tag << 24) | serial);
 
         std::shared_lock lock(_indexMutex);
         if (!_entityByHandle.contains(handle))
@@ -61,7 +61,7 @@ long GamePool::NewEntityHandle(uint32_t tag)
     return 0;
 }
 
-long GamePool::NewPlayerHandle(uint32_t tag)
+std::int32_t GamePool::NewPlayerHandle(uint32_t tag)
 {
     auto& counter = _nextSerial[tag & 0xFFu];
     for (int probe = 0; probe < kMaxHandleProbes; ++probe)
@@ -73,7 +73,7 @@ long GamePool::NewPlayerHandle(uint32_t tag)
                 "GamePool: player handle serial wrap for tag {:#x}", tag);
             continue;
         }
-        long handle = static_cast<long>((tag << 24) | serial);
+        std::int32_t handle = static_cast<std::int32_t>((tag << 24) | serial);
 
         std::shared_lock lock(_indexMutex);
         if (!_playerByHandle.contains(handle))
@@ -90,7 +90,7 @@ long GamePool::NewPlayerHandle(uint32_t tag)
 CPlayer* GamePool::AcquirePlayer()
 {
     CPlayer* p = _playerPool.Get();
-    long handle = NewPlayerHandle(kTagPlayer);
+    std::int32_t handle = NewPlayerHandle(kTagPlayer);
     p->SetHandle(handle);
 
     {
@@ -105,7 +105,7 @@ CPlayer* GamePool::AcquirePlayer()
 CCharacter* GamePool::AcquireCharacter()
 {
     CCharacter* p = _chaPool.Get();
-    long handle = NewEntityHandle(kTagCharacter);
+    std::int32_t handle = NewEntityHandle(kTagCharacter);
     p->SetHandle(handle);
 
     {
@@ -120,7 +120,7 @@ CCharacter* GamePool::AcquireCharacter()
 CItem* GamePool::AcquireItem()
 {
     CItem* p = _itemPool.Get();
-    long handle = NewEntityHandle(kTagItem);
+    std::int32_t handle = NewEntityHandle(kTagItem);
     p->SetHandle(handle);
 
     {
@@ -135,7 +135,7 @@ CItem* GamePool::AcquireItem()
 Corsairs::Common::Mission::CTalkNpc* GamePool::AcquireTalkNpc()
 {
     Corsairs::Common::Mission::CTalkNpc* p = _tnpcPool.Get();
-    long handle = NewEntityHandle(kTagTalkNpc);
+    std::int32_t handle = NewEntityHandle(kTagTalkNpc);
     p->SetHandle(handle);
 
     {
@@ -168,7 +168,7 @@ Corsairs::Common::Mission::CEventEntity* GamePool::AcquireEventEntity(BYTE byTyp
         return nullptr;
     }
 
-    long handle = NewEntityHandle(tag);
+    std::int32_t handle = NewEntityHandle(tag);
     p->SetHandle(handle);
 
     {
@@ -186,7 +186,7 @@ void GamePool::ReleasePlayer(CPlayer* player)
     {
         return;
     }
-    long handle = player->GetHandle();
+    std::int32_t handle = player->GetHandle();
 
     {
         std::unique_lock lock(_indexMutex);
@@ -208,7 +208,7 @@ void GamePool::ReleaseEntity(Entity* entity)
     {
         return;
     }
-    long handle = entity->GetHandle();
+    std::int32_t handle = entity->GetHandle();
 
     {
         std::unique_lock lock(_indexMutex);
@@ -247,7 +247,7 @@ void GamePool::ReleaseEntity(Entity* entity)
     }
 }
 
-void GamePool::ReleaseEntityByHandle(long handle)
+void GamePool::ReleaseEntityByHandle(std::int32_t handle)
 {
     Entity* entity = FindEntity(handle);
     if (entity)
@@ -256,14 +256,14 @@ void GamePool::ReleaseEntityByHandle(long handle)
     }
 }
 
-CPlayer* GamePool::FindPlayer(long handle) const
+CPlayer* GamePool::FindPlayer(std::int32_t handle) const
 {
     std::shared_lock lock(_indexMutex);
     auto it = _playerByHandle.find(handle);
     return it == _playerByHandle.end() ? nullptr : it->second;
 }
 
-Entity* GamePool::FindEntity(long handle) const
+Entity* GamePool::FindEntity(std::int32_t handle) const
 {
     std::shared_lock lock(_indexMutex);
     auto it = _entityByHandle.find(handle);
