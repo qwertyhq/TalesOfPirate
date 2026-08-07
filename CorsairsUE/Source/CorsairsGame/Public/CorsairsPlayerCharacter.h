@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Character.h"
+#include "CorsairsCharacter.h"
 
 #include "CorsairsPlayerCharacter.generated.h"
 
@@ -21,26 +21,12 @@ class USpringArmComponent;
  * скелет и наборы кожи» лежит в таблице character_models игровых данных.
  */
 UCLASS()
-class CORSAIRSGAME_API ACorsairsPlayerCharacter : public ACharacter
+class CORSAIRSGAME_API ACorsairsPlayerCharacter : public ACorsairsCharacter
 {
 	GENERATED_BODY()
 
 public:
 	ACorsairsPlayerCharacter();
-
-	/** Ставит телу анимацию и включает её проигрывание по кругу.
-	 *
-	 *  Дорожка применима, только если её скелет совпадает со скелетом тела:
-	 *  оба приходят из одного `.lab`, и связывает их совпадение имён и
-	 *  структуры костей. */
-	UFUNCTION(BlueprintCallable, Category = "Corsairs")
-	bool SetBodyAnimation(const FString& AssetPath);
-
-	/** Ставит телу скелетный меш по пути ассета. Пустой путь оставляет тело
-	 *  невидимым, что лучше подстановки чужой модели: так сразу видно, что
-	 *  соответствие не разрешилось. */
-	UFUNCTION(BlueprintCallable, Category = "Corsairs")
-	bool SetBodyMesh(const FString& AssetPath);
 
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 	virtual void Tick(float DeltaSeconds) override;

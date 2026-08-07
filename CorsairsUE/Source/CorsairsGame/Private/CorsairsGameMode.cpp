@@ -2,16 +2,13 @@
 
 #include "TerrainHeights.h"
 
+#include "CorsairsCharacter.h"
 #include "CorsairsLoginHud.h"
 #include "CorsairsPlayerCharacter.h"
 
-#include "Dom/JsonObject.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
-#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
-#include "Serialization/JsonReader.h"
-#include "Serialization/JsonSerializer.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCorsairsGameMode, Log, All);
 
@@ -111,6 +108,25 @@ void ACorsairsGameMode::BeginPlay()
 	Session->OnStageChanged.AddDynamic(this, &ACorsairsGameMode::HandleStageChanged);
 	Session->OnActorSeen.AddDynamic(this, &ACorsairsGameMode::HandleActorSeen);
 	Session->OnActorLeft.AddDynamic(this, &ACorsairsGameMode::HandleActorLeft);
+	Session->OnActorLookChanged.AddDynamic(
+		this,
+		&ACorsairsGameMode::HandleActorLookChanged);
+
+	CharacterCatalog = MakeUnique<FCorsairsCharacterCatalog>();
+	const FString CatalogPath =
+		FPaths::ProjectDir() / CharacterMapRelativePath;
+	FString CatalogError;
+	if (!CharacterCatalog->Load(CatalogPath, CatalogError))
+	{
+		UE_LOG(
+			LogCorsairsGameMode,
+			Error,
+			TEXT("каталог персонажей не загрузился: %s: %s"),
+			*CatalogPath,
+			*CatalogError);
+		CharacterCatalog.Reset();
+		return;
+	}
 
 	if (!bAutoLogin)
 	{
@@ -165,93 +181,87 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 
 	case ECorsairsLoginStage::InWorld:
 	{
-		// Тело подбирается по типу персонажа, которым вошли.
-		const TArray<FCorsairsCharacterSlot>& Characters = Session->GetCharacters();
-		for (const FCorsairsCharacterSlot& Slot : Characters)
+		const FCorsairsWorldActor LocalActor = Session->GetLocalActor();
+		APlayerController* Controller =
+			UGameplayStatics::GetPlayerController(this, 0);
+		ACorsairsPlayerCharacter* Character =
+			Controller != nullptr
+				? Cast<ACorsairsPlayerCharacter>(Controller->GetPawn())
+				: nullptr;
+		if (Character == nullptr)
 		{
-			if (!Slot.Valid)
-			{
-				continue;
-			}
-
-			APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
-			ACorsairsPlayerCharacter* Character =
-				Controller != nullptr
-					? Cast<ACorsairsPlayerCharacter>(Controller->GetPawn())
-					: nullptr;
-			if (Character == nullptr)
-			{
-				UE_LOG(LogCorsairsGameMode, Warning, TEXT("персонаж игрока ещё не создан"));
-				break;
-			}
-
-			const FString MeshPath = ResolveBodyMesh(Slot.TypeId);
-			if (MeshPath.IsEmpty())
-			{
-				UE_LOG(LogCorsairsGameMode, Warning,
-					   TEXT("для типа %d нет модели в таблице"), Slot.TypeId);
-			}
-			else if (Character->SetBodyMesh(MeshPath))
-			{
-				UE_LOG(LogCorsairsGameMode, Log, TEXT("тело: %s"), *MeshPath);
-
-				// Анимация ставится после тела: проверка совместимости
-				// скелетов опирается на уже назначенный меш.
-				const FString AnimPath = ResolveField(Slot.TypeId, TEXT("animation"));
-				if (!AnimPath.IsEmpty() && Character->SetBodyAnimation(AnimPath))
-				{
-					UE_LOG(LogCorsairsGameMode, Log, TEXT("анимация: %s"), *AnimPath);
-				}
-			}
-
-			// Персонажа ставим туда, где его держит сервер. Ось Y
-			// инвертируется, как при размещении объектов; высота берётся
-			// с запасом над рельефом, дальше персонаж падает на землю сам.
-			const FIntPoint Spawn = Session->GetSpawnPosition();
-			FVector Location(static_cast<double>(Spawn.X),
-							 -static_cast<double>(Spawn.Y),
-							 Character->GetActorLocation().Z + SpawnHeightMargin);
-
-			// Высота берётся из карты высот — той же, из которой построена
-			// видимая земля. Трассировка тут не годится: рельеф пришёл из
-			// glTF без физической формы, и луч проходит сквозь него.
-			// Карта высот загружается один раз на всех: и свой персонаж, и
-			// показанные сервером ставятся по ней.
-			if (TerrainHeights == nullptr)
-			{
-				TerrainHeights = NewObject<UCorsairsTerrainHeights>(this);
-			}
-			TerrainHeights->Load(Session->GetMapName());
-
-			const bool bGrounded = Character->UseTerrainHeights(Session->GetMapName());
-			if (!bGrounded)
-			{
-				DropToGround(GetWorld(), Location);
-			}
-
-			Character->SetActorLocation(Location, false, nullptr,
-										ETeleportType::TeleportPhysics);
-			UE_LOG(LogCorsairsGameMode, Log,
-				   TEXT("позиция от сервера: (%d, %d) на карте %s -> (%.0f, %.0f, %.0f), земля %s"),
-				   Spawn.X, Spawn.Y, *Session->GetMapName(),
-				   Location.X, Location.Y, Location.Z,
-				   bGrounded ? TEXT("найдена") : TEXT("НЕ НАЙДЕНА"));
-
-			// Направление взгляда задаётся явно. Камера следует за поворотом
-			// контроллера, а тот наследует поворот PlayerStart — единственной
-			// точки на карте, ориентация которой к игре отношения не имеет:
-			// при её нулевом наклоне камера смотрит в горизонт, а при любом
-			// другом — в небо или в землю. Вид сверху под наклоном повторяет
-			// обзор оригинала.
-			if (AController* ViewController = Character->GetController())
-			{
-				ViewController->SetControlRotation(FRotator(CameraPitch, 0.0, 0.0));
-			}
-
-			// С этого момента персонаж сам сообщает серверу о перемещении.
-			Character->AttachSession(Session);
+			UE_LOG(
+				LogCorsairsGameMode,
+				Warning,
+				TEXT("персонаж игрока ещё не создан"));
 			break;
 		}
+
+		ResolveAndApplyAppearance(
+			Character,
+			LocalActor.TypeId,
+			LocalActor.Look,
+			LocalActor.Name,
+			LocalActor.WorldId);
+
+		// Персонажа ставим туда, где его держит сервер. Ось Y
+		// инвертируется, как при размещении объектов; высота берётся
+		// с запасом над рельефом, дальше персонаж падает на землю сам.
+		const FIntPoint Spawn = LocalActor.Position;
+		FVector Location(
+			static_cast<double>(Spawn.X),
+			-static_cast<double>(Spawn.Y),
+			Character->GetActorLocation().Z + SpawnHeightMargin);
+
+		// Высота берётся из карты высот — той же, из которой построена
+		// видимая земля. Трассировка тут не годится: рельеф пришёл из
+		// glTF без физической формы, и луч проходит сквозь него.
+		// Карта высот загружается один раз на всех: и свой персонаж, и
+		// показанные сервером ставятся по ней.
+		if (TerrainHeights == nullptr)
+		{
+			TerrainHeights = NewObject<UCorsairsTerrainHeights>(this);
+		}
+		TerrainHeights->Load(Session->GetMapName());
+
+		const bool bGrounded =
+			Character->UseTerrainHeights(Session->GetMapName());
+		if (!bGrounded)
+		{
+			DropToGround(GetWorld(), Location);
+		}
+
+		Character->SetActorLocation(
+			Location,
+			false,
+			nullptr,
+			ETeleportType::TeleportPhysics);
+		UE_LOG(
+			LogCorsairsGameMode,
+			Log,
+			TEXT("позиция от сервера: (%d, %d) на карте %s -> (%.0f, %.0f, %.0f), земля %s"),
+			Spawn.X,
+			Spawn.Y,
+			*Session->GetMapName(),
+			Location.X,
+			Location.Y,
+			Location.Z,
+			bGrounded ? TEXT("найдена") : TEXT("НЕ НАЙДЕНА"));
+
+		// Направление взгляда задаётся явно. Камера следует за поворотом
+		// контроллера, а тот наследует поворот PlayerStart — единственной
+		// точки на карте, ориентация которой к игре отношения не имеет:
+		// при её нулевом наклоне камера смотрит в горизонт, а при любом
+		// другом — в небо или в землю. Вид сверху под наклоном повторяет
+		// обзор оригинала.
+		if (AController* ViewController = Character->GetController())
+		{
+			ViewController->SetControlRotation(
+				FRotator(CameraPitch, 0.0, 0.0));
+		}
+
+		// С этого момента персонаж сам сообщает серверу о перемещении.
+		Character->AttachSession(Session);
 		break;
 	}
 
@@ -292,80 +302,148 @@ void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 	}
 	const FRotator Rotation(0.0, static_cast<double>(Actor.Angle) / 10.0, 0.0);
 
-	ACorsairsPlayerCharacter* Spawned = World->SpawnActor<ACorsairsPlayerCharacter>(
-		ACorsairsPlayerCharacter::StaticClass(), Location, Rotation);
+	ACorsairsCharacter* Spawned = World->SpawnActor<ACorsairsCharacter>(
+		ACorsairsCharacter::StaticClass(),
+		Location,
+		Rotation);
 	if (Spawned == nullptr)
 	{
 		return;
 	}
 
+#if WITH_EDITOR
 	Spawned->SetActorLabel(Actor.Name.IsEmpty()
 							   ? FString::Printf(TEXT("Actor_%lld"), Actor.WorldId)
 							   : Actor.Name);
+#endif
 
-	const FString MeshPath = ResolveBodyMesh(Actor.TypeId);
-	if (!MeshPath.IsEmpty() && Spawned->SetBodyMesh(MeshPath))
-	{
-		const FString AnimPath = ResolveField(Actor.TypeId, TEXT("animation"));
-		if (!AnimPath.IsEmpty())
-		{
-			Spawned->SetBodyAnimation(AnimPath);
-		}
-	}
+	ResolveAndApplyAppearance(
+		Spawned,
+		Actor.TypeId,
+		Actor.Look,
+		Actor.Name,
+		Actor.WorldId);
 
 	WorldActors.Add(Actor.WorldId, Spawned);
+	WorldActorNames.Add(Actor.WorldId, Actor.Name);
+	WorldActorArchetypes.Add(Actor.WorldId, Actor.TypeId);
 }
 
 void ACorsairsGameMode::HandleActorLeft(int64 WorldId)
 {
-	if (TObjectPtr<AActor>* Found = WorldActors.Find(WorldId))
+	if (TObjectPtr<ACorsairsCharacter>* Found = WorldActors.Find(WorldId))
 	{
 		if (*Found != nullptr)
 		{
 			(*Found)->Destroy();
 		}
 		WorldActors.Remove(WorldId);
+		WorldActorNames.Remove(WorldId);
+		WorldActorArchetypes.Remove(WorldId);
 	}
 }
 
-FString ACorsairsGameMode::ResolveBodyMesh(int32 TypeId) const
+void ACorsairsGameMode::HandleActorLookChanged(
+	const int64 WorldId,
+	const FCorsairsCharacterLook& Look)
 {
-	return ResolveField(TypeId, TEXT("mesh"));
+	if (Session != nullptr)
+	{
+		const FCorsairsWorldActor LocalActor = Session->GetLocalActor();
+		if (LocalActor.WorldId == WorldId)
+		{
+			APlayerController* Controller =
+				UGameplayStatics::GetPlayerController(this, 0);
+			ACorsairsCharacter* Character =
+				Controller != nullptr
+					? Cast<ACorsairsCharacter>(Controller->GetPawn())
+					: nullptr;
+			ResolveAndApplyAppearance(
+				Character,
+				LocalActor.TypeId,
+				LocalActor.Look,
+				LocalActor.Name,
+				LocalActor.WorldId);
+			return;
+		}
+	}
+
+	const TObjectPtr<ACorsairsCharacter>* Found =
+		WorldActors.Find(WorldId);
+	if (Found == nullptr || *Found == nullptr)
+	{
+		return;
+	}
+
+	const int32 ArchetypeId = Look.TypeId != 0
+		? Look.TypeId
+		: WorldActorArchetypes.FindRef(WorldId);
+	if (Look.TypeId != 0)
+	{
+		WorldActorArchetypes.Add(WorldId, Look.TypeId);
+	}
+	ResolveAndApplyAppearance(
+		*Found,
+		ArchetypeId,
+		Look,
+		WorldActorNames.FindRef(WorldId),
+		WorldId);
 }
 
-FString ACorsairsGameMode::ResolveField(int32 TypeId, const TCHAR* Field) const
+bool ACorsairsGameMode::ResolveAndApplyAppearance(
+	ACorsairsCharacter* Character,
+	const int32 ArchetypeId,
+	const FCorsairsCharacterLook& Look,
+	const FString& ActorName,
+	const int64 WorldId)
 {
-	const FString Path = FPaths::ProjectDir() / CharacterMapRelativePath;
-
-	FString Text;
-	if (!FFileHelper::LoadFileToString(Text, *Path))
+	if (Character == nullptr || CharacterCatalog == nullptr)
 	{
-		UE_LOG(LogCorsairsGameMode, Warning,
-			   TEXT("нет таблицы персонажей: %s (сначала build_character_map.py)"), *Path);
-		return FString();
+		return false;
 	}
 
-	TSharedPtr<FJsonObject> Root;
-	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Text);
-	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+	const FString DisplayName = ActorName.IsEmpty()
+		? FString::Printf(TEXT("Actor_%lld"), WorldId)
+		: ActorName;
+	FCorsairsResolvedAppearance Appearance;
+	FString Error;
+	if (!CharacterCatalog->Resolve(
+			ArchetypeId,
+			Look,
+			Appearance,
+			Error))
 	{
-		UE_LOG(LogCorsairsGameMode, Warning, TEXT("таблица персонажей не разобралась"));
-		return FString();
+		UE_LOG(
+			LogCorsairsGameMode,
+			Warning,
+			TEXT("внешность %s (%lld) не разрешилась: %s"),
+			*DisplayName,
+			WorldId,
+			*Error);
+		return false;
 	}
 
-	const TSharedPtr<FJsonObject>* Characters = nullptr;
-	if (!Root->TryGetObjectField(TEXT("characters"), Characters) || Characters == nullptr)
+	for (const FString& Warning : Appearance.Warnings)
 	{
-		return FString();
+		UE_LOG(
+			LogCorsairsGameMode,
+			Warning,
+			TEXT("внешность %s (%lld): %s"),
+			*DisplayName,
+			WorldId,
+			*Warning);
 	}
 
-	const TSharedPtr<FJsonObject>* Entry = nullptr;
-	if (!(*Characters)->TryGetObjectField(FString::FromInt(TypeId), Entry) || Entry == nullptr)
+	if (!Character->ApplyAppearance(Appearance))
 	{
-		return FString();
+		UE_LOG(
+			LogCorsairsGameMode,
+			Warning,
+			TEXT("внешность %s (%lld) не применилась"),
+			*DisplayName,
+			WorldId);
+		return false;
 	}
 
-	FString Value;
-	(*Entry)->TryGetStringField(Field, Value);
-	return Value;
+	return true;
 }

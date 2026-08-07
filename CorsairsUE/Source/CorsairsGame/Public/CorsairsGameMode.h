@@ -1,11 +1,13 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "CorsairsCharacterCatalog.h"
 #include "CorsairsSession.h"
 #include "GameFramework/GameModeBase.h"
 
 #include "CorsairsGameMode.generated.h"
 
+class ACorsairsCharacter;
 class ACorsairsPlayerCharacter;
 
 /**
@@ -73,13 +75,20 @@ private:
 	UFUNCTION()
 	void HandleActorLeft(int64 WorldId);
 
-	/** Путь к модели тела по типу персонажа. Пустая строка — соответствия
-	 *  нет, и тело останется невидимым. */
-	FString ResolveBodyMesh(int32 TypeId) const;
+	/** Внешность персонажа изменилась — обновляем уже существующий актёр. */
+	UFUNCTION()
+	void HandleActorLookChanged(
+		int64 WorldId,
+		const FCorsairsCharacterLook& Look);
 
-	/** Значение поля из таблицы персонажей по типу. Пустая строка — записи
-	 *  или поля нет. */
-	FString ResolveField(int32 TypeId, const TCHAR* Field) const;
+	bool ResolveAndApplyAppearance(
+		ACorsairsCharacter* Character,
+		int32 ArchetypeId,
+		const FCorsairsCharacterLook& Look,
+		const FString& ActorName,
+		int64 WorldId);
+
+	TUniquePtr<FCorsairsCharacterCatalog> CharacterCatalog;
 
 	UPROPERTY()
 	TObjectPtr<UCorsairsSession> Session;
@@ -90,5 +99,8 @@ private:
 	 *  искать его перебором всех актёров уровня на карте с сотней тысяч
 	 *  объектов недопустимо. */
 	UPROPERTY()
-	TMap<int64, TObjectPtr<AActor>> WorldActors;
+	TMap<int64, TObjectPtr<ACorsairsCharacter>> WorldActors;
+
+	TMap<int64, FString> WorldActorNames;
+	TMap<int64, int32> WorldActorArchetypes;
 };

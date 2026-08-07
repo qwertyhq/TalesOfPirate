@@ -4,14 +4,9 @@
 #include "CorsairsLoginHud.h"
 #include "CorsairsSession.h"
 #include "Components/CapsuleComponent.h"
-#include "Components/SkeletalMeshComponent.h"
-#include "Animation/AnimSequence.h"
-#include "Engine/SkeletalMesh.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "TerrainHeights.h"
-
-DEFINE_LOG_CATEGORY_STATIC(LogCorsairsCharacter, Log, All);
 
 namespace
 {
@@ -86,87 +81,6 @@ ACorsairsPlayerCharacter::ACorsairsPlayerCharacter()
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
 
-	// Меш смещён вниз на половину капсулы: начало координат модели — под
-	// ногами, а капсулы — в центре.
-	GetMesh()->SetRelativeLocation(FVector(0.0f, 0.0f, -CapsuleHalfHeight));
-	GetMesh()->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
-}
-
-bool ACorsairsPlayerCharacter::SetBodyMesh(const FString& AssetPath)
-{
-	if (AssetPath.IsEmpty())
-	{
-		return false;
-	}
-
-	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *AssetPath);
-	if (Mesh == nullptr)
-	{
-		UE_LOG(LogCorsairsCharacter, Warning, TEXT("модель не загрузилась: %s"), *AssetPath);
-		return false;
-	}
-
-	GetMesh()->SetSkeletalMesh(Mesh);
-
-	// Модели персонажей приходят в своём масштабе — исходный движок приводил
-	// их к росту сам, и в файле он не записан. Замеренная модель имеет высоту
-	// около сорока сантиметров при капсуле в сто семьдесят шесть: без
-	// подгонки персонаж выглядит игрушкой у подножия домов.
-	const FBoxSphereBounds Bounds = Mesh->GetBounds();
-	const double ModelHeight = Bounds.BoxExtent.Z * 2.0;
-	if (ModelHeight > KINDA_SMALL_NUMBER)
-	{
-		const double Wanted = CapsuleHalfHeight * 2.0;
-		const double Factor = Wanted / ModelHeight;
-		GetMesh()->SetRelativeScale3D(FVector(Factor));
-		UE_LOG(LogCorsairsCharacter, Log,
-			   TEXT("модель %s: высота %.0f см, масштаб %.2f"),
-			   *AssetPath, ModelHeight, Factor);
-	}
-	return true;
-}
-
-bool ACorsairsPlayerCharacter::SetBodyAnimation(const FString& AssetPath)
-{
-	if (AssetPath.IsEmpty())
-	{
-		return false;
-	}
-
-	UAnimSequence* Sequence = LoadObject<UAnimSequence>(nullptr, *AssetPath);
-	if (Sequence == nullptr)
-	{
-		UE_LOG(LogCorsairsCharacter, Warning, TEXT("анимация не загрузилась: %s"), *AssetPath);
-		return false;
-	}
-
-	// Скелеты обязаны быть либо одним ассетом, либо объявленными совместимыми.
-	//
-	// Interchange заводит отдельный Skeleton на каждый импортируемый файл,
-	// поэтому у тела и дорожки они разные, даже когда деревья костей совпадают
-	// полностью. Совместимость проставляет link_character_skeletons.py; без
-	// неё UE проигрывает дорожку по именам и молча выдаёт искажённую позу
-	// вместо отказа.
-	USkeletalMesh* Body = GetMesh()->GetSkeletalMeshAsset();
-	USkeleton* BodySkeleton = Body != nullptr ? Body->GetSkeleton() : nullptr;
-	USkeleton* AnimSkeleton = Sequence->GetSkeleton();
-
-	if (BodySkeleton == nullptr || AnimSkeleton == nullptr)
-	{
-		UE_LOG(LogCorsairsCharacter, Warning, TEXT("нет скелета для %s"), *AssetPath);
-		return false;
-	}
-	if (BodySkeleton != AnimSkeleton &&
-		!AnimSkeleton->IsCompatibleForEditor(BodySkeleton))
-	{
-		UE_LOG(LogCorsairsCharacter, Warning,
-			   TEXT("скелет анимации несовместим со скелетом тела: %s"), *AssetPath);
-		return false;
-	}
-
-	GetMesh()->SetAnimationMode(EAnimationMode::AnimationSingleNode);
-	GetMesh()->PlayAnimation(Sequence, true);
-	return true;
 }
 
 void ACorsairsPlayerCharacter::AttachSession(UCorsairsSession* InSession)
