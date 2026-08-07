@@ -10,6 +10,8 @@
   <!-- Порядок значим: F# видит только то, что объявлено выше. -->
   <ItemGroup>
     <Compile Include="Blake2s.fs" />
+    <Compile Include="Session.fs" />
+    <Compile Include="Mechanics.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
