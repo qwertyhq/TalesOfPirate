@@ -31,6 +31,7 @@ add_library(AssetConverterLib STATIC
     src/LabParser.cpp
     src/LmoParser.cpp
     src/MapParser.cpp
+    src/MapSectionReader.cpp
     src/SceneObjParser.cpp
     src/MapWriter.cpp
     src/TextureResolver.cpp
@@ -64,6 +65,7 @@ add_executable(AssetConverterTests
     tests/TestGltfSkeletonWriter.cpp
     tests/TestLmoParser.cpp
     tests/TestMapParser.cpp
+    tests/TestMapSectionReader.cpp
     tests/TestTextureResolver.cpp
 )
 target_link_libraries(AssetConverterTests PRIVATE AssetConverterLib)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Corsairs/Tools/AssetConverter/TerrainPage.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -42,28 +44,9 @@ struct MapFileHeader {
     std::int32_t SectionHeight;
 };
 
-// Один тайл террейна, ровно 15 байт.
-//   TileInfo — три верхних слоя текстур, по 10 бит (6 текстура + 4 альфа);
-//   BaseTex  — базовый слой, всегда непрозрачный;
-//   Color    — RGB565 тонировки;
-//   Height   — высота в единицах по 10 см;
-//   Region   — идентификатор региона;
-//   Island   — индекс плавающей платформы;
-//   Block    — флаги проходимости по четвертям тайла.
-struct MapTile {
-    std::uint32_t TileInfo;
-    std::uint8_t BaseTex;
-    std::int16_t Color;
-    std::int8_t Height;
-    std::int16_t Region;
-    std::uint8_t Island;
-    std::uint8_t Block[4];
-};
-
 #pragma pack(pop)
 
 static_assert(sizeof(MapFileHeader) == 20, "MapFileHeader: раскладка на диске 20 байт");
-static_assert(sizeof(MapTile) == 15, "MapTile: раскладка на диске 15 байт");
 
 // Разобранный террейн. Tiles покрывает всю сетку Width x Height; секции, для
 // которых в файле нет данных, заполнены нулями.
