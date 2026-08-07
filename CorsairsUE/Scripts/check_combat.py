@@ -54,6 +54,16 @@ ATTR_GOLD = 8
 HUNT_X = 2092
 HUNT_Y = 2654
 
+# Карта для проверки перехода. Обязана обслуживаться этим GameServer: список
+# его карт виден в журнале при старте.
+HOME_MAP = "garner"
+HOME_X = 2246
+HOME_Y = 2704
+
+OTHER_MAP = "magicsea"
+OTHER_X = 1350
+OTHER_Y = 550
+
 
 def pump(session, seconds):
     """Качает приём заданное время, отдавая сообщения обработчику."""
@@ -76,6 +86,12 @@ def pump_until_stage(session, wanted, timeout=40.0):
 
 def actors_of(session, ctrl):
     return [a for a in session.get_visible_actors() if a.ctrl_type == ctrl]
+
+
+def by_distance(session, ctrl):
+    spawn = session.get_spawn_position()
+    return sorted(actors_of(session, ctrl),
+                  key=lambda a: (a.position.x - spawn.x) ** 2 + (a.position.y - spawn.y) ** 2)
 
 
 def nearest(session, ctrl):
@@ -146,6 +162,16 @@ def main(report):
     if stage != unreal.CorsairsLoginStage.IN_WORLD:
         report.error("ПРОВАЛ: вход в мир не прошёл")
         return
+
+    # Персонаж остаётся там, куда его увёл прошлый прогон. Возвращаем его на
+    # обжитую карту, иначе не найдётся ни NPC, ни знакомых монстров.
+    if session.get_map_name() != HOME_MAP:
+        session.say(f"&move {HOME_X},{HOME_Y},{HOME_MAP}")
+        deadline = time.time() + 25.0
+        while time.time() < deadline and session.get_map_name() != HOME_MAP:
+            session.poll()
+            time.sleep(POLL_INTERVAL)
+        report.line(f"возврат на {session.get_map_name()}")
 
     spawn = session.get_spawn_position()
     report.line(f"В МИРЕ: карта {session.get_map_name()}, позиция ({spawn.x}, {spawn.y})")
@@ -220,10 +246,15 @@ def main(report):
     session.say("&make 641,1")
     pump(session, 4.0)
     goods = next((g for g, i in session.get_kitbag().items() if i == 641), None)
-    trader = nearest(session, CTRL_NPC)
-    if goods is None or trader is None:
+    # Перебираем нескольких: не всякий NPC торгует, и отказ одного ничего не
+    # говорит о механике сделки.
+    traders = by_distance(session, CTRL_NPC)[:4]
+    sold = False
+    if goods is None or not traders:
         report.warn("продавать нечего или некому — торговля не проверяется")
-    else:
+    for trader in ([] if goods is None else traders):
+        if sold:
+            break
         # Подходим и открываем лавку: сделка ссылается на начатый разговор.
         session.say(f"&move {trader.position.x // 100},{trader.position.y // 100}")
         pump(session, 3.0)
@@ -242,8 +273,26 @@ def main(report):
         if gold_before >= 0 and gold_after > gold_before:
             passed.append(f"вещь продана «{trader.name}»: "
                           f"денег {gold_before} → {gold_after}")
-        else:
-            failed.append("денег не прибыло — продажа не прошла")
+            sold = True
+
+    if goods is not None and traders and not sold:
+        failed.append("ни один NPC не купил вещь")
+
+    # ── переход между картами ───────────────────────────────────────────
+    # Соединение при этом не рвётся: Gate сохраняет канал и переводит клиента
+    # на сервер целевой карты, откуда приходит новый вход в карту. Клиенту
+    # остаётся дождаться его — переподключение было бы ошибкой.
+    before_map = session.get_map_name()
+    session.say(f"&move {OTHER_X},{OTHER_Y},{OTHER_MAP}")
+    deadline = time.time() + 25.0
+    while time.time() < deadline and session.get_map_name() == before_map:
+        session.poll()
+        time.sleep(POLL_INTERVAL)
+
+    if session.get_map_name() == OTHER_MAP:
+        passed.append(f"переход «{before_map}» → «{session.get_map_name()}»")
+    else:
+        failed.append(f"остались на «{session.get_map_name()}» вместо «{OTHER_MAP}»")
 
     session.logout()
 

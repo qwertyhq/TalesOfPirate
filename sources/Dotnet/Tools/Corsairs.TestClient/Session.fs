@@ -553,9 +553,8 @@ let connect (host: string) (port: int) (account: string) (password: string)
 
 /// Ждёт, пока сервер закроет соединение.
 ///
-/// При переходе на другую карту GameServer отключает игрока: карта живёт на
-/// своём сервере, и Gate направляет клиента туда заново. Разрыв здесь —
-/// штатное завершение перехода, а не сбой.
+/// Нужно там, где сервер сам обрывает связь: при отказе входа или кике. Для
+/// перехода между картами это НЕ требуется — Gate сохраняет канал.
 let awaitDisconnect (live: Live) (seconds: float) : bool =
     let deadline = DateTime.UtcNow.AddSeconds(seconds)
     let mutable closed = false
@@ -650,3 +649,64 @@ let pickItem (live: Live) (worldId: int64) (handle: int64) =
     packet.WriteInt64(worldId)
     packet.WriteInt64(handle)
     send live &packet
+
+
+/// Ждёт нового входа в карту после перехода.
+///
+/// Соединение при переходе не рвётся: GameServer отключает игрока у себя, но
+/// Gate удерживает канал клиента и переводит его на сервер целевой карты,
+/// откуда приходит новый MC_ENTERMAP. Клиенту остаётся дождаться его и
+/// перечитать своё положение — переподключение было бы ошибкой.
+let awaitMapEntry (live: Live) (seconds: float) : Result<string, string> =
+    // Читаем короткими попытками и глотаем тайм-ауты: переход идёт через два
+    // сервера и занимает секунды, а долгое чтение одним куском упирается в
+    // тайм-аут сокета и вылетает исключением.
+    let deadline = DateTime.UtcNow.AddSeconds(seconds)
+    let saved = live.Stream.ReadTimeout
+    live.Stream.ReadTimeout <- 500
+    let mutable found = None
+    let mutable running = true
+    while running && DateTime.UtcNow < deadline do
+        try
+            match readPacket live.Stream with
+            | None -> running <- false
+            | Some packet ->
+                if packet.GetCmd() = Commands.CMD_MC_ENTERMAP then
+                    found <- Some packet
+                    running <- false
+                else
+                    absorb live packet
+                    packet.Dispose()
+        with :? IO.IOException -> ()
+    live.Stream.ReadTimeout <- saved
+
+    match found with
+    | None ->
+        // Отказ приходит системным сообщением, а не отдельной командой:
+        // «Cannot find the destination map» шлёт сам Gate.
+        let said = if live.Notices.Count = 0 then "молча" else String.concat " | " live.Notices
+        Error $"нового входа в карту не пришло ({said})"
+    | Some enter ->
+        let errCode = enter.ReadInt64()
+        if errCode <> 0L then
+            enter.Dispose()
+            Error $"вход в карту отклонён, код {errCode}"
+        else
+            enter.ReadInt64() |> ignore      // autoLock
+            enter.ReadInt64() |> ignore      // kitbagLock
+            enter.ReadInt64() |> ignore      // enterType
+            enter.ReadInt64() |> ignore      // isNewCha
+            let mapName = enter.ReadString()
+            enter.ReadInt64() |> ignore      // canTeam
+            enter.ReadInt64() |> ignore      // imp
+            let baseInfo = CommandMessages.Deserialize.deserializeChaBaseInfo enter
+            enter.Dispose()
+
+            live.WorldId <- baseInfo.WorldId
+            live.Handle <- baseInfo.Handle
+            live.MapName <- mapName
+            live.PosX <- baseInfo.PosX
+            live.PosY <- baseInfo.PosY
+            // Прежнее окружение осталось на старой карте.
+            live.Seen.Clear()
+            Ok mapName

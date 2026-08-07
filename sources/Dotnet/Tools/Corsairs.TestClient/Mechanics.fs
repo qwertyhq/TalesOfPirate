@@ -175,23 +175,12 @@ let private warpWithin (live: Live) (cellX: int64) (cellY: int64) =
 let private switchMap (ctx: Ctx) (mapName: string) (cellX: int64) (cellY: int64) : Result<unit, string> =
     if ctx.Live.MapName = mapName then Ok() else
 
+    ctx.Live.Notices.Clear()
     say ctx.Live $"&move {cellX},{cellY},{mapName}"
-    if not (awaitDisconnect ctx.Live 15.0) then
-        Error "сервер не отключил игрока — переход не начался"
-    else
-        // Пауза перед повторным входом: сервер ещё держит игрока в списке и
-        // отвечает «уже в игре», пока не завершит его выгрузку.
-        Threading.Thread.Sleep(3000)
-        let rec attempt (left: int) : Result<unit, string> =
-            match connect ctx.Host ctx.Port ctx.Account ctx.Password with
-            | Ok(_, live) ->
-                ctx.Live <- live
-                Ok()
-            | Error reason when left > 0 ->
-                Threading.Thread.Sleep(4000)
-                attempt (left - 1)
-            | Error reason -> Error $"повторный вход не удался: {reason}"
-        attempt 4
+    match awaitMapEntry ctx.Live 25.0 with
+    | Ok arrived when arrived = mapName -> Ok()
+    | Ok arrived -> Error $"вместо «{mapName}» оказались на «{arrived}»"
+    | Error reason -> Error reason
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Проверки
@@ -200,6 +189,14 @@ let private switchMap (ctx: Ctx) (mapName: string) (cellX: int64) (cellY: int64)
 let private checkVision =
     { Name = "поле зрения"
       Run = fun ctx ->
+        // Прогон начинается с возврата домой: персонаж остаётся там, куда его
+        // увела прошлая проверка перехода, и на чужой карте не найдётся ни
+        // NPC, ни знакомых монстров.
+        if ctx.Live.MapName <> HOME_MAP then
+            match switchMap ctx HOME_MAP HOME_X HOME_Y with
+            | Ok() -> log $"  (вернулись на {HOME_MAP})"
+            | Error reason -> log $"  (вернуться на {HOME_MAP} не вышло: {reason})"
+
         let live = ctx.Live
         if live.MapName = HOME_MAP then
             warpWithin live HOME_X HOME_Y
@@ -644,15 +641,11 @@ let private ALL =
       checkPickup
       // Инвентарь последним: выдача предмета — тоже действие, и следующий за
       // ней удар сервер отклоняет, пока прежнее действие не завершилось.
-      checkKitbag ]
+      checkKitbag
+      checkSwitchMap ]
 
-// checkSwitchMap намеренно не входит в прогон. Переход между картами — это не
-// одна команда, а переключение сервера: GameServer отключает игрока и через
-// Gate передаёт его на сервер целевой карты. Бот получает лишь разрыв, не зная
-// адреса назначения, и повторный вход попадает в подвешенное состояние, из
-// которого GameServer выходит только перезапуском. Механика останется
-// непокрытой, пока бот не научится читать указание Gate, — и это же придётся
-// реализовать клиенту на Unreal.
+// Переход между картами идёт последним: он уводит персонажа с карты, где
+// стоят NPC и монстры, и все проверки после него оказались бы в пустоте.
 
 let run (host: string) (port: int) (account: string) (password: string)
         (live: Live) (skillId: int64) (summonId: int64) : int =
