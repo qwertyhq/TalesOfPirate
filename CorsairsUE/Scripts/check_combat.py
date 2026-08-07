@@ -65,6 +65,20 @@ OTHER_X = 1350
 OTHER_Y = 550
 
 
+def action_sent(report, action, result):
+    if result == unreal.CorsairsActionRequestResult.SENT:
+        return True
+    if result == unreal.CorsairsActionRequestResult.BUSY:
+        report.error(f"ПРОВАЛ: {action}: другое действие ещё выполняется")
+    elif result == unreal.CorsairsActionRequestResult.INVALID:
+        report.error(f"ПРОВАЛ: {action}: запрос недопустим")
+    elif result == unreal.CorsairsActionRequestResult.TRANSPORT_FAILED:
+        report.error(f"ПРОВАЛ: {action}: транспорт не отправил пакет")
+    else:
+        report.error(f"ПРОВАЛ: {action}: неизвестный результат {result}")
+    return False
+
+
 def pump(session, seconds):
     """Качает приём заданное время, отдавая сообщения обработчику."""
     deadline = time.time() + seconds
@@ -116,7 +130,9 @@ def equip_weapon(report, session):
     kitbag = session.get_kitbag()
     for grid, item in kitbag.items():
         if item == WEAPON_ITEM:
-            session.equip_item(grid, EQUIP_RHAND)
+            result = session.equip_item(grid, EQUIP_RHAND)
+            if not action_sent(report, "экипировка оружия", result):
+                return False
             pump(session, 3.0)
             report.line(f"  оружие {item} из ячейки {grid} надето")
             return True
@@ -229,13 +245,15 @@ def main(report):
         for skill_id in ATTACK_SKILLS:
             session.say(f"&skill {skill_id},1")
             pump(session, 2.0)
-            if session.use_skill_on(skill_id, mons.world_id):
-                pump(session, 8.0)
-                if hp_of(session, mons.world_id) < hp_before:
-                    passed.append(f"удар умением {skill_id} по «{mons.name}»: "
-                                  f"здоровье {hp_before} → {hp_of(session, mons.world_id)}")
-                    struck = True
-                    break
+            result = session.use_skill_on(skill_id, mons.world_id)
+            if not action_sent(report, f"умение {skill_id}", result):
+                continue
+            pump(session, 8.0)
+            if hp_of(session, mons.world_id) < hp_before:
+                passed.append(f"удар умением {skill_id} по «{mons.name}»: "
+                              f"здоровье {hp_before} → {hp_of(session, mons.world_id)}")
+                struck = True
+                break
         if not struck:
             failed.append(f"ни одно умение не сняло здоровья с «{mons.name}»")
 

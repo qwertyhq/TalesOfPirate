@@ -42,6 +42,20 @@ def stage_name(stage):
     return STAGE_NAMES.get(stage, str(stage))
 
 
+def action_sent(report, action, result):
+    if result == unreal.CorsairsActionRequestResult.SENT:
+        return True
+    if result == unreal.CorsairsActionRequestResult.BUSY:
+        report.error(f"ПРОВАЛ: {action}: другое действие ещё выполняется")
+    elif result == unreal.CorsairsActionRequestResult.INVALID:
+        report.error(f"ПРОВАЛ: {action}: запрос недопустим")
+    elif result == unreal.CorsairsActionRequestResult.TRANSPORT_FAILED:
+        report.error(f"ПРОВАЛ: {action}: транспорт не отправил пакет")
+    else:
+        report.error(f"ПРОВАЛ: {action}: неизвестный результат {result}")
+    return False
+
+
 def pump_until(report, session, wanted, timeout=TIMEOUT_SECONDS):
     """Качает соединение, пока стадия не окажется в `wanted`.
 
@@ -116,21 +130,27 @@ def main(report):
         # сервер принимает путь, а не мгновенное положение — и отвергает
         # перемещение через непроходимые клетки.
         target = unreal.IntPoint(spawn.x + 200, spawn.y)
-        sent = session.send_move_path([spawn, target])
-        report.line(f"путь отправлен: {sent}")
+        result = session.send_move_path([spawn, target])
+        report.line(f"результат отправки пути: {result}")
 
-        if not sent:
-            report.error("ПРОВАЛ: путь движения не отправился")
+        if not action_sent(report, "путь движения", result):
             return
 
-        # Ответ приходит командой NOTIACTION; сюда она не разбирается, но
-        # разрыв соединения означал бы отвергнутый пакет.
-        for _ in range(40):
+        # Одного отсутствия разрыва недостаточно: ждём авторитетный terminal,
+        # который Session отразит в confirmed position.
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
             session.poll()
             if session.get_stage() != unreal.CorsairsLoginStage.IN_WORLD:
                 report.error("ПРОВАЛ: сервер разорвал связь после команды движения")
                 return
+            confirmed = session.get_confirmed_position()
+            if confirmed.x == target.x and confirmed.y == target.y:
+                break
             time.sleep(POLL_INTERVAL)
+        else:
+            report.error("ПРОВАЛ: сервер не подтвердил конечную точку пути")
+            return
 
         # Сервер присылает то, что попало в поле зрения: NPC, монстров и
         # других игроков. Именно так населяется мир — запекать их в уровень
@@ -151,7 +171,7 @@ def main(report):
             report.line(f"  {a.name or '(без имени)'} — тип {a.type_id}, "
                         f"позиция ({a.position.x}, {a.position.y})")
 
-        report.line("УСПЕХ: клиент в мире, команда движения принята сервером")
+        report.line("УСПЕХ: клиент в мире, движение подтверждено сервером")
     elif stage == unreal.CorsairsLoginStage.FAILED:
         report.error("ПРОВАЛ: вход в мир отклонён")
     else:

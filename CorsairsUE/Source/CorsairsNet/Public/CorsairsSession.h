@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "CorsairsActionReducer.h"
 #include "CorsairsConnection.h"
 #include "UObject/Object.h"
 
@@ -96,6 +97,9 @@ struct FCorsairsWorldActor
 	int64 Hp = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	double MovementSpeedCmPerSecond = 0.0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
 	FCorsairsCharacterLook Look;
 };
 
@@ -105,6 +109,14 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCorsairsActorLeft, int64, WorldId);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FCorsairsActorLookChanged,
 											 int64, WorldId,
 											 const FCorsairsCharacterLook&, Look);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+	FCorsairsMovementChanged,
+	const FCorsairsMovementEvent&,
+	Event);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+	FCorsairsProtocolError,
+	const FString&,
+	Message);
 
 /** Стадия входа. Именно она определяет, что показывать на экране. */
 UENUM(BlueprintType)
@@ -187,6 +199,12 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
 	FCorsairsActorLookChanged OnActorLookChanged;
 
+	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
+	FCorsairsMovementChanged OnMovementChanged;
+
+	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
+	FCorsairsProtocolError OnProtocolError;
+
 	/** Отправляет серверу путь движения.
 	 *
 	 *  Путь — список точек в координатах карты (100 единиц на клетку). Сервер
@@ -196,7 +214,21 @@ public:
 	 *
 	 *  Первой точкой должно идти текущее положение персонажа. */
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
-	bool SendMovePath(const TArray<FIntPoint>& Path);
+	ECorsairsActionRequestResult SendMovePath(
+		const TArray<FIntPoint>& Path);
+
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	ECorsairsActionRequestResult SubmitPredictedPosition(
+		FIntPoint Endpoint);
+
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	FIntPoint GetConfirmedPosition() const;
+
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	bool IsMovementAuthorityLocked() const;
+
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	double GetMovementSpeedCmPerSecond() const;
 
 	/** Применяет умение к цели.
 	 *
@@ -208,7 +240,8 @@ public:
 	 *  случится — по цели не придёт ничего. Молчание здесь неотличимо от
 	 *  поломки, поэтому оружие надевается заранее. */
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
-	bool UseSkillOn(int64 SkillId, int64 TargetWorldId);
+	ECorsairsActionRequestResult UseSkillOn(
+		int64 SkillId, int64 TargetWorldId);
 
 	/** Надевает вещь: перекладывает её из ячейки сумки в слот экипировки.
 	 *
@@ -216,11 +249,13 @@ public:
 	 *  а не номерами предметов, поэтому содержимое сумки нужно знать заранее;
 	 *  оно приходит внутри входа в карту. */
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
-	bool EquipItem(int64 FromGrid, int64 ToSlot);
+	ECorsairsActionRequestResult EquipItem(
+		int64 FromGrid, int64 ToSlot);
 
 	/** Поднимает лежащий на земле предмет. */
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
-	bool PickUpItem(int64 ItemWorldId, int64 ItemHandle);
+	ECorsairsActionRequestResult PickUpItem(
+		int64 ItemWorldId, int64 ItemHandle);
 
 	/** Начинает разговор с NPC.
 	 *
@@ -292,6 +327,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Corsairs")
 	FString Password2 = TEXT("test1234");
 
+#if !UE_BUILD_SHIPPING
+	int64 GetMovementBeginSendCountForDiagnostics() const;
+	bool HasPendingMoveForDiagnostics() const;
+#endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+	void SetSendOverrideForTests(
+		TFunction<bool(Corsairs::Net::WPacket&)> Override);
+	void SetInWorldForTests(
+		int64 InWorldId, FIntPoint Spawn);
+	void HandlePacketForTests(
+		Corsairs::Net::RPacket& Packet);
+	void HandleConnectionStateForTests(
+		ECorsairsConnectionState NewState,
+		const FString& Reason);
+	void SetEventObserversForTests(
+		TFunction<void(const FCorsairsMovementEvent&)> MovementObserver,
+		TFunction<void(const FString&)> ProtocolErrorObserver,
+		TFunction<void(ECorsairsLoginStage)> StageObserver);
+#endif
+
 private:
 	void HandlePacket(Corsairs::Net::RPacket& Packet);
 	void HandleConnectionState(ECorsairsConnectionState NewState, const FString& Reason);
@@ -300,6 +356,13 @@ private:
 	void SendCreatePassword2();
 
 	void SetStage(ECorsairsLoginStage NewStage, const FString& Message);
+	ECorsairsActionRequestResult SendMoveFromConfirmed(
+		FIntPoint Endpoint);
+	bool SendBeginActionPacket(
+		Corsairs::Net::WPacket& Packet);
+	bool CanSendBeginActionPacket() const;
+	void ApplyReducerEffects(
+		const FCorsairsReducerEffects& Effects);
 
 	UPROPERTY()
 	TObjectPtr<UCorsairsConnection> Connection;
@@ -315,6 +378,9 @@ private:
 	/** Номер пакета действия. Сервер отслеживает порядок команд по нему и
 	 *  отбрасывает устаревшие. */
 	int64 ActionPacketId = 0;
+	FCorsairsActionReducer ActionReducer;
+	uint64 ActionReducerGeneration = 0;
+	int64 MovementBeginSendCount = 0;
 
 	TMap<int32, int32> ReceivedCommands;
 	TArray<FCorsairsWorldActor> VisibleActors;
@@ -332,4 +398,11 @@ private:
 	FString PendingAccount;
 	FString PendingPasswordHash;
 	bool bHasPassword2 = false;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	TFunction<bool(Corsairs::Net::WPacket&)> TestSendOverride;
+	TFunction<void(const FCorsairsMovementEvent&)> TestMovementObserver;
+	TFunction<void(const FString&)> TestProtocolErrorObserver;
+	TFunction<void(ECorsairsLoginStage)> TestStageObserver;
+#endif
 };

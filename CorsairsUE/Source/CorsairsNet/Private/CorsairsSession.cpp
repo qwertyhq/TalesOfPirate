@@ -25,6 +25,8 @@ namespace
 	/** Номер атрибута здоровья (ChaAttrType.h). Массив атрибутов плотный, без
 	 *  дыр, поэтому номера заданы числами. */
 	constexpr int64 kAttrHp = 1;
+	constexpr int64 kAttrMovementSpeed = 44;
+	constexpr double kMovementReportDistanceCm = 100.0;
 
 	/** Действия внутри разговора с NPC (BuildNpcActionTable в NpcScript.cpp).
 	 *  Сервер читает код действия вторым полем и по нему выбирает ветку
@@ -36,6 +38,16 @@ namespace
 	FString ToFString(const std::string& Value)
 	{
 		return FString(UTF8_TO_TCHAR(Value.c_str()));
+	}
+
+	bool IsBelowMovementReportDistance(
+		const FIntPoint From,
+		const FIntPoint To)
+	{
+		const double DeltaX = static_cast<double>(To.X) - From.X;
+		const double DeltaY = static_cast<double>(To.Y) - From.Y;
+		return DeltaX * DeltaX + DeltaY * DeltaY <
+			kMovementReportDistanceCm * kMovementReportDistanceCm;
 	}
 }
 
@@ -90,16 +102,21 @@ void UCorsairsSession::EnterWorld(int32 SlotIndex)
 			 FString::Printf(TEXT("вход персонажем %s"), *Characters[SlotIndex].Name));
 }
 
-bool UCorsairsSession::SendMovePath(const TArray<FIntPoint>& Path)
+ECorsairsActionRequestResult UCorsairsSession::SendMovePath(
+	const TArray<FIntPoint>& Path)
 {
-	if (Connection == nullptr || Stage != ECorsairsLoginStage::InWorld)
+	if (Stage != ECorsairsLoginStage::InWorld)
 	{
-		return false;
+		return ECorsairsActionRequestResult::Invalid;
+	}
+	if (!CanSendBeginActionPacket())
+	{
+		return ECorsairsActionRequestResult::TransportFailed;
 	}
 	if (Path.Num() < 2)
 	{
 		// Путь из одной точки сервер трактует как отсутствие движения.
-		return false;
+		return ECorsairsActionRequestResult::Invalid;
 	}
 
 	// Точки укладываются в двоичный блок ровно так, как их читает сервер:
@@ -116,11 +133,88 @@ bool UCorsairsSession::SendMovePath(const TArray<FIntPoint>& Path)
 	WPacket Packet(64 + Blob.Num());
 	Packet.WriteCmd(CMD_CM_BEGINACTION);
 	Packet.WriteInt64(WorldId);
-	Packet.WriteInt64(++ActionPacketId);
+	const int64 PacketId = ++ActionPacketId;
+	Packet.WriteInt64(PacketId);
 	Packet.WriteInt64(Corsairs::Net::Msg::ActionType::MOVE);
 	Packet.WriteSequence(Blob.GetData(), static_cast<uint16>(Blob.Num()));
 
-	return Connection->Send(Packet);
+	const FCorsairsPendingMove PendingMove{
+		PacketId,
+		Path[0],
+		Path.Last(),
+	};
+	const uint64 BeginGeneration = ActionReducerGeneration;
+	ECorsairsActionRequestResult Result = ActionReducer.Begin(
+		PacketId,
+		ECorsairsBeginActionType::Move,
+		PendingMove,
+		[&]() { return SendBeginActionPacket(Packet); });
+	if (ActionReducerGeneration != BeginGeneration)
+	{
+		if (Stage == ECorsairsLoginStage::InWorld)
+		{
+			ActionReducer.EnterWorld(WorldId, SpawnPosition);
+		}
+		else
+		{
+			ActionReducer.Reset();
+		}
+		Result = ECorsairsActionRequestResult::TransportFailed;
+	}
+	if (Result == ECorsairsActionRequestResult::Sent)
+	{
+		++MovementBeginSendCount;
+	}
+	return Result;
+}
+
+ECorsairsActionRequestResult UCorsairsSession::SubmitPredictedPosition(
+	const FIntPoint Endpoint)
+{
+	const TOptional<FCorsairsActiveBeginAction>& ActiveAction =
+		ActionReducer.GetActiveAction();
+	if (!ActiveAction.IsSet())
+	{
+		if (IsBelowMovementReportDistance(
+			ActionReducer.GetConfirmedPosition(), Endpoint))
+		{
+			return ECorsairsActionRequestResult::Invalid;
+		}
+		return SendMoveFromConfirmed(Endpoint);
+	}
+
+	const TOptional<FCorsairsPendingMove>& PendingMove =
+		ActionReducer.GetPendingMove();
+	if (!PendingMove.IsSet())
+	{
+		return ECorsairsActionRequestResult::Busy;
+	}
+
+	const FIntPoint Baseline = ActionReducer.GetQueuedEndpoint().IsSet()
+		? ActionReducer.GetQueuedEndpoint().GetValue()
+		: PendingMove->RequestedEndpoint;
+	if (IsBelowMovementReportDistance(Baseline, Endpoint))
+	{
+		return ECorsairsActionRequestResult::Busy;
+	}
+	ActionReducer.QueueEndpoint(Endpoint);
+	return ECorsairsActionRequestResult::Busy;
+}
+
+FIntPoint UCorsairsSession::GetConfirmedPosition() const
+{
+	return ActionReducer.GetConfirmedPosition();
+}
+
+bool UCorsairsSession::IsMovementAuthorityLocked() const
+{
+	return ActionReducer.IsMovementAuthorityLocked();
+}
+
+double UCorsairsSession::GetMovementSpeedCmPerSecond() const
+{
+	const int64* Speed = Attributes.Find(kAttrMovementSpeed);
+	return Speed != nullptr ? static_cast<double>(*Speed) : 0.0;
 }
 
 const FCorsairsWorldActor* UCorsairsSession::FindActor(int64 TargetWorldId) const
@@ -129,24 +223,32 @@ const FCorsairsWorldActor* UCorsairsSession::FindActor(int64 TargetWorldId) cons
 		[TargetWorldId](const FCorsairsWorldActor& A) { return A.WorldId == TargetWorldId; });
 }
 
-bool UCorsairsSession::UseSkillOn(int64 SkillId, int64 TargetWorldId)
+ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
+	const int64 SkillId,
+	const int64 TargetWorldId)
 {
-	if (Connection == nullptr || Stage != ECorsairsLoginStage::InWorld)
+	if (Stage != ECorsairsLoginStage::InWorld)
 	{
-		return false;
+		return ECorsairsActionRequestResult::Invalid;
+	}
+	if (!CanSendBeginActionPacket())
+	{
+		return ECorsairsActionRequestResult::TransportFailed;
 	}
 	const FCorsairsWorldActor* Target = FindActor(TargetWorldId);
 	if (Target == nullptr)
 	{
 		// Цели нет в поле зрения — сервер всё равно ответил бы отказом
 		// «цели не существует», и разбирать его пришлось бы вслепую.
-		return false;
+		return ECorsairsActionRequestResult::Invalid;
 	}
 
 	// Путь ведёт от персонажа к цели. Сервер сам проводит по нему персонажа и
 	// бьёт по прибытии; путь из одной точки он не разыгрывает вовсе.
+	const FIntPoint ConfirmedPosition =
+		ActionReducer.GetConfirmedPosition();
 	const int32 Coordinates[4] = {
-		SpawnPosition.X, SpawnPosition.Y,
+		ConfirmedPosition.X, ConfirmedPosition.Y,
 		Target->Position.X, Target->Position.Y };
 	TArray<uint8> Blob;
 	Blob.Append(reinterpret_cast<const uint8*>(Coordinates), sizeof(Coordinates));
@@ -154,49 +256,210 @@ bool UCorsairsSession::UseSkillOn(int64 SkillId, int64 TargetWorldId)
 	WPacket Packet(128 + Blob.Num());
 	Packet.WriteCmd(CMD_CM_BEGINACTION);
 	Packet.WriteInt64(WorldId);
-	Packet.WriteInt64(++ActionPacketId);
+	const int64 PacketId = ++ActionPacketId;
+	Packet.WriteInt64(PacketId);
 	Packet.WriteInt64(Corsairs::Net::Msg::ActionType::SKILL);
 	// Признак движения строго 2 — «подойти и ударить». С нулём сервер молчит.
 	Packet.WriteInt64(2);
-	Packet.WriteInt64(ActionPacketId);
+	Packet.WriteInt64(PacketId);
 	Packet.WriteSequence(Blob.GetData(), static_cast<uint16>(Blob.Num()));
 	Packet.WriteInt64(SkillId);
 	Packet.WriteInt64(Target->WorldId);
 	Packet.WriteInt64(Target->Handle);
 
-	return Connection->Send(Packet);
+	const uint64 BeginGeneration = ActionReducerGeneration;
+	ECorsairsActionRequestResult Result = ActionReducer.Begin(
+		PacketId,
+		ECorsairsBeginActionType::Skill,
+		TOptional<FCorsairsPendingMove>(),
+		[&]() { return SendBeginActionPacket(Packet); });
+	if (ActionReducerGeneration != BeginGeneration)
+	{
+		if (Stage == ECorsairsLoginStage::InWorld)
+		{
+			ActionReducer.EnterWorld(WorldId, SpawnPosition);
+		}
+		else
+		{
+			ActionReducer.Reset();
+		}
+		Result = ECorsairsActionRequestResult::TransportFailed;
+	}
+	return Result;
 }
 
-bool UCorsairsSession::EquipItem(int64 FromGrid, int64 ToSlot)
+ECorsairsActionRequestResult UCorsairsSession::EquipItem(
+	const int64 FromGrid,
+	const int64 ToSlot)
 {
-	if (Connection == nullptr || Stage != ECorsairsLoginStage::InWorld)
+	if (Stage != ECorsairsLoginStage::InWorld)
 	{
-		return false;
+		return ECorsairsActionRequestResult::Invalid;
+	}
+	if (!CanSendBeginActionPacket())
+	{
+		return ECorsairsActionRequestResult::TransportFailed;
 	}
 	WPacket Packet(64);
 	Packet.WriteCmd(CMD_CM_BEGINACTION);
 	Packet.WriteInt64(WorldId);
-	Packet.WriteInt64(++ActionPacketId);
+	const int64 PacketId = ++ActionPacketId;
+	Packet.WriteInt64(PacketId);
 	Packet.WriteInt64(Corsairs::Net::Msg::ActionType::ITEM_USE);
 	Packet.WriteInt64(FromGrid);
 	Packet.WriteInt64(ToSlot);
-	return Connection->Send(Packet);
+	const uint64 BeginGeneration = ActionReducerGeneration;
+	ECorsairsActionRequestResult Result = ActionReducer.Begin(
+		PacketId,
+		ECorsairsBeginActionType::ItemUse,
+		TOptional<FCorsairsPendingMove>(),
+		[&]() { return SendBeginActionPacket(Packet); });
+	if (ActionReducerGeneration != BeginGeneration)
+	{
+		if (Stage == ECorsairsLoginStage::InWorld)
+		{
+			ActionReducer.EnterWorld(WorldId, SpawnPosition);
+		}
+		else
+		{
+			ActionReducer.Reset();
+		}
+		Result = ECorsairsActionRequestResult::TransportFailed;
+	}
+	return Result;
 }
 
-bool UCorsairsSession::PickUpItem(int64 ItemWorldId, int64 ItemHandle)
+ECorsairsActionRequestResult UCorsairsSession::PickUpItem(
+	const int64 ItemWorldId,
+	const int64 ItemHandle)
 {
-	if (Connection == nullptr || Stage != ECorsairsLoginStage::InWorld)
+	if (Stage != ECorsairsLoginStage::InWorld)
 	{
-		return false;
+		return ECorsairsActionRequestResult::Invalid;
+	}
+	if (!CanSendBeginActionPacket())
+	{
+		return ECorsairsActionRequestResult::TransportFailed;
 	}
 	WPacket Packet(64);
 	Packet.WriteCmd(CMD_CM_BEGINACTION);
 	Packet.WriteInt64(WorldId);
-	Packet.WriteInt64(++ActionPacketId);
+	const int64 PacketId = ++ActionPacketId;
+	Packet.WriteInt64(PacketId);
 	Packet.WriteInt64(Corsairs::Net::Msg::ActionType::ITEM_PICK);
 	Packet.WriteInt64(ItemWorldId);
 	Packet.WriteInt64(ItemHandle);
-	return Connection->Send(Packet);
+	const uint64 BeginGeneration = ActionReducerGeneration;
+	ECorsairsActionRequestResult Result = ActionReducer.Begin(
+		PacketId,
+		ECorsairsBeginActionType::ItemPick,
+		TOptional<FCorsairsPendingMove>(),
+		[&]() { return SendBeginActionPacket(Packet); });
+	if (ActionReducerGeneration != BeginGeneration)
+	{
+		if (Stage == ECorsairsLoginStage::InWorld)
+		{
+			ActionReducer.EnterWorld(WorldId, SpawnPosition);
+		}
+		else
+		{
+			ActionReducer.Reset();
+		}
+		Result = ECorsairsActionRequestResult::TransportFailed;
+	}
+	return Result;
+}
+
+ECorsairsActionRequestResult UCorsairsSession::SendMoveFromConfirmed(
+	const FIntPoint Endpoint)
+{
+	return SendMovePath({ActionReducer.GetConfirmedPosition(), Endpoint});
+}
+
+bool UCorsairsSession::CanSendBeginActionPacket() const
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestSendOverride)
+	{
+		return true;
+	}
+#endif
+	return Connection != nullptr &&
+		Connection->GetState() == ECorsairsConnectionState::Connected;
+}
+
+bool UCorsairsSession::SendBeginActionPacket(WPacket& Packet)
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestSendOverride)
+	{
+		return TestSendOverride(Packet);
+	}
+#endif
+	return Connection != nullptr && Connection->Send(Packet);
+}
+
+void UCorsairsSession::ApplyReducerEffects(
+	const FCorsairsReducerEffects& Effects)
+{
+	const auto ReportProtocolError =
+		[this](const FString& Message)
+		{
+			OnProtocolError.Broadcast(Message);
+#if WITH_DEV_AUTOMATION_TESTS
+			if (TestProtocolErrorObserver)
+			{
+				TestProtocolErrorObserver(Message);
+			}
+#endif
+		};
+
+	if (Effects.bProtocolError)
+	{
+		ReportProtocolError(TEXT("некорректное уведомление о действии"));
+		return;
+	}
+
+	if (Effects.QueuedEndpoint.IsSet() &&
+		!IsBelowMovementReportDistance(
+			ActionReducer.GetConfirmedPosition(),
+			Effects.QueuedEndpoint.GetValue()))
+	{
+		SendMoveFromConfirmed(Effects.QueuedEndpoint.GetValue());
+	}
+
+	if (Effects.Movement.IsSet())
+	{
+		FCorsairsMovementEvent Event = Effects.Movement.GetValue();
+		if (Event.bLocal)
+		{
+			Event.MovementSpeedCmPerSecond =
+				GetMovementSpeedCmPerSecond();
+		}
+		else if (const FCorsairsWorldActor* Actor = FindActor(Event.WorldId))
+		{
+			Event.MovementSpeedCmPerSecond =
+				Actor->MovementSpeedCmPerSecond;
+		}
+
+		if (Event.bServerDriven &&
+			Event.MovementSpeedCmPerSecond <= 0.0)
+		{
+			ReportProtocolError(FString::Printf(
+				TEXT("для движения персонажа %lld отсутствует ATTR_MSPD"),
+				Event.WorldId));
+		}
+		else
+		{
+			OnMovementChanged.Broadcast(Event);
+#if WITH_DEV_AUTOMATION_TESTS
+			if (TestMovementObserver)
+			{
+				TestMovementObserver(Event);
+			}
+#endif
+		}
+	}
 }
 
 bool UCorsairsSession::TalkToNpc(int64 NpcWorldId)
@@ -274,6 +537,10 @@ void UCorsairsSession::Logout()
 		Connection = nullptr;
 	}
 	LocalActor = FCorsairsWorldActor{};
+	++ActionReducerGeneration;
+	ActionReducer.Reset();
+	ActionPacketId = 0;
+	MovementBeginSendCount = 0;
 	if (Stage != ECorsairsLoginStage::Idle)
 	{
 		SetStage(ECorsairsLoginStage::Idle, FString());
@@ -283,6 +550,15 @@ void UCorsairsSession::Logout()
 void UCorsairsSession::HandleConnectionState(ECorsairsConnectionState NewState,
 											 const FString& Reason)
 {
+	if (NewState == ECorsairsConnectionState::Failed ||
+		NewState == ECorsairsConnectionState::Disconnected)
+	{
+		++ActionReducerGeneration;
+		ActionReducer.Reset();
+		ActionPacketId = 0;
+		MovementBeginSendCount = 0;
+	}
+
 	switch (NewState)
 	{
 	case ECorsairsConnectionState::Failed:
@@ -459,10 +735,19 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 			{
 				LocalActor.Hp = Entry.attrVal;
 			}
+			else if (Entry.attrId == kAttrMovementSpeed)
+			{
+				LocalActor.MovementSpeedCmPerSecond =
+					static_cast<double>(Entry.attrVal);
+			}
 		}
 		WorldId = LocalActor.WorldId;
 		SpawnPosition = LocalActor.Position;
 		MapName = ToFString(Data.mapName);
+		ActionPacketId = 0;
+		MovementBeginSendCount = 0;
+		++ActionReducerGeneration;
+		ActionReducer.EnterWorld(WorldId, SpawnPosition);
 
 		SetStage(ECorsairsLoginStage::InWorld,
 				 FString::Printf(TEXT("карта %s, позиция (%d, %d)"),
@@ -477,6 +762,73 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		// действия, а опыт и расход бьющего — в наборе для источника.
 		Corsairs::Net::Msg::McCharacterActionMessage Message;
 		Corsairs::Net::Msg::deserialize(Packet, Message);
+
+		if (const auto* Move =
+				std::get_if<Corsairs::Net::Msg::ActionMoveData>(&Message.data))
+		{
+			ApplyReducerEffects(ActionReducer.OnMove(
+				Message.worldId,
+				Message.packetId,
+				Move->moveState,
+				TConstArrayView<uint8>(
+					Move->waypoints.data(),
+					static_cast<int32>(Move->waypoints.size()))));
+			return;
+		}
+
+		if (const auto* SkillSource =
+				std::get_if<Corsairs::Net::Msg::ActionSkillSrcData>(
+					&Message.data))
+		{
+			ApplyReducerEffects(ActionReducer.OnSkillSource(
+				Message.worldId,
+				Message.packetId,
+				SkillSource->state));
+			return;
+		}
+
+		if (const auto* KitbagUpdate =
+				std::get_if<Corsairs::Net::Msg::ChaKitbagInfo>(&Message.data))
+		{
+			if (Message.actionType == Corsairs::Net::Msg::ActionType::KITBAG &&
+				Message.worldId == WorldId)
+			{
+				if (KitbagUpdate->synType ==
+					Corsairs::Net::Msg::SYN_KITBAG_INIT)
+				{
+					Kitbag.Reset();
+				}
+				for (const auto& Item : KitbagUpdate->items)
+				{
+					if (Item.itemId > 0)
+					{
+						Kitbag.Add(Item.gridId, Item.itemId);
+					}
+					else
+					{
+						Kitbag.Remove(Item.gridId);
+					}
+				}
+			}
+			if (Message.actionType == Corsairs::Net::Msg::ActionType::KITBAG)
+			{
+				ApplyReducerEffects(ActionReducer.OnItemNotification(
+					Message.worldId,
+					Message.packetId,
+					Message.actionType));
+			}
+			return;
+		}
+
+		if (std::holds_alternative<
+				Corsairs::Net::Msg::ActionItemFailedData>(Message.data))
+		{
+			ApplyReducerEffects(ActionReducer.OnItemNotification(
+				Message.worldId,
+				Message.packetId,
+				Message.actionType));
+			return;
+		}
 
 		if (const auto* Look =
 				std::get_if<Corsairs::Net::Msg::ChaLookInfo>(&Message.data))
@@ -494,6 +846,10 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 				Actor->Look = Converted;
 				Actor->TypeId = Converted.TypeId;
 			}
+			ApplyReducerEffects(ActionReducer.OnItemNotification(
+				Message.worldId,
+				Message.packetId,
+				Message.actionType));
 			OnActorLookChanged.Broadcast(Message.worldId, Converted);
 			return;
 		}
@@ -525,6 +881,17 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		return;
 	}
 
+	if (Cmd == CMD_MC_FAILEDACTION)
+	{
+		Corsairs::Net::Msg::McFailedActionMessage Message;
+		Corsairs::Net::Msg::deserialize(Packet, Message);
+		ApplyReducerEffects(ActionReducer.OnFailedAction(
+			Message.worldId,
+			Message.actionType,
+			Message.reason));
+		return;
+	}
+
 	if (Cmd == CMD_MC_SYNATTR)
 	{
 		Corsairs::Net::Msg::McSynAttributeMessage Message;
@@ -534,6 +901,15 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 			for (const auto& Entry : Message.attr.attrs)
 			{
 				Attributes.Add(Entry.attrId, Entry.attrVal);
+				if (Entry.attrId == kAttrHp)
+				{
+					LocalActor.Hp = Entry.attrVal;
+				}
+				else if (Entry.attrId == kAttrMovementSpeed)
+				{
+					LocalActor.MovementSpeedCmPerSecond =
+						static_cast<double>(Entry.attrVal);
+				}
 			}
 		}
 		else if (FCorsairsWorldActor* Actor = VisibleActors.FindByPredicate(
@@ -545,7 +921,11 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 				if (Entry.attrId == kAttrHp)
 				{
 					Actor->Hp = Entry.attrVal;
-					break;
+				}
+				else if (Entry.attrId == kAttrMovementSpeed)
+				{
+					Actor->MovementSpeedCmPerSecond =
+						static_cast<double>(Entry.attrVal);
 				}
 			}
 		}
@@ -577,7 +957,11 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 			if (Entry.attrId == kAttrHp)
 			{
 				Actor.Hp = Entry.attrVal;
-				break;
+			}
+			else if (Entry.attrId == kAttrMovementSpeed)
+			{
+				Actor.MovementSpeedCmPerSecond =
+					static_cast<double>(Entry.attrVal);
 			}
 		}
 
@@ -595,7 +979,9 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 
 	if (Cmd == CMD_MC_CHAENDSEE)
 	{
-		const int64 WorldIdLeft = Packet.ReadInt64();
+		Corsairs::Net::Msg::McChaEndSeeMessage Message;
+		Corsairs::Net::Msg::deserialize(Packet, Message);
+		const int64 WorldIdLeft = Message.worldId;
 		VisibleActors.RemoveAll([WorldIdLeft](const FCorsairsWorldActor& A)
 								{ return A.WorldId == WorldIdLeft; });
 		OnActorLeft.Broadcast(WorldIdLeft);
@@ -611,4 +997,70 @@ void UCorsairsSession::SetStage(ECorsairsLoginStage NewStage, const FString& Mes
 	UE_LOG(LogCorsairsSession, Log, TEXT("стадия %d: %s"),
 		   static_cast<int32>(NewStage), *Message);
 	OnStageChanged.Broadcast(NewStage, Message);
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestStageObserver)
+	{
+		TestStageObserver(NewStage);
+	}
+#endif
 }
+
+#if !UE_BUILD_SHIPPING
+int64 UCorsairsSession::GetMovementBeginSendCountForDiagnostics() const
+{
+	return MovementBeginSendCount;
+}
+
+bool UCorsairsSession::HasPendingMoveForDiagnostics() const
+{
+	return ActionReducer.GetPendingMove().IsSet();
+}
+#endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+void UCorsairsSession::SetSendOverrideForTests(
+	TFunction<bool(WPacket&)> Override)
+{
+	TestSendOverride = MoveTemp(Override);
+}
+
+void UCorsairsSession::SetInWorldForTests(
+	const int64 InWorldId,
+	const FIntPoint Spawn)
+{
+	WorldId = InWorldId;
+	SpawnPosition = Spawn;
+	LocalActor = FCorsairsWorldActor{};
+	LocalActor.WorldId = InWorldId;
+	LocalActor.Position = Spawn;
+	VisibleActors.Reset();
+	Attributes.Reset();
+	ActionPacketId = 0;
+	MovementBeginSendCount = 0;
+	++ActionReducerGeneration;
+	ActionReducer.EnterWorld(InWorldId, Spawn);
+	Stage = ECorsairsLoginStage::InWorld;
+}
+
+void UCorsairsSession::HandlePacketForTests(RPacket& Packet)
+{
+	HandlePacket(Packet);
+}
+
+void UCorsairsSession::HandleConnectionStateForTests(
+	const ECorsairsConnectionState NewState,
+	const FString& Reason)
+{
+	HandleConnectionState(NewState, Reason);
+}
+
+void UCorsairsSession::SetEventObserversForTests(
+	TFunction<void(const FCorsairsMovementEvent&)> MovementObserver,
+	TFunction<void(const FString&)> ProtocolErrorObserver,
+	TFunction<void(ECorsairsLoginStage)> StageObserver)
+{
+	TestMovementObserver = MoveTemp(MovementObserver);
+	TestProtocolErrorObserver = MoveTemp(ProtocolErrorObserver);
+	TestStageObserver = MoveTemp(StageObserver);
+}
+#endif

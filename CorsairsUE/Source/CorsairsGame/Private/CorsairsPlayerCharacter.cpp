@@ -222,7 +222,8 @@ void ACorsairsPlayerCharacter::ReportMovement()
 	TArray<FIntPoint> Path;
 	Path.Add(ReportedPosition);
 	Path.Add(Current);
-	if (Session->SendMovePath(Path))
+	if (Session->SendMovePath(Path) ==
+		ECorsairsActionRequestResult::Sent)
 	{
 		ReportedPosition = Current;
 	}
