@@ -10,7 +10,6 @@
 #include "uiformmgr.h"
 #include "gameapp.h"
 #include "uimenu.h"
-#include "atltypes.h"
 #include "uitextbutton.h"
 
 using namespace GUI;

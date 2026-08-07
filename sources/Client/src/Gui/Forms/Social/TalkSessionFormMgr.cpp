@@ -30,7 +30,6 @@ using namespace Corsairs::Util;
 #include "UITextParse.h"
 #include "talksessionformmgr.h"
 #include "UIMenu.h"
-#include "atltypes.h"
 #include "UICozeForm.h"
 #include "ChatRecord.h"
 
