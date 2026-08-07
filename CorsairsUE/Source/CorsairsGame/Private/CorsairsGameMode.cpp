@@ -203,6 +203,8 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 				{
 					Character->AddBodyPart(Parts[Index]);
 				}
+				// Рост считается по всей сборке — только теперь она полная.
+				Character->FinishBody();
 
 				// Анимация ставится после тела: проверка совместимости
 				// скелетов опирается на уже назначенный меш.
@@ -320,6 +322,7 @@ void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 		{
 			Spawned->AddBodyPart(Parts[Index]);
 		}
+		Spawned->FinishBody();
 
 		const FString AnimPath = ResolveField(Actor.TypeId, TEXT("animation"));
 		if (!AnimPath.IsEmpty())

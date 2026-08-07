@@ -61,6 +61,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	bool AddBodyPart(const FString& AssetPath);
 
+	/** Завершает сборку тела: приводит фигуру к росту капсулы.
+	 *
+	 *  Вызывается после того, как добавлены все части. Раньше нельзя: рост
+	 *  определяется по всей сборке, а первая часть — это голова, и мерка по
+	 *  ней растягивала персонажа впятеро. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	void FinishBody();
+
 	/** Привязывает персонажа к карте высот указанной карты. */
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	bool UseTerrainHeights(const FString& MapName);

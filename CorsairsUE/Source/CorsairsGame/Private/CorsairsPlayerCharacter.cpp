@@ -123,30 +123,8 @@ bool ACorsairsPlayerCharacter::SetBodyMesh(const FString& AssetPath)
 
 	GetMesh()->SetSkeletalMesh(Mesh);
 
-	// Модели персонажей приходят в своём масштабе — исходный движок приводил
-	// их к росту сам, и в файле он не записан. Замеренная модель имеет высоту
-	// около сорока сантиметров при капсуле в сто семьдесят шесть: без
-	// подгонки персонаж выглядит игрушкой у подножия домов.
-	const FBoxSphereBounds Bounds = Mesh->GetBounds();
-	const double ModelHeight = Bounds.BoxExtent.Z * 2.0;
-	if (ModelHeight > KINDA_SMALL_NUMBER)
-	{
-		const double Wanted = CapsuleHalfHeight * 2.0;
-		const double Factor = Wanted / ModelHeight;
-		GetMesh()->SetRelativeScale3D(FVector(Factor));
-
-		GetMesh()->SetRelativeLocation(FVector(0.0f, 0.0f, -CapsuleHalfHeight));
-
-		// Наводить камеру придётся по факту, а не расчётом: смещение зависит
-		// от начала координат модели, двух поворотов и масштаба, и вывести
-		// его формулой у меня не вышло — модель уезжала то дальше, то
-		// рассыпалась. Замер делается в первом же кадре, когда границы
-		// компонента уже посчитаны.
-		bCameraNeedsAiming = true;
-		UE_LOG(LogCorsairsCharacter, Log,
-			   TEXT("модель %s: высота %.0f см, масштаб %.2f"),
-			   *AssetPath, ModelHeight, Factor);
-	}
+	// Масштаб и наведение камеры откладываются: рост считается по всей
+	// сборке, а сюда приходит только первая часть — голова.
 	return true;
 }
 
@@ -182,6 +160,62 @@ bool ACorsairsPlayerCharacter::AddBodyPart(const FString& AssetPath)
 	BodyParts.Add(Part);
 	UE_LOG(LogCorsairsCharacter, Log, TEXT("часть тела: %s"), *AssetPath);
 	return true;
+}
+
+void ACorsairsPlayerCharacter::FinishBody()
+{
+	USkeletalMesh* Body = GetMesh()->GetSkeletalMeshAsset();
+	if (Body == nullptr)
+	{
+		return;
+	}
+
+	// Объём считается по всем частям сразу. Голова висит на высоте роста, ноги
+	// у нуля — по отдельности ни одна часть роста не показывает.
+	FBox Combined(ForceInit);
+	const FBoxSphereBounds MainBounds = Body->GetBounds();
+	Combined += FBox::BuildAABB(MainBounds.Origin, MainBounds.BoxExtent);
+	for (const USkeletalMeshComponent* Part : BodyParts)
+	{
+		if (Part == nullptr || Part->GetSkeletalMeshAsset() == nullptr)
+		{
+			continue;
+		}
+		const FBoxSphereBounds PartBounds = Part->GetSkeletalMeshAsset()->GetBounds();
+		Combined += FBox::BuildAABB(PartBounds.Origin, PartBounds.BoxExtent);
+	}
+
+	const FVector Size = Combined.GetSize();
+	if (Size.Z <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const double Factor = (CapsuleHalfHeight * 2.0) / Size.Z;
+	GetMesh()->SetRelativeScale3D(FVector(Factor));
+	for (USkeletalMeshComponent* Part : BodyParts)
+	{
+		if (Part != nullptr)
+		{
+			Part->SetRelativeScale3D(FVector::OneVector);
+		}
+	}
+
+	// Подошвы опускаются к низу капсулы: начало координат модели у ног, но
+	// нижняя грань объёма может быть и не в нуле.
+	GetMesh()->SetRelativeLocation(
+		FVector(0.0, 0.0, -CapsuleHalfHeight - Combined.Min.Z * Factor));
+
+	// Камера наводится на середину фигуры: начало координат модели у ног и
+	// чуть смещено вбок, и без поправки персонаж стоит не по центру кадра.
+	const FVector Centre = Combined.GetCenter() * Factor;
+	const FRotator MeshRotation = GetMesh()->GetRelativeRotation();
+	const FVector Aimed = MeshRotation.RotateVector(Centre);
+	CameraBoom->TargetOffset = FVector(Aimed.X, Aimed.Y, 0.0);
+
+	UE_LOG(LogCorsairsCharacter, Log,
+		   TEXT("сборка: высота %.0f см, частей %d, масштаб %.2f, поправка камеры (%.0f, %.0f)"),
+		   Size.Z, BodyParts.Num() + 1, Factor, Aimed.X, Aimed.Y);
 }
 
 bool ACorsairsPlayerCharacter::SetBodyAnimation(const FString& AssetPath)
@@ -313,21 +347,6 @@ void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 	// Разовый снимок состояния через несколько секунд после старта: по нему
 	// видно, где персонаж и куда смотрит камера. Без этих чисел причина
 	// «видно только небо» неотличима от десятка других.
-	// Наведение камеры на модель: её центр не совпадает с капсулой, и без
-	// поправки персонаж стоит у края кадра. Замер возможен только после того,
-	// как границы компонента посчитаны, — то есть не раньше первого кадра.
-	if (bCameraNeedsAiming && GetMesh()->GetSkeletalMeshAsset() != nullptr)
-	{
-		GetMesh()->UpdateBounds();
-		const FVector Centre = GetMesh()->Bounds.Origin;
-		const FVector Base = GetActorLocation();
-		if (!Centre.IsNearlyZero())
-		{
-			CameraBoom->TargetOffset = FVector(Centre.X - Base.X, Centre.Y - Base.Y, 0.0);
-			bCameraNeedsAiming = false;
-		}
-	}
-
 	DiagnosticTimer += DeltaSeconds;
 	if (!bDiagnosticLogged && DiagnosticTimer > 4.0f)
 	{
