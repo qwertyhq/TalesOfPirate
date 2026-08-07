@@ -84,7 +84,6 @@ void ACorsairsPlayerCharacter::AttachSession(UCorsairsSession* InSession)
 	Session = InSession;
 	TimeSinceReport = 0.0f;
 	bHasValidMovementSpeed = false;
-	bUsesEventMovementSpeedFallback = false;
 	bMovementSpeedProtocolErrorReported = false;
 	if (Session != nullptr)
 	{
@@ -372,10 +371,9 @@ void ACorsairsPlayerCharacter::UpdateMovementPredictionState()
 		GetCharacterMovement()->MaxFlySpeed =
 			static_cast<float>(MovementSpeed);
 		bHasValidMovementSpeed = true;
-		bUsesEventMovementSpeedFallback = false;
 		bMovementSpeedProtocolErrorReported = false;
 	}
-	else if (!bUsesEventMovementSpeedFallback)
+	else
 	{
 		bHasValidMovementSpeed = false;
 	}
@@ -405,21 +403,6 @@ void ACorsairsPlayerCharacter::HandleMovementChanged(
 		return;
 	}
 
-	if (Event.MovementSpeedCmPerSecond > 0.0)
-	{
-		GetCharacterMovement()->MaxFlySpeed =
-			static_cast<float>(Event.MovementSpeedCmPerSecond);
-		bHasValidMovementSpeed = true;
-		bUsesEventMovementSpeedFallback =
-			Session == nullptr ||
-			Session->GetMovementSpeedCmPerSecond() <= 0.0;
-		bMovementSpeedProtocolErrorReported = false;
-	}
-	else
-	{
-		bHasValidMovementSpeed = false;
-		bUsesEventMovementSpeedFallback = false;
-	}
 	UpdateMovementPredictionState();
 	if (!bHasValidMovementSpeed)
 	{

@@ -23,8 +23,7 @@ void BroadcastLocalEvent(
 	UCorsairsSession* Session,
 	const ECorsairsMovementEventType Type,
 	const FIntPoint Endpoint,
-	const bool bRequireNeutral = false,
-	const double Speed = MovementSpeed)
+	const bool bRequireNeutral = false)
 {
 	FCorsairsMovementEvent Event;
 	Event.WorldId = LocalWorldId;
@@ -33,7 +32,7 @@ void BroadcastLocalEvent(
 	Event.Endpoint = Endpoint;
 	Event.bLocal = true;
 	Event.bServerDriven = false;
-	Event.MovementSpeedCmPerSecond = Speed;
+	Event.MovementSpeedCmPerSecond = MovementSpeed;
 	Event.bRequireNeutral = bRequireNeutral;
 	Session->OnMovementChanged.Broadcast(Event);
 }
@@ -188,13 +187,8 @@ bool CreatePossessedPawn(
 
 	Session = NewObject<UCorsairsSession>(World);
 	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	Session->SetMovementSpeedForTests(MovementSpeed);
 	Pawn->AttachSession(Session);
-	BroadcastLocalEvent(
-		Session,
-		ECorsairsMovementEventType::AcceptedPath,
-		Spawn);
-	Pawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 0.0f);
-	Pawn->ApplyMovementAxisForProbe(TEXT("MoveRight"), 0.0f);
 	return true;
 }
 } // namespace
@@ -322,12 +316,7 @@ bool FCorsairsPlayerHeldInputNoPacketFloodTest::RunTest(const FString&)
 		TEXT("ATTR_MSPD"),
 		EAutomationExpectedErrorFlags::Contains,
 		1);
-	BroadcastLocalEvent(
-		Session,
-		ECorsairsMovementEventType::AcceptedPath,
-		Spawn,
-		false,
-		0.0);
+	Session->SetMovementSpeedForTests(0);
 	Pawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
 	TestTrue(
 		TEXT("zero speed invalidates prior positive speed and locks prediction"),
@@ -396,6 +385,7 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 	UWorld* World = TestWorld.GetTestWorld();
 	UCorsairsSession* Replacement = NewObject<UCorsairsSession>(World);
 	Replacement->SetInWorldForTests(LocalWorldId, Terminal);
+	Replacement->SetMovementSpeedForTests(MovementSpeed);
 	Pawn->AttachSession(Replacement);
 	Pawn->AttachSession(Replacement);
 	TestFalse(

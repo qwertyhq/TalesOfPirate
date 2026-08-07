@@ -337,6 +337,7 @@ public:
 		TFunction<bool(Corsairs::Net::WPacket&)> Override);
 	void SetInWorldForTests(
 		int64 InWorldId, FIntPoint Spawn);
+	void SetMovementSpeedForTests(int64 Speed);
 	void HandlePacketForTests(
 		Corsairs::Net::RPacket& Packet);
 	void HandleConnectionStateForTests(

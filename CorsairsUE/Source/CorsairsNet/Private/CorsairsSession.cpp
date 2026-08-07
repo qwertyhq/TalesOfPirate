@@ -1042,6 +1042,12 @@ void UCorsairsSession::SetInWorldForTests(
 	Stage = ECorsairsLoginStage::InWorld;
 }
 
+void UCorsairsSession::SetMovementSpeedForTests(const int64 Speed)
+{
+	Attributes.Add(kAttrMovementSpeed, Speed);
+	LocalActor.MovementSpeedCmPerSecond = static_cast<double>(Speed);
+}
+
 void UCorsairsSession::HandlePacketForTests(RPacket& Packet)
 {
 	HandlePacket(Packet);

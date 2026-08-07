@@ -100,7 +100,6 @@ private:
 	float DiagnosticTimer = 0.0f;
 	bool bDiagnosticLogged = false;
 	bool bHasValidMovementSpeed = false;
-	bool bUsesEventMovementSpeedFallback = false;
 	bool bMovementSpeedProtocolErrorReported = false;
 
 	float TimeSinceReport = 0.0f;
