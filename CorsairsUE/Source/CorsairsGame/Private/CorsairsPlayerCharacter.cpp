@@ -207,6 +207,23 @@ void ACorsairsPlayerCharacter::FinishBody()
 	GetMesh()->SetRelativeLocation(
 		FVector(0.0, 0.0, -CapsuleHalfHeight - Combined.Min.Z * Factor));
 
+	// Посадка уточняется по факту. Расчёт по границам ассетов промахивается
+	// на десяток сантиметров: те описывают модель в позе покоя, а компонент
+	// живёт уже с наложенной позой, и низ фигуры оказывается ниже.
+	GetMesh()->UpdateBounds();
+	FBox Actual(ForceInit);
+	Actual += FBox::BuildAABB(GetMesh()->Bounds.Origin, GetMesh()->Bounds.BoxExtent);
+	for (USkeletalMeshComponent* Part : BodyParts)
+	{
+		if (Part != nullptr)
+		{
+			Part->UpdateBounds();
+			Actual += FBox::BuildAABB(Part->Bounds.Origin, Part->Bounds.BoxExtent);
+		}
+	}
+	const double WantedBottom = GetActorLocation().Z - CapsuleHalfHeight;
+	GetMesh()->AddRelativeLocation(FVector(0.0, 0.0, WantedBottom - Actual.Min.Z));
+
 	// Камера наводится на середину фигуры. Рыскание поворачивает модель
 	// вокруг вертикали, поэтому смещение середины надо повернуть тем же
 	// поворотом, иначе поправка уйдёт не в ту сторону.
@@ -380,12 +397,24 @@ void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 			   Control.Yaw, CameraRotation.Yaw, GetActorRotation().Yaw,
 			   CameraBoom->TargetOffset.X, CameraBoom->TargetOffset.Y);
 
+		// Меряется вся фигура, а не основной меш: тот содержит одну голову, и
+		// по нему «центр модели» получался у плеч, что читалось как ошибка
+		// высоты там, где её не было.
+		FBox Whole(ForceInit);
+		Whole += FBox::BuildAABB(MeshBounds.Origin, MeshBounds.BoxExtent);
+		for (const USkeletalMeshComponent* Part : BodyParts)
+		{
+			if (Part != nullptr)
+			{
+				const FBoxSphereBounds PartBounds = Part->Bounds;
+				Whole += FBox::BuildAABB(PartBounds.Origin, PartBounds.BoxExtent);
+			}
+		}
+		const FVector WholeCentre = Whole.GetCenter();
 		UE_LOG(LogTemp, Warning,
-			   TEXT("  центр модели в мире (%.0f, %.0f, %.0f), цель камеры (%.0f, %.0f, %.0f)"),
-			   MeshBounds.Origin.X, MeshBounds.Origin.Y, MeshBounds.Origin.Z,
-			   CameraBoom->GetComponentLocation().X,
-			   CameraBoom->GetComponentLocation().Y,
-			   CameraBoom->GetComponentLocation().Z);
+			   TEXT("  вся фигура: центр (%.0f, %.0f, %.0f), высота %.0f, низ %.0f"),
+			   WholeCentre.X, WholeCentre.Y, WholeCentre.Z,
+			   Whole.GetSize().Z, Whole.Min.Z);
 	}
 
 	Super::Tick(DeltaSeconds);
