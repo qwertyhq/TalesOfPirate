@@ -194,6 +194,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	bool TalkToNpc(int64 NpcWorldId);
 
+	/** Открывает у торговца страницу с товарами.
+	 *
+	 *  Сделке это обязано предшествовать: она ссылается на уже начатый
+	 *  разговор, и без открытой лавки торговец её не рассматривает. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	bool OpenNpcPage(int64 NpcWorldId, int64 Page, int64 Item);
+
 	/** Продаёт торговцу вещь из ячейки сумки.
 	 *
 	 *  Сделке должно предшествовать открытие лавки: она ссылается на уже

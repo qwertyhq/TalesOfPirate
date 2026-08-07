@@ -29,6 +29,7 @@ namespace
 	 *  Сервер читает код действия вторым полем и по нему выбирает ветку
 	 *  скрипта; без кода скрипт разбирает мусор и молчит. */
 	constexpr int64 kNpcActionTalkPage = 302;
+	constexpr int64 kNpcActionFuncItem = 303;
 	constexpr int64 kNpcActionTradeItem = 309;
 
 	FString ToFString(const std::string& Value)
@@ -209,6 +210,21 @@ bool UCorsairsSession::TalkToNpc(int64 NpcWorldId)
 	// мусор и промолчит.
 	Packet.WriteInt64(kNpcActionTalkPage);
 	Packet.WriteInt64(0);
+	return Connection->Send(Packet);
+}
+
+bool UCorsairsSession::OpenNpcPage(int64 NpcWorldId, int64 Page, int64 Item)
+{
+	if (Connection == nullptr || Stage != ECorsairsLoginStage::InWorld)
+	{
+		return false;
+	}
+	WPacket Packet(64);
+	Packet.WriteCmd(CMD_CM_REQUESTNPC);
+	Packet.WriteInt64(NpcWorldId);
+	Packet.WriteInt64(kNpcActionFuncItem);
+	Packet.WriteInt64(Page);
+	Packet.WriteInt64(Item);
 	return Connection->Send(Packet);
 }
 
