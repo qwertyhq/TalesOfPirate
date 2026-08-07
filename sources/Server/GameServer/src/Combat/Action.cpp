@@ -13,6 +13,7 @@
 #include "Core/CommFunc.h"
 #include "Combat/MoveAble.h"
 #include "Character/Character.h"
+#include "App/GameApp.h"
 
 ;
 
@@ -313,8 +314,16 @@ void CActionCache::ExecAction(SAction *pSCarrier)
 		{
 			std::int32_t lSkillID = *((std::int32_t *)(pSCarrier->szParam + chCurParamPos));
 			chCurParamPos += sizeof(std::int32_t);
-			CCharacter *pCTar = *((CCharacter **)(pSCarrier->szParam + chCurParamPos));
-			m_pCOwn->Cmd_BeginSkillDirect(lSkillID, pCTar);
+			std::uint32_t ulTarID = *((std::uint32_t *)(pSCarrier->szParam + chCurParamPos));
+			chCurParamPos += sizeof(std::uint32_t);
+			std::int32_t lTarHandle = *((std::int32_t *)(pSCarrier->szParam + chCurParamPos));
+			chCurParamPos += sizeof(std::int32_t);
+			// Цель восстанавливается по идентификатору: за время ожидания в
+			// кэше она могла умереть, и сохранённый указатель был бы висячим.
+			Entity *pCTar = g_pGameApp->IsMapEntity(ulTarID, lTarHandle);
+			if (pCTar) {
+				m_pCOwn->Cmd_BeginSkillDirect(lSkillID, pCTar);
+			}
 		}
 		break;
 	case	enumCACHEACTION_SKILL2:

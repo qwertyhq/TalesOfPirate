@@ -485,14 +485,20 @@ int ChaUseSkill_raw(lua_State* L) {
 	CCharacter* pTarget = *pTargetResult;
 
 	if (pCha && pTarget) {
-		long lSkillID = (int)lua_tonumber(L, 3);
+		std::int32_t lSkillID = static_cast<std::int32_t>(lua_tonumber(L, 3));
 		if (bExecNow) {
 			pCha->Cmd_BeginSkillDirect(lSkillID, pTarget);
 		}
 		else {
+			// В кэш кладётся не указатель, а идентификатор с handle: между
+			// постановкой действия и его исполнением цель успевает умереть, и
+			// сохранённый указатель к тому времени висячий.
+			std::uint32_t ulTarID = pTarget->GetID();
+			std::int32_t lTarHandle = pTarget->GetHandle();
 			pCha->m_CActCache.AddCommand(enumCACHEACTION_SKILL);
-			pCha->m_CActCache.PushParam(&lSkillID, sizeof(long));
-			pCha->m_CActCache.PushParam(&pTarget, sizeof(CCharacter*));
+			pCha->m_CActCache.PushParam(&lSkillID, sizeof(lSkillID));
+			pCha->m_CActCache.PushParam(&ulTarID, sizeof(ulTarID));
+			pCha->m_CActCache.PushParam(&lTarHandle, sizeof(lTarHandle));
 		}
 	}
 
@@ -534,19 +540,22 @@ int ChaUseSkill2_raw(lua_State* L) {
 	CCharacter* pCha = *pChaResult;
 
 	if (pCha) {
-		long lSkillID = (int)lua_tonumber(L, 2);
-		long lSkillLv = (int)lua_tonumber(L, 3);
-		long lPosX = (int)lua_tonumber(L, 4);
-		long lPosY = (int)lua_tonumber(L, 5);
+		std::int32_t lSkillID = static_cast<std::int32_t>(lua_tonumber(L, 2));
+		std::int32_t lSkillLv = static_cast<std::int32_t>(lua_tonumber(L, 3));
+		std::int32_t lPosX = static_cast<std::int32_t>(lua_tonumber(L, 4));
+		std::int32_t lPosY = static_cast<std::int32_t>(lua_tonumber(L, 5));
 		if (bExecNow) {
 			pCha->Cmd_BeginSkillDirect2(lSkillID, lSkillLv, lPosX, lPosY);
 		}
 		else {
+			// Ширина обязана совпадать с чтением в CActionCache::ExecAction:
+			// sizeof(long) расходится между платформами, и разбор буфера
+			// съезжает, превращая следующие параметры в мусор.
 			pCha->m_CActCache.AddCommand(enumCACHEACTION_SKILL2);
-			pCha->m_CActCache.PushParam(&lSkillID, sizeof(long));
-			pCha->m_CActCache.PushParam(&lSkillLv, sizeof(long));
-			pCha->m_CActCache.PushParam(&lPosX, sizeof(long));
-			pCha->m_CActCache.PushParam(&lPosY, sizeof(long));
+			pCha->m_CActCache.PushParam(&lSkillID, sizeof(lSkillID));
+			pCha->m_CActCache.PushParam(&lSkillLv, sizeof(lSkillLv));
+			pCha->m_CActCache.PushParam(&lPosX, sizeof(lPosX));
+			pCha->m_CActCache.PushParam(&lPosY, sizeof(lPosY));
 		}
 	}
 
