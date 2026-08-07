@@ -1,6 +1,7 @@
 #include "CorsairsPlayerCharacter.h"
 
 #include "Camera/CameraComponent.h"
+#include "CorsairsCameraProfile.h"
 #include "CorsairsLoginHud.h"
 #include "CorsairsSession.h"
 #include "Components/CapsuleComponent.h"
@@ -34,22 +35,6 @@ namespace
 						 FMath::RoundToInt(-Location.Y));
 	}
 
-	/** Длина кронштейна камеры. Обзор в оригинале — с заметного отдаления,
-	 *  чтобы видеть окружение боя, а не затылок. Мерка взята с оригинального
-	 *  клиента: персонаж занимает примерно седьмую часть высоты экрана. */
-	constexpr float CameraDistance = 1400.0f;
-
-	/** Наклон камеры. Мир показывается сверху под углом, как в оригинале.
-	 *  В Unreal отрицательный тангаж означает взгляд вниз. */
-	constexpr float CameraPitch = -45.0f;
-
-	/** Пределы наклона камеры. Оригинал не позволяет ни смотреть себе под
-	 *  ноги, ни задирать взгляд в небо. */
-	constexpr float CameraPitchMin = -70.0f;
-	constexpr float CameraPitchMax = -10.0f;
-
-	/** На сколько поднята точка крепления камеры над центром капсулы. */
-	constexpr float CameraBoomHeight = 120.0f;
 }
 
 ACorsairsPlayerCharacter::ACorsairsPlayerCharacter()
@@ -65,22 +50,28 @@ ACorsairsPlayerCharacter::ACorsairsPlayerCharacter()
 	GetCharacterMovement()->bOrientRotationToMovement = true;
 	GetCharacterMovement()->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
 
+	const auto Profile = Corsairs::Game::Camera::LegacyDefaultProfile();
+	const auto Rig = Corsairs::Game::Camera::DeriveRig(Profile, 16.0 / 9.0);
+
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
-	CameraBoom->TargetArmLength = CameraDistance;
+	CameraBoom->TargetArmLength = Rig.ArmLengthCm;
 	CameraBoom->bUsePawnControlRotation = true;
 	// Подтягивание отключено намеренно. В плотной застройке кронштейн упирался
 	// в каждый второй дом и подтаскивал камеру вплотную к персонажу — вид
 	// падал к самой траве. Оригинал камеру не подтягивает вовсе.
 	CameraBoom->bDoCollisionTest = false;
-	// Точка крепления поднята к плечам: от центра капсулы камера смотрит
-	// слишком низко, и половину кадра занимает земля под ногами.
-	CameraBoom->SetRelativeLocation(FVector(0.0f, 0.0f, CameraBoomHeight));
+	CameraBoom->SetRelativeLocation(FVector(
+		0.0, 0.0, Profile.TargetHeightCm - 88.0));
 
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
-
+	FollowCamera->FieldOfView = Rig.HorizontalFovDegrees;
+	FollowCamera->AspectRatio = 16.0f / 9.0f;
+	FollowCamera->bOverrideAspectRatioAxisConstraint = true;
+	FollowCamera->AspectRatioAxisConstraint =
+		EAspectRatioAxisConstraint::AspectRatio_MaintainYFOV;
 }
 
 void ACorsairsPlayerCharacter::AttachSession(UCorsairsSession* InSession)
@@ -94,25 +85,22 @@ void ACorsairsPlayerCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// Наклон камеры задаётся здесь, а не в режиме игры: там контроллера у
-	// персонажа может ещё не быть, и вызов уходит в пустоту. Без наклона
-	// камера наследует ориентацию PlayerStart — единственной точки на карте,
-	// к игре отношения не имеющей, — и смотрит мимо мира.
+	const auto Profile = Corsairs::Game::Camera::LegacyDefaultProfile();
+	const auto Rig = Corsairs::Game::Camera::DeriveRig(Profile, 16.0 / 9.0);
+
 	if (AController* OwningController = GetController())
 	{
-		const FRotator Current = OwningController->GetControlRotation();
-		OwningController->SetControlRotation(FRotator(CameraPitch, Current.Yaw, 0.0f));
+		OwningController->SetControlRotation(FRotator(
+			Rig.PitchDegrees,
+			Profile.InitialYawDegrees,
+			0.0));
 
-		// Наклон ограничивается: без предела первый же рывок мыши уводит
-		// камеру отвесно вниз или в зенит, и мир пропадает из кадра. Границы
-		// подобраны под обзор оригинала — он показывает мир сверху, но не
-		// с высоты птичьего полёта.
 		if (APlayerController* PlayerController = Cast<APlayerController>(OwningController))
 		{
 			if (PlayerController->PlayerCameraManager != nullptr)
 			{
-				PlayerController->PlayerCameraManager->ViewPitchMin = CameraPitchMin;
-				PlayerController->PlayerCameraManager->ViewPitchMax = CameraPitchMax;
+				PlayerController->PlayerCameraManager->ViewPitchMin = Rig.PitchDegrees;
+				PlayerController->PlayerCameraManager->ViewPitchMax = Rig.PitchDegrees;
 			}
 		}
 	}

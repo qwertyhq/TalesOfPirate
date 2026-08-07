@@ -30,10 +30,6 @@ namespace
 	constexpr double GroundTraceStart = 100000.0;
 	constexpr double GroundTraceDepth = 200000.0;
 
-	/** Наклон камеры при появлении. Оригинал показывает мир сверху под углом
-	 *  около сорока пяти градусов — отсюда и значение. */
-	constexpr double CameraPitch = -45.0;
-
 	/** Тег плиток рельефа. Метка актёра живёт только в редакторе, а отличить
 	 *  землю от построек нужно в игре: иначе персонаж встаёт на крышу. */
 	const FName TerrainTag(TEXT("CorsairsTerrain"));
@@ -247,18 +243,6 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 			Location.Y,
 			Location.Z,
 			bGrounded ? TEXT("найдена") : TEXT("НЕ НАЙДЕНА"));
-
-		// Направление взгляда задаётся явно. Камера следует за поворотом
-		// контроллера, а тот наследует поворот PlayerStart — единственной
-		// точки на карте, ориентация которой к игре отношения не имеет:
-		// при её нулевом наклоне камера смотрит в горизонт, а при любом
-		// другом — в небо или в землю. Вид сверху под наклоном повторяет
-		// обзор оригинала.
-		if (AController* ViewController = Character->GetController())
-		{
-			ViewController->SetControlRotation(
-				FRotator(CameraPitch, 0.0, 0.0));
-		}
 
 		// С этого момента персонаж сам сообщает серверу о перемещении.
 		Character->AttachSession(Session);
