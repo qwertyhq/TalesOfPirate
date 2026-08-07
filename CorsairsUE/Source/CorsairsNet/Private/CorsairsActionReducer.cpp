@@ -100,10 +100,7 @@ ECorsairsActionRequestResult FCorsairsActionReducer::Begin(
 		return ECorsairsActionRequestResult::Invalid;
 	}
 
-	const TOptional<FCorsairsActiveBeginAction> PreviousActiveAction =
-		_activeAction;
-	const TOptional<FCorsairsPendingMove> PreviousPendingMove = _pendingMove;
-	const TOptional<FIntPoint> PreviousQueuedEndpoint = _queuedEndpoint;
+	const FCorsairsActionReducer PreviousState = *this;
 
 	_activeAction = FCorsairsActiveBeginAction{
 		PacketId,
@@ -118,9 +115,7 @@ ECorsairsActionRequestResult FCorsairsActionReducer::Begin(
 
 	if (!Send())
 	{
-		_activeAction = PreviousActiveAction;
-		_pendingMove = PreviousPendingMove;
-		_queuedEndpoint = PreviousQueuedEndpoint;
+		*this = PreviousState;
 		return ECorsairsActionRequestResult::TransportFailed;
 	}
 
@@ -275,7 +270,11 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnFailedAction(
 
 	const bool bSkillFailure =
 		_activeAction->ActionType == ECorsairsBeginActionType::Skill &&
-		(ActionType == SkillAction || ActionType == MoveAction);
+		(ActionType == SkillAction ||
+			(ActionType == MoveAction &&
+				(_activeAction->Phase == ECorsairsActionPhase::Requested ||
+					_activeAction->Phase ==
+						ECorsairsActionPhase::ServerMove)));
 	if (!bSkillFailure)
 	{
 		Effects.bProtocolError = true;

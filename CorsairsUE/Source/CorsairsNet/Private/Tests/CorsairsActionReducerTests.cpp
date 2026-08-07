@@ -123,6 +123,55 @@ bool FCorsairsReducerRollsBackFailedSendTest::RunTest(const FString&)
 	TestEqual(TEXT("confirmed position is unchanged"),
 		Reducer.GetConfirmedPosition(),
 		SpawnPosition);
+
+	bool bObservedMovement = false;
+	FIntPoint ObservedEndpoint = FIntPoint::ZeroValue;
+	ECorsairsActionPhase ObservedPhase = ECorsairsActionPhase::None;
+	const ECorsairsActionRequestResult ReentrantResult = Reducer.Begin(
+		SkillPacketId,
+		ECorsairsBeginActionType::Skill,
+		TOptional<FCorsairsPendingMove>(),
+		[&]()
+		{
+			const FCorsairsReducerEffects Effects = Reducer.OnMove(
+				LocalWorldId,
+				SkillPacketId,
+				0,
+				TerminalWaypoint());
+			bObservedMovement = Effects.Movement.IsSet();
+			if (Effects.Movement.IsSet())
+			{
+				ObservedEndpoint = Effects.Movement->Endpoint;
+			}
+			if (Reducer.GetActiveAction().IsSet())
+			{
+				ObservedPhase = Reducer.GetActiveAction()->Phase;
+			}
+			return false;
+		});
+
+	TestTrue(TEXT("callback emitted a real movement event"),
+		bObservedMovement);
+	TestEqual(TEXT("callback changed the authoritative endpoint"),
+		ObservedEndpoint,
+		FIntPoint(300, 400));
+	TestEqual(TEXT("callback entered server move phase"),
+		static_cast<uint8>(ObservedPhase),
+		static_cast<uint8>(ECorsairsActionPhase::ServerMove));
+	TestEqual(TEXT("reentrant transport failure is reported"),
+		static_cast<uint8>(ReentrantResult),
+		static_cast<uint8>(ECorsairsActionRequestResult::TransportFailed));
+	TestFalse(TEXT("reentrant rollback clears active action"),
+		Reducer.GetActiveAction().IsSet());
+	TestFalse(TEXT("reentrant rollback clears pending move"),
+		Reducer.GetPendingMove().IsSet());
+	TestFalse(TEXT("reentrant rollback clears queued endpoint"),
+		Reducer.GetQueuedEndpoint().IsSet());
+	TestEqual(TEXT("reentrant rollback restores confirmed position"),
+		Reducer.GetConfirmedPosition(),
+		SpawnPosition);
+	TestFalse(TEXT("reentrant rollback restores movement authority lock"),
+		Reducer.IsMovementAuthorityLocked());
 	return true;
 }
 
@@ -329,6 +378,61 @@ bool FCorsairsReducerSkillLifecycleTest::RunTest(const FString&)
 		FightReducer.GetActiveAction().IsSet());
 	TestFalse(TEXT("terminal skill source unlocks movement"),
 		FightReducer.IsMovementAuthorityLocked());
+
+	FCorsairsActionReducer LateMoveFailureReducer;
+	LateMoveFailureReducer.EnterWorld(LocalWorldId, FIntPoint(10, 20));
+	LateMoveFailureReducer.Begin(
+		SkillPacketId,
+		ECorsairsBeginActionType::Skill,
+		TOptional<FCorsairsPendingMove>(),
+		[]()
+		{
+			return true;
+		});
+	LateMoveFailureReducer.OnMove(
+		LocalWorldId,
+		SkillPacketId,
+		MoveInRange,
+		TerminalWaypoint());
+	const FCorsairsReducerEffects LateMoveFailureEffects =
+		LateMoveFailureReducer.OnFailedAction(
+			LocalWorldId,
+			MoveAction,
+			99);
+	TestTrue(TEXT("late move failure is a protocol error"),
+		LateMoveFailureEffects.bProtocolError);
+	TestTrue(TEXT("late move failure keeps skill active"),
+		LateMoveFailureReducer.GetActiveAction().IsSet());
+	if (LateMoveFailureReducer.GetActiveAction().IsSet())
+	{
+		TestEqual(TEXT("late move failure preserves fight phase"),
+			static_cast<uint8>(
+				LateMoveFailureReducer.GetActiveAction()->Phase),
+			static_cast<uint8>(ECorsairsActionPhase::Fight));
+	}
+	TestTrue(TEXT("late move failure keeps movement locked"),
+		LateMoveFailureReducer.IsMovementAuthorityLocked());
+	int32 LateBeginSendCount = 0;
+	const ECorsairsActionRequestResult LateBeginResult =
+		LateMoveFailureReducer.Begin(
+			MovePacketId,
+			ECorsairsBeginActionType::Move,
+			FCorsairsPendingMove{
+				MovePacketId,
+				FIntPoint(300, 400),
+				FIntPoint(500, 600),
+			},
+			[&]()
+			{
+				++LateBeginSendCount;
+				return true;
+			});
+	TestEqual(TEXT("late move failure keeps begin gate busy"),
+		static_cast<uint8>(LateBeginResult),
+		static_cast<uint8>(ECorsairsActionRequestResult::Busy));
+	TestEqual(TEXT("late move failure never sends a new begin"),
+		LateBeginSendCount,
+		0);
 
 	const int64 InterruptStates[] = {1, 2, 4, 16, 32};
 	for (const int64 InterruptState : InterruptStates)
