@@ -15,66 +15,103 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import unreal                                   # noqa: E402
 from report import Reporter                     # noqa: E402
-
-PLACEHOLDERS = ("WorldGrid", "DefaultMaterial", "T_White")
+import material_usage_editor as editor          # noqa: E402
 
 
 def main(report):
     map_name = sys.argv[1] if len(sys.argv) > 1 else "Garner"
-    unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).load_level(
-        f"/Game/Maps/{map_name}")
-    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()
+    if not editor.load_level(map_name):
+        report.error(f"ПРОВАЛ: уровень /Game/Maps/{map_name} не загрузился")
+        return 1
 
-    total = 0
-    placeholder = 0
-    samples = []
+    bindings = [
+        binding for binding in editor.material_bindings()
+        if binding.component_kind == "hism"
+    ]
+    components = {binding.component_path for binding in bindings}
+    materials = {binding.material_path for binding in bindings}
+    missing_texture = {
+        binding.material_path
+        for binding in bindings
+        if editor.missing_base_color_texture(binding.material)
+    }
+    missing_instancing = {
+        binding.material_path
+        for binding in bindings
+        if "instanced_static_meshes" in binding.required
+        and not editor.has_usage(
+            binding.material, "instanced_static_meshes")
+    }
+    missing_nanite = {
+        binding.material_path
+        for binding in bindings
+        if "nanite" in binding.required
+        and not editor.has_usage(binding.material, "nanite")
+    }
+    translucent_nanite = {
+        binding.component_path
+        for binding in bindings
+        if "disallow_nanite" in binding.required
+    }
 
-    for actor in actors:
-        for component in actor.get_components_by_class(
-                unreal.HierarchicalInstancedStaticMeshComponent):
-            if component.get_instance_count() == 0:
-                continue
-            total += 1
-            materials = component.get_materials()
-            names = [m.get_name() if m else "нет" for m in materials]
+    report.line(f"компонентов с инстансами: {len(components)}")
+    report.line(f"уникальных HISM материалов: {len(materials)}")
+    report.line(
+        "HISM материалов без BaseColorTexture/с заглушкой: "
+        f"{len(missing_texture)}")
+    for path in sorted(missing_texture):
+        report.line("  " + path)
 
-            # Материал может быть свой, а текстуры в нём — заглушечные: тогда
-            # постройка серая, хотя формально всё назначено.
-            white = False
-            for material in materials:
-                if not isinstance(material, unreal.MaterialInstanceConstant):
-                    continue
-                texture = unreal.MaterialEditingLibrary \
-                    .get_material_instance_texture_parameter_value(
-                        material, unreal.Name("BaseColorTexture"))
-                if texture is None or any(p in texture.get_name() for p in PLACEHOLDERS):
-                    white = True
+    report.line(
+        f"usage без Instanced Static Mesh: {len(missing_instancing)}")
+    for path in sorted(missing_instancing):
+        report.line("  " + path)
+    report.line(f"usage без Nanite: {len(missing_nanite)}")
+    for path in sorted(missing_nanite):
+        report.line("  " + path)
+    report.line(
+        f"translucent Nanite компонентов: {len(translucent_nanite)}")
+    for path in sorted(translucent_nanite):
+        report.line("  " + path)
 
-            if white or any(any(p in n for p in PLACEHOLDERS) for n in names):
-                placeholder += 1
-                if len(samples) < 6:
-                    mesh = component.static_mesh
-                    samples.append(
-                        f"{mesh.get_name() if mesh else '?'}: {names}")
-
-    report.line(f"компонентов с инстансами: {total}")
-    report.line(f"из них с заглушкой: {placeholder}")
-    for line in samples:
-        report.line("  " + line)
-
-    if total == 0:
+    failures = (
+        len(missing_instancing)
+        + len(missing_nanite)
+        + len(translucent_nanite))
+    if not components:
         report.error("ПРОВАЛ: на уровне нет размещённых объектов")
-    elif placeholder > total // 2:
-        report.error(f"ПРОВАЛ: заглушка у {placeholder} из {total} — "
+        failures += 1
+    elif len(missing_texture) > len(materials) // 2:
+        report.error(
+            f"ПРОВАЛ: заглушка у {len(missing_texture)} из "
+            f"{len(materials)} HISM материалов — "
                      "постройки останутся серыми")
+        failures += 1
+    if missing_instancing:
+        report.error(
+            "ПРОВАЛ: есть HISM материалы без Instanced Static Mesh usage")
+    if missing_nanite:
+        report.error("ПРОВАЛ: есть HISM материалы без Nanite usage")
+    if translucent_nanite:
+        report.error(
+            "ПРОВАЛ: translucent HISM компоненты используют Nanite")
+    return failures
 
 
-report = Reporter("check_object_materials")
-try:
-    main(report)
-except Exception as exc:                        # noqa: BLE001
-    report.exception(exc)
-finally:
-    report.close()
+def _run():
+    report = Reporter("check_object_materials")
+    try:
+        failures = main(report)
+    except Exception as exc:                    # noqa: BLE001
+        report.exception(exc)
+        raise
+    finally:
+        report.close()
+    if failures:
+        raise RuntimeError(
+            f"object material checker found {failures} failures")
+
+
+if __name__ == "__main__":
+    _run()
