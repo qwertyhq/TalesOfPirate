@@ -29,6 +29,15 @@ let NEW_CHA_FACE = 2554L
 /// прогон против той же базы иначе упирался бы в отказ по занятому имени.
 let NAME_STAMP_FORMAT = "HHmmss"
 
+/// Номера характеристик из ChaAttrType.h: массив плотный, без дыр, поэтому
+/// значения заданы числами — так же, как их принимает GM-команда `attr`.
+let ATTR_LV = 0L
+let ATTR_HP = 1L
+let ATTR_CEXP = 15L
+let ATTR_MXHP = 31L
+let ATTR_MNATK = 33L
+let ATTR_MXATK = 34L
+
 let private TIME_FORMAT = "HH:mm:ss.fff"
 
 let log (text: string) =
@@ -56,7 +65,13 @@ type Live =
       Seen: Collections.Generic.Dictionary<int64, SeenActor>
       /// Системные сообщения сервера. Именно ими он объясняет отказы, и без
       /// них проверка видит лишь то, что «ничего не произошло».
-      Notices: ResizeArray<string> }
+      Notices: ResizeArray<string>
+      /// Характеристики своего персонажа по номеру атрибута (ChaAttrType.h).
+      /// Обновляются приходящими MC_SYNATTR — так видно урон, опыт и уровень.
+      Attrs: Collections.Generic.Dictionary<int64, int64>
+      /// Содержимое сумки: номер ячейки → номер предмета. Нужно, чтобы надеть
+      /// вещь: действие «использовать» adresуется ячейками, а не предметами.
+      Kitbag: Collections.Generic.Dictionary<int64, int64> }
 
 and SeenActor =
     { WorldId: int64
@@ -64,7 +79,10 @@ and SeenActor =
       Name: string
       CtrlType: int64
       PosX: int64
-      PosY: int64 }
+      PosY: int64
+      /// Здоровье на момент появления в поле зрения. Дальше меняется
+      /// приходящими MC_SYNATTR — по нему и виден нанесённый урон.
+      mutable Hp: int64 }
 
 let private readExact (stream: NetworkStream) (count: int) : byte[] option =
     let buffer = Array.zeroCreate<byte> count
@@ -113,18 +131,61 @@ let private absorb (live: Live) (packet: IRPacket) =
     if cmd = Commands.CMD_MC_CHABEGINSEE then
         try
             let msg = CommandMessages.Deserialize.mcChaBeginSeeMessage packet
+            let hp =
+                msg.Attr.Attrs
+                |> Array.tryFind (fun a -> a.AttrId = ATTR_HP)
+                |> Option.map (fun a -> a.AttrVal)
+                |> Option.defaultValue 0L
             live.Seen[msg.Base.WorldId] <-
                 { WorldId = msg.Base.WorldId
                   Handle = msg.Base.Handle
                   Name = msg.Base.Name
                   CtrlType = msg.Base.CtrlType
                   PosX = msg.Base.PosX
-                  PosY = msg.Base.PosY }
+                  PosY = msg.Base.PosY
+                  Hp = hp }
         with _ -> ()          // повреждённое сообщение не должно валить прогон
     elif cmd = Commands.CMD_MC_CHAENDSEE then
         try
             let worldId = packet.ReadInt64()
             live.Seen.Remove(worldId) |> ignore
+        with _ -> ()
+    elif cmd = Commands.CMD_MC_NOTIACTION then
+        try
+            let msg = CommandMessages.Deserialize.mcCharacterActionMessage packet
+            match msg.Action with
+            | CommandMessages.ActionSkillTar data ->
+                // Итог удара приходит именно здесь: сервер рассылает результат
+                // применения умения по цели, и новое здоровье лежит в перечне
+                // изменённых характеристик, а не отдельным сообщением.
+                match live.Seen.TryGetValue msg.WorldId with
+                | true, actor ->
+                    match data.Effects |> Array.tryFind (fun a -> a.AttrId = ATTR_HP) with
+                    | Some hp -> actor.Hp <- hp.AttrVal
+                    | None -> ()
+                | _ -> ()
+                // Характеристики бьющего идут тем же сообщением отдельным
+                // набором — так виден расход маны и полученный опыт.
+                if data.SrcId = live.WorldId then
+                    for entry in data.SrcEffects do
+                        live.Attrs[entry.AttrId] <- entry.AttrVal
+            | _ -> ()
+        with _ -> ()
+    elif cmd = Commands.CMD_MC_SYNATTR then
+        try
+            let msg = CommandMessages.Deserialize.mcSynAttributeMessage packet
+            if msg.WorldId = live.WorldId then
+                for entry in msg.Attr.Attrs do
+                    live.Attrs[entry.AttrId] <- entry.AttrVal
+            else
+                // Характеристики чужой сущности: интересует здоровье — по нему
+                // видно, дошёл ли урон до цели.
+                match live.Seen.TryGetValue msg.WorldId with
+                | true, actor ->
+                    match msg.Attr.Attrs |> Array.tryFind (fun a -> a.AttrId = ATTR_HP) with
+                    | Some hp -> actor.Hp <- hp.AttrVal
+                    | None -> ()
+                | _ -> ()
         with _ -> ()
     elif cmd = Commands.CMD_MC_SYSINFO then
         try
@@ -215,7 +276,9 @@ let logIn (stream: NetworkStream) (account: string) (password: string) : Result<
         { Stream = stream; Counter = 0u; WorldId = 0L; Handle = 0L
           MapName = ""; PosX = 0L; PosY = 0L; ActionId = 0L
           Seen = Collections.Generic.Dictionary<int64, SeenActor>()
-          Notices = ResizeArray<string>() }
+          Notices = ResizeArray<string>()
+          Attrs = Collections.Generic.Dictionary<int64, int64>()
+          Kitbag = Collections.Generic.Dictionary<int64, int64>() }
 
     // Реализация хеша своя, поэтому сверяемся с известными значениями до
     // того, как отказ во входе спишут на неверный пароль.
@@ -345,6 +408,34 @@ let logIn (stream: NetworkStream) (account: string) (password: string) : Result<
         enter.ReadInt64() |> ignore          // canTeam
         enter.ReadInt64() |> ignore          // imp
         let baseInfo = CommandMessages.Deserialize.deserializeChaBaseInfo enter
+
+        // Читаем дальше до инвентаря и характеристик. Секции разделены
+        // сторожевыми числами 0xBEEF000N — по ним видно, что разбор не съехал,
+        // а без содержимого сумки нечем ни надеть оружие, ни судить о вещах.
+        try
+            let expectMark (mark: int64) (what: string) =
+                let got = enter.ReadInt64()
+                if got <> mark then
+                    failwith $"сторож секции {what} не совпал: ждали {mark:X}, пришло {got:X}"
+
+            expectMark 0xBEEF0001L "baseinfo"
+            CommandMessages.Deserialize.deserializeChaSkillBagInfo enter |> ignore
+            expectMark 0xBEEF0002L "skillbag"
+            CommandMessages.Deserialize.deserializeChaSkillStateInfo enter |> ignore
+            expectMark 0xBEEF0003L "skillstate"
+            let attr = CommandMessages.Deserialize.deserializeChaAttrInfo enter
+            expectMark 0xBEEF0004L "attr"
+            let kitbag = CommandMessages.Deserialize.deserializeChaKitbagInfo enter
+
+            for entry in attr.Attrs do
+                live.Attrs[entry.AttrId] <- entry.AttrVal
+            live.Kitbag.Clear()
+            for item in kitbag.Items do
+                if item.ItemId > 0L then
+                    live.Kitbag[item.GridId] <- item.ItemId
+        with ex ->
+            log $"  (инвентарь из входа не прочитан: {ex.Message})"
+
         enter.Dispose()
 
         live.WorldId <- baseInfo.WorldId
@@ -390,9 +481,9 @@ let moveTo (live: Live) (x: int64) (y: int64) =
 
 /// Применяет умение к цели.
 ///
-/// Признак движения равен 2 — «подойти и ударить»: цель почти никогда не
-/// стоит вплотную, а сервер сам отказал бы по дальности.
-let useSkillOn (live: Live) (skillId: int64) (target: SeenActor) =
+/// Признак движения: 2 — «подойти и ударить» с передачей пути, 0 — бить с
+/// места. Путь передаётся только при 2, иначе сервер его не читает.
+let useSkillOnWith (live: Live) (skillId: int64) (target: SeenActor) (chMove: int64) =
     let blob = pathBlob [ (live.PosX, live.PosY); (target.PosX, target.PosY) ]
     let mutable packet = WPacket(96 + blob.Length)
     packet.WriteCmd(Commands.CMD_CM_BEGINACTION)
@@ -400,9 +491,10 @@ let useSkillOn (live: Live) (skillId: int64) (target: SeenActor) =
     live.ActionId <- live.ActionId + 1L
     packet.WriteInt64(live.ActionId)
     packet.WriteInt64(CommandMessages.ACT_SKILL)
-    packet.WriteInt64(2L)                    // chMove: с перемещением к цели
+    packet.WriteInt64(chMove)
     packet.WriteInt64(live.ActionId)         // fightId: номер боевого действия
-    packet.WriteSequence(ReadOnlySpan<byte>(blob))
+    if chMove = 2L then
+        packet.WriteSequence(ReadOnlySpan<byte>(blob))
     packet.WriteInt64(skillId)
     packet.WriteInt64(target.WorldId)        // tarInfo1 — идентификатор цели
     packet.WriteInt64(target.Handle)         // tarInfo2 — handle цели
@@ -475,3 +567,28 @@ let logOut (live: Live) =
         send live &packet
         drain live 2.0
     with _ -> ()      // соединение могло уже закрыться — выход всё равно состоялся
+
+
+/// Удар с подходом к цели — обычный случай.
+let useSkillOn (live: Live) (skillId: int64) (target: SeenActor) =
+    useSkillOnWith live skillId target 2L
+
+
+/// Слоты экипировки (enumEQUIP_* из CompCommand.h). Оружие держат руки.
+let EQUIP_RHAND = 9L
+let EQUIP_HAND1 = 7L
+
+/// Надевает предмет: перекладывает его из ячейки сумки в слот экипировки.
+///
+/// Действие адресуется ячейками, а не номерами предметов, поэтому содержимое
+/// сумки приходится знать заранее — оно приходит внутри MC_ENTERMAP.
+let equipItem (live: Live) (fromGrid: int64) (toSlot: int64) =
+    let mutable packet = WPacket(64)
+    packet.WriteCmd(Commands.CMD_CM_BEGINACTION)
+    packet.WriteInt64(live.WorldId)
+    live.ActionId <- live.ActionId + 1L
+    packet.WriteInt64(live.ActionId)
+    packet.WriteInt64(11L)                   // ActionType::ITEM_USE
+    packet.WriteInt64(fromGrid)
+    packet.WriteInt64(toSlot)
+    send live &packet

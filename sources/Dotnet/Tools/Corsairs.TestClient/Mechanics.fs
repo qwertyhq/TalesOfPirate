@@ -101,6 +101,64 @@ let private nearest (live: Live) (ctrl: int64) = byDistance live ctrl |> List.tr
 let private nearestMany (live: Live) (ctrl: int64) (count: int) =
     byDistance live ctrl |> List.truncate count
 
+/// Умения обычной атаки, по убыванию неприхотливости.
+///
+/// Состояние умения зависит от надетого оружия: «Sword» (28) требует меч или
+/// нож в руках (item_need_1 = «1,0;1,11»), а «Greatsword» (29) и «Dual
+/// Implosion» (26) — «1,-1», то есть ничего. Сервер отказывает неактивному
+/// умению тем же кодом «действие запрещено», что и запрету зоны, поэтому
+/// умение подбирается перебором, а не задаётся одним числом.
+let private ATTACK_SKILLS = [ 29L; 26L; 27L; 28L ]
+
+/// Бьёт цель, перебирая умения, пока сервер не примет удар.
+/// Возвращает номер сработавшего умения либо причину последнего отказа.
+let private strikeWithAny (live: Live) (target: SeenActor) : Result<int64, int64> =
+    // Признак движения только 2 — «подойти и ударить». Значение 0 сервер
+    // молча игнорирует: ответа не приходит вовсе, и соединение выходит в
+    // тайм-аут.
+    let combos = [ for s in ATTACK_SKILLS -> s, 2L ]
+    let rec attempt (rest: (int64 * int64) list) (lastReason: int64) =
+        match rest with
+        | [] -> Error lastReason
+        | (skillId, chMove) :: others ->
+            say live $"&skill {skillId},1"
+            drain live 2.0
+            useSkillOnWith live skillId target chMove
+            match waitFor live [ Commands.CMD_MC_NOTIACTION; Commands.CMD_MC_FAILEDACTION ] 8.0 with
+            | None -> attempt others lastReason
+            | Some packet when packet.GetCmd() = Commands.CMD_MC_NOTIACTION ->
+                packet.Dispose()
+                Ok skillId
+            | Some packet ->
+                let msg = CommandMessages.Deserialize.mcFailedActionMessage packet
+                packet.Dispose()
+                // «Цели не существует» перебором не лечится: дело не в умении,
+                // а в том, что сервер не нашёл сущность.
+                if msg.Reason = 5L then Error 5L
+                else attempt others msg.Reason
+    attempt combos -1L
+
+/// Оружие для боя: у стартового персонажа это «Newbie Knife».
+let private WEAPON_ITEMS = [ 8L ]
+
+/// Надевает оружие, если оно лежит в сумке.
+///
+/// Без оружия в руках сервер принимает намерение ударить, но самого удара не
+/// разыгрывает: подтверждение приходит, а результата по цели нет. Отличить это
+/// от поломки боя по одному лишь молчанию невозможно.
+let private equipWeapon (live: Live) : string option =
+    let found =
+        live.Kitbag
+        |> Seq.tryPick (fun kv ->
+            if List.contains kv.Value WEAPON_ITEMS then Some(kv.Key, kv.Value) else None)
+    match found with
+    | None -> None
+    | Some(grid, itemId) ->
+        equipItem live grid EQUIP_RHAND
+        drain live 3.0
+        Some $"предмет {itemId} из ячейки {grid} надет в правую руку"
+
+
 /// Телепорт внутри текущей карты. Безопасен, в отличие от перехода между
 /// картами: соединение остаётся тем же.
 let private warpWithin (live: Live) (cellX: int64) (cellY: int64) =
@@ -262,24 +320,15 @@ let private checkAttack =
                 |> String.concat ", "
             Skipped $"монстра не нашлось; видно — {kinds}"
         | Some mons ->
-            // Подходим вплотную: иначе сервер уводит персонажа к цели сам, и
-            // ответ приходит с задержкой на весь путь.
-            warpWithin live (mons.PosX / 100L) (mons.PosY / 100L)
-            // Умение выдаётся явно: отказ «действие запрещено» приходит и
-            // тогда, когда умение есть в наборе, но помечено неактивным, и по
-            // одному коду отличить это от запрета зоны нельзя.
-            say live $"&skill {ctx.SkillId},1"
-            drain live 2.0
+            equipWeapon live |> ignore
+            // Телепорт вплотную не годится: путь в пакете стал бы нулевым —
+            // из точки цели в неё же, — и сервер такой удар не разыгрывает.
+            // Подводить персонажа должен он сам, как и для настоящего клиента.
             live.Notices.Clear()
-            useSkillOn live ctx.SkillId mons
-            match waitFor live [ Commands.CMD_MC_NOTIACTION; Commands.CMD_MC_FAILEDACTION ] 10.0 with
-            | None -> Failed $"по «{mons.Name}»: сервер не ответил"
-            | Some packet when packet.GetCmd() = Commands.CMD_MC_NOTIACTION ->
-                packet.Dispose()
-                Passed $"удар по «{mons.Name}» принят"
-            | Some packet ->
-                let msg = CommandMessages.Deserialize.mcFailedActionMessage packet
-                packet.Dispose()
+            match strikeWithAny live mons with
+            | Ok skillId -> Passed $"удар по «{mons.Name}» принят (умение {skillId})"
+            | Error reason ->
+                let msg = {| Reason = reason |}
                 // Различение принципиальное. «Цели не существует» означает, что
                 // сервер не нашёл монстра по присланному идентификатору — это
                 // тот самый дефект, из-за которого бой не работал вовсе.
@@ -297,6 +346,134 @@ let private checkAttack =
                     Failed $"«{mons.Name}» найден, но удар запрещён: {said}"
                 else
                     Failed $"по «{mons.Name}»: {describeFail msg.Reason}" }
+
+
+/// Урон: бьём монстра и смотрим, убыло ли у него здоровье.
+///
+/// Проверяется не число, а сам факт: величина зависит от характеристик и
+/// формулы умения, а вот «удар прошёл, а здоровье не изменилось» — поломка,
+/// которую сервер никак не сообщает.
+let private checkDamage =
+    { Name = "урон по монстру"
+      Run = fun ctx ->
+        let live = ctx.Live
+        match findMonster ctx with
+        | None -> Skipped "монстра не нашлось"
+        | Some mons ->
+            // Режим разработчика поднимает урон до потолка: персонаж первого
+            // уровня бьёт слабо, и «здоровье не изменилось» означало бы просто
+            // промах, а не поломку.
+            say live "&dev on"
+            drain live 3.0
+            let hpBefore = mons.Hp
+            if hpBefore <= 0L then Skipped $"у «{mons.Name}» неизвестно здоровье" else
+
+            let struck = strikeWithAny live mons
+            // Урон приходит не с подтверждением действия, а отдельными
+            // обновлениями характеристик: сервер сперва принимает удар, потом
+            // разыгрывает его по времени применения умения.
+            // Ждём дольше подтверждения: сервер сперва ведёт персонажа к цели,
+            // затем разыгрывает удар по скорости умения (fire_speed), и лишь
+            // потом рассылает результат.
+            let after = collect live 15.0
+            let listed = after |> List.distinct |> List.map string |> String.concat ", "
+            log $"      (после удара пришли команды: {listed})"
+            match struck with
+            | Error reason ->
+                say live "&dev off"
+                Failed $"по «{mons.Name}» ударить не вышло: {describeFail reason}"
+            | Ok _ ->
+            let hpAfter =
+                match live.Seen.TryGetValue mons.WorldId with
+                | true, actor -> actor.Hp
+                | _ -> 0L                 // исчез из поля зрения — значит убит
+
+            say live "&dev off"
+            drain live 1.0
+
+            if hpAfter < hpBefore then
+                let dealt = hpBefore - hpAfter
+                Passed $"«{mons.Name}»: здоровье {hpBefore} → {hpAfter}, урон {dealt}"
+            elif hpAfter = 0L then
+                Passed $"«{mons.Name}» убит с {hpBefore} здоровья"
+            else
+                Failed $"«{mons.Name}»: удар прошёл, но здоровье осталось {hpBefore}" }
+
+/// Опыт: убиваем монстра в режиме разработчика и смотрим прирост опыта.
+///
+/// Режим нужен, чтобы убить с одного удара: иначе проверка растянулась бы на
+/// десятки ударов и зависела от того, успеет ли монстр убить бота.
+let private checkExperience =
+    { Name = "опыт за убийство"
+      Run = fun ctx ->
+        let live = ctx.Live
+        say live "&dev on"
+        drain live 3.0
+        try
+            match findMonster ctx with
+            | None -> Skipped "монстра не нашлось"
+            | Some mons ->
+                drain live 3.0
+                let expBefore =
+                    match live.Attrs.TryGetValue ATTR_CEXP with
+                    | true, v -> v
+                    | _ -> -1L
+
+                strikeWithAny live mons |> ignore
+                drain live 10.0
+
+                let expAfter =
+                    match live.Attrs.TryGetValue ATTR_CEXP with
+                    | true, v -> v
+                    | _ -> -1L
+                let dead = not (live.Seen.ContainsKey mons.WorldId)
+
+                if expBefore < 0L || expAfter < 0L then
+                    Skipped "сервер не прислал опыт персонажа"
+                elif expAfter > expBefore then
+                    let fate = if dead then "убит" else "жив"
+                    let gained = expAfter - expBefore
+                    Passed $"опыт {expBefore} → {expAfter} (+{gained}), монстр {fate}"
+                elif dead then
+                    Failed $"«{mons.Name}» убит, но опыт не изменился ({expBefore})"
+                else
+                    Skipped $"«{mons.Name}» выжил — опыт начислять не за что"
+        finally
+            say live "&dev off"
+            drain live 2.0 }
+
+/// Инвентарь: у нового персонажа он не пуст — сервер выдаёт стартовый набор.
+let private checkKitbag =
+    { Name = "инвентарь"
+      Run = fun ctx ->
+        let live = ctx.Live
+        say live "&make 289,1"
+        live.Notices.Clear()
+        let cmds = collect live 5.0
+        // Выдача предмета — это действие, и подтверждается она тем же
+        // MC_NOTIACTION, что удар или шаг: отдельного «предмет добавлен»
+        // сервер не шлёт, содержимое сумки приезжает внутри действия.
+        let got =
+            cmds |> List.exists (fun c ->
+                c = Commands.CMD_MC_NOTIACTION || c = Commands.CMD_MC_ADD_ITEM_CHA
+                || c = Commands.CMD_MC_KITBAGTEMP_SYNC || c = Commands.CMD_MC_ITEM_USE_SUC)
+        if got then Passed "предмет выдан и пришёл в инвентарь"
+        else
+            let said = if live.Notices.Count = 0 then "без пояснения" else String.concat " | " live.Notices
+            let listed = cmds |> List.distinct |> List.map string |> String.concat ", "
+            Failed $"предмет не пришёл; команды: {listed}; сервер сказал: {said}" }
+
+
+let private checkEquip =
+    { Name = "экипировка"
+      Run = fun ctx ->
+        let live = ctx.Live
+        if live.Kitbag.Count = 0 then Skipped "содержимое сумки неизвестно" else
+        match equipWeapon live with
+        | Some detail -> Passed detail
+        | None ->
+            let ids = live.Kitbag.Values |> Seq.distinct |> Seq.truncate 8 |> Seq.map string |> String.concat ", "
+            Skipped $"оружия в сумке нет; предметы: {ids}" }
 
 let private checkTeleport =
     { Name = "телепорт внутри карты"
@@ -318,7 +495,13 @@ let private ALL =
       checkTalkToNpc
       checkMove
       checkTeleport
-      checkAttack ]
+      checkEquip
+      checkAttack
+      checkDamage
+      checkExperience
+      // Инвентарь последним: выдача предмета — тоже действие, и следующий за
+      // ней удар сервер отклоняет, пока прежнее действие не завершилось.
+      checkKitbag ]
 
 // checkSwitchMap намеренно не входит в прогон. Переход между картами — это не
 // одна команда, а переключение сервера: GameServer отключает игрока и через
