@@ -33,6 +33,7 @@ let NAME_STAMP_FORMAT = "HHmmss"
 /// значения заданы числами — так же, как их принимает GM-команда `attr`.
 let ATTR_LV = 0L
 let ATTR_HP = 1L
+let ATTR_GD = 8L
 let ATTR_CEXP = 15L
 let ATTR_MXHP = 31L
 let ATTR_MNATK = 33L
@@ -70,8 +71,11 @@ type Live =
       /// Обновляются приходящими MC_SYNATTR — так видно урон, опыт и уровень.
       Attrs: Collections.Generic.Dictionary<int64, int64>
       /// Содержимое сумки: номер ячейки → номер предмета. Нужно, чтобы надеть
-      /// вещь: действие «использовать» adresуется ячейками, а не предметами.
-      Kitbag: Collections.Generic.Dictionary<int64, int64> }
+      /// вещь: действие «использовать» адресуется ячейками, а не предметами.
+      Kitbag: Collections.Generic.Dictionary<int64, int64>
+      /// Предметы на земле: идентификатор → handle. Приходят отдельным
+      /// сообщением, а не как сущности поля зрения.
+      Ground: Collections.Generic.Dictionary<int64, int64> }
 
 and SeenActor =
     { WorldId: int64
@@ -187,6 +191,18 @@ let private absorb (live: Live) (packet: IRPacket) =
                     | None -> ()
                 | _ -> ()
         with _ -> ()
+    elif cmd = Commands.CMD_MC_ITEMBEGINSEE then
+        try
+            // Нужны только идентификатор и handle: ими адресуется подбор.
+            let worldId = packet.ReadInt64()
+            let handle = packet.ReadInt64()
+            live.Ground[worldId] <- handle
+        with _ -> ()
+    elif cmd = Commands.CMD_MC_ITEMENDSEE then
+        try
+            let worldId = packet.ReadInt64()
+            live.Ground.Remove(worldId) |> ignore
+        with _ -> ()
     elif cmd = Commands.CMD_MC_SYSINFO then
         try
             let msg = CommandMessages.Deserialize.mcSysInfoMessage packet
@@ -278,7 +294,8 @@ let logIn (stream: NetworkStream) (account: string) (password: string) : Result<
           Seen = Collections.Generic.Dictionary<int64, SeenActor>()
           Notices = ResizeArray<string>()
           Attrs = Collections.Generic.Dictionary<int64, int64>()
-          Kitbag = Collections.Generic.Dictionary<int64, int64>() }
+          Kitbag = Collections.Generic.Dictionary<int64, int64>()
+          Ground = Collections.Generic.Dictionary<int64, int64>() }
 
     // Реализация хеша своя, поэтому сверяемся с известными значениями до
     // того, как отказ во входе спишут на неверный пароль.
@@ -591,4 +608,45 @@ let equipItem (live: Live) (fromGrid: int64) (toSlot: int64) =
     packet.WriteInt64(11L)                   // ActionType::ITEM_USE
     packet.WriteInt64(fromGrid)
     packet.WriteInt64(toSlot)
+    send live &packet
+
+/// Действия с NPC внутри разговора (см. BuildNpcActionTable в NpcScript.cpp).
+let NPC_ACTION_FUNCITEM = 303L
+let NPC_ACTION_TRADEITEM = 309L
+
+/// Открывает у NPC страницу с перечнем товаров.
+let openNpcPage (live: Live) (target: SeenActor) (page: int64) (item: int64) =
+    let mutable packet = WPacket(64)
+    packet.WriteCmd(Commands.CMD_CM_REQUESTNPC)
+    packet.WriteInt64(target.WorldId)
+    packet.WriteInt64(NPC_ACTION_FUNCITEM)
+    packet.WriteInt64(page)
+    packet.WriteInt64(item)
+    send live &packet
+
+/// Продаёт предмет из ячейки сумки торговцу.
+///
+/// Тип сделки 0 — продажа: за ним идут номер ячейки и количество. Покупка
+/// (тип 1) требует ещё и указания страницы витрины, которую сперва надо
+/// получить, поэтому проверяется именно продажа.
+let sellItem (live: Live) (target: SeenActor) (grid: int64) (count: int64) =
+    let mutable packet = WPacket(96)
+    packet.WriteCmd(Commands.CMD_CM_REQUESTNPC)
+    packet.WriteInt64(target.WorldId)
+    packet.WriteInt64(NPC_ACTION_TRADEITEM)
+    packet.WriteInt64(0L)                     // ROLE_TRADE_SALE
+    packet.WriteInt64(grid)
+    packet.WriteInt64(count)
+    send live &packet
+
+/// Поднимает лежащий на земле предмет.
+let pickItem (live: Live) (worldId: int64) (handle: int64) =
+    let mutable packet = WPacket(64)
+    packet.WriteCmd(Commands.CMD_CM_BEGINACTION)
+    packet.WriteInt64(live.WorldId)
+    live.ActionId <- live.ActionId + 1L
+    packet.WriteInt64(live.ActionId)
+    packet.WriteInt64(8L)                     // ActionType::ITEM_PICK
+    packet.WriteInt64(worldId)
+    packet.WriteInt64(handle)
     send live &packet

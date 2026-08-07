@@ -527,6 +527,92 @@ let private checkSuspectSkills (suspects: int64 list) =
                 let listed = String.concat ", " harmless
                 Failed $"умения не наносят урона совсем: {listed}" }
 
+
+/// Торговля: продаём торговцу предмет из сумки и смотрим, прибыло ли денег.
+///
+/// Проверяется продажа, а не покупка: покупка требует сперва получить витрину
+/// и сослаться на позицию в ней, то есть зависит от содержимого лавки, а
+/// продажа опирается только на нашу сумку.
+let private checkTrade =
+    { Name = "торговля с NPC"
+      Run = fun ctx ->
+        let live = ctx.Live
+        drain live 2.0
+        // Товар для продажи выдаём себе сами: полагаться на остатки прошлых
+        // прогонов значило бы делать проверку зависимой от их порядка.
+        say live "&make 641,1"
+        drain live 4.0
+
+        let goods =
+            live.Kitbag
+            |> Seq.tryPick (fun kv -> if kv.Value = 641L then Some kv.Key else None)
+
+        match nearestMany live CTRL_NPC 4 with
+        | [] -> Skipped "рядом нет NPC"
+        | candidates ->
+            let goldBefore =
+                match live.Attrs.TryGetValue ATTR_GD with
+                | true, v -> v
+                | _ -> -1L
+
+            let rec attempt (rest: SeenActor list) (tried: string list) =
+                match rest, goods with
+                | [], _ ->
+                    let listedTried = String.concat "; " (List.rev tried)
+                    Skipped $"торговца не нашлось (пробовали: {listedTried})"
+                | _, None -> Skipped "продавать нечего: предмет не выдался"
+                | npc :: others, Some grid ->
+                    warpWithin live (npc.PosX / 100L) (npc.PosY / 100L)
+                    // Лавку надо открыть: сделка ссылается на уже начатый
+                    // разговор, и торговец без него сделку не рассматривает.
+                    talkTo live npc
+                    drain live 2.0
+                    openNpcPage live npc 1L 0L
+                    drain live 3.0
+                    live.Notices.Clear()
+                    sellItem live npc grid 1L
+                    drain live 5.0
+                    let goldAfter =
+                        match live.Attrs.TryGetValue ATTR_GD with
+                        | true, v -> v
+                        | _ -> -1L
+                    if goldBefore >= 0L && goldAfter > goldBefore then
+                        let gained = goldAfter - goldBefore
+                        Passed $"продано «{npc.Name}»: денег {goldBefore} → {goldAfter} (+{gained})"
+                    else
+                        let said =
+                            if live.Notices.Count = 0 then "молча"
+                            else String.concat " | " live.Notices
+                        attempt others ($"{npc.Name} — {said}" :: tried)
+
+            attempt candidates [] }
+
+/// Подбор предмета: бросаем вещь на землю GM-командой и поднимаем её.
+let private checkPickup =
+    { Name = "подбор предмета"
+      Run = fun ctx ->
+        let live = ctx.Live
+        // Четвёртый параметр `make` — «куда»: единица кладёт в сумку, ноль
+        // роняет на землю (третий задаёт вид появления предмета).
+        say live "&make 641,1,0,0"
+        drain live 5.0
+        // Лежащие предметы приходят отдельным сообщением, а не как сущности в
+        // поле зрения, поэтому судим по ответу на само действие подбора.
+        match live.Ground |> Seq.tryHead with
+        | None -> Skipped "на земле ничего не появилось"
+        | Some item ->
+            live.Notices.Clear()
+            pickItem live item.Key item.Value
+            match waitFor live [ Commands.CMD_MC_NOTIACTION; Commands.CMD_MC_FAILEDACTION ] 8.0 with
+            | None -> Failed "сервер не ответил на подбор"
+            | Some packet when packet.GetCmd() = Commands.CMD_MC_NOTIACTION ->
+                packet.Dispose()
+                Passed "предмет с земли поднят"
+            | Some packet ->
+                let msg = CommandMessages.Deserialize.mcFailedActionMessage packet
+                packet.Dispose()
+                Failed $"подбор отклонён: {describeFail msg.Reason}" }
+
 let private checkTeleport =
     { Name = "телепорт внутри карты"
       Run = fun ctx ->
@@ -554,6 +640,8 @@ let private ALL =
       // Номера взяты из аудита данных: у этих умений поле сценария пусто,
       // тогда как у 278 собратьев того же типа оно заполнено.
       checkSuspectSkills [ 1L; 2L; 5L ]
+      checkTrade
+      checkPickup
       // Инвентарь последним: выдача предмета — тоже действие, и следующий за
       // ней удар сервер отклоняет, пока прежнее действие не завершилось.
       checkKitbag ]
