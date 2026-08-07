@@ -273,6 +273,16 @@ ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
 	Packet.WriteInt64(Target->Handle);
 
 	const uint64 BeginGeneration = ActionReducerGeneration;
+	bool bReservationSuperseded = false;
+	const auto IsExpectedReservation = [this, PacketId]()
+	{
+		const TOptional<FCorsairsActiveBeginAction>& Active =
+			ActionReducer.GetActiveAction();
+		return Active.IsSet() &&
+			Active->PacketId == PacketId &&
+			Active->ActionType == ECorsairsBeginActionType::Skill &&
+			Active->Phase == ECorsairsActionPhase::Requested;
+	};
 	ECorsairsActionRequestResult Result = ActionReducer.Begin(
 		PacketId,
 		ECorsairsBeginActionType::Skill,
@@ -286,7 +296,23 @@ ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
 			{
 				return false;
 			}
-			return SendBeginActionPacket(Packet);
+			if (!IsExpectedReservation())
+			{
+				// Reentrant listener уже завершил или заменил reservation.
+				// true нужен только внутреннему Begin: false восстановил бы его
+				// старый snapshot поверх нового reducer state.
+				bReservationSuperseded = true;
+				return true;
+			}
+
+			const bool bSent = SendBeginActionPacket(Packet);
+			if (ActionReducerGeneration == BeginGeneration &&
+				!IsExpectedReservation())
+			{
+				bReservationSuperseded = true;
+				return true;
+			}
+			return bSent;
 		});
 	PublishMovementAuthorityIfChanged();
 	if (ActionReducerGeneration != BeginGeneration)
@@ -300,6 +326,10 @@ ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
 			ActionReducer.Reset();
 		}
 		PublishMovementAuthorityIfChanged();
+		Result = ECorsairsActionRequestResult::TransportFailed;
+	}
+	else if (bReservationSuperseded)
+	{
 		Result = ECorsairsActionRequestResult::TransportFailed;
 	}
 	return Result;
@@ -1093,6 +1123,12 @@ void UCorsairsSession::SetMovementSpeedForTests(const int64 Speed)
 {
 	Attributes.Add(kAttrMovementSpeed, Speed);
 	LocalActor.MovementSpeedCmPerSecond = static_cast<double>(Speed);
+}
+
+void UCorsairsSession::AddVisibleActorForTests(
+	const FCorsairsWorldActor& Actor)
+{
+	VisibleActors.Add(Actor);
 }
 
 void UCorsairsSession::SetMovementAuthorityObserverForTests(

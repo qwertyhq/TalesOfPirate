@@ -543,6 +543,94 @@ bool FCorsairsSessionAuthorityTransitionsTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionAuthorityReentrantSupersessionTest,
+	"Corsairs.Movement.Session.AuthorityReentrantSupersession",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionAuthorityReentrantSupersessionTest::RunTest(
+	const FString&)
+{
+	// Mutation: guard only reducer generation after the rising broadcast.
+	// A synchronous terminal can replace the reserved Skill without changing
+	// generation, so the outer callback sends a stale packet or a failed-send
+	// rollback restores its old reducer snapshot over the new reservation.
+	UCorsairsSession* Session = CreateSkillSession();
+	TArray<FAuthorityTransition> Transitions;
+	int32 SkillTransportCount = 0;
+	int32 ItemTransportCount = 0;
+	ECorsairsActionRequestResult NestedItemResult =
+		ECorsairsActionRequestResult::Invalid;
+	Session->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+			Packet.ReadInt64();
+			Packet.ReadInt64();
+			const int64 ActionType = Packet.ReadInt64();
+			if (ActionType == Msg::ActionType::SKILL)
+			{
+				++SkillTransportCount;
+			}
+			else if (ActionType == Msg::ActionType::ITEM_PICK)
+			{
+				++ItemTransportCount;
+			}
+			return true;
+		});
+	Session->SetMovementAuthorityObserverForTests(
+		[&](const bool bLocked, const int64 Epoch)
+		{
+			Transitions.Add({bLocked, Epoch});
+			if (!bLocked)
+			{
+				return;
+			}
+
+			Deliver(
+				Session,
+				MakeMove(
+					LocalWorldId,
+					1,
+					2,
+					Endpoint1250Bytes,
+					UE_ARRAY_COUNT(Endpoint1250Bytes)));
+			NestedItemResult = Session->PickUpItem(901, 902);
+		});
+
+	const ECorsairsActionRequestResult OuterResult =
+		Session->UseSkillOn(26, RemoteWorldId);
+	TestResult(this, TEXT("superseded outer Skill is non-Sent"),
+		OuterResult, ECorsairsActionRequestResult::TransportFailed);
+	TestEqual(TEXT("superseded Skill never reaches transport"),
+		SkillTransportCount, 0);
+	TestResult(this, TEXT("reentrant item reservation is sent"),
+		NestedItemResult, ECorsairsActionRequestResult::Sent);
+	TestEqual(TEXT("only the reentrant item reaches transport"),
+		ItemTransportCount, 1);
+	TestEqual(TEXT("terminal confirmation survives outer Begin"),
+		Session->GetConfirmedPosition(), FIntPoint(1250, 1000));
+	TestFalse(TEXT("terminal releases movement authority"),
+		Session->IsMovementAuthorityLocked());
+	TestEqual(TEXT("reentrant transitions remain ordered"),
+		Transitions.Num(), 2);
+	if (Transitions.Num() == 2)
+	{
+		TestTrue(TEXT("first reentrant transition locks"),
+			Transitions[0].bLocked);
+		TestEqual(TEXT("first reentrant epoch is one"),
+			Transitions[0].Epoch, 1LL);
+		TestFalse(TEXT("second reentrant transition unlocks"),
+			Transitions[1].bLocked);
+		TestEqual(TEXT("second reentrant epoch is two"),
+			Transitions[1].Epoch, 2LL);
+	}
+	TestResult(this, TEXT("reentrant item remains the active reservation"),
+		Session->PickUpItem(903, 904),
+		ECorsairsActionRequestResult::Busy);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCorsairsSessionPredictedQueueTest,
 	"Corsairs.Movement.Session.PredictedQueue",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

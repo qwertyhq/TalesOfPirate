@@ -21,6 +21,7 @@
 - `BLOCK`, negative MOVE terminals, skill-path interruption, and `FAILEDACTION(MOVE, reason)` require neutral/re-press before local prediction resumes.
 - A held axis does not count as new input. Both movement axes must be observed at zero before the next nonzero edge.
 - Skill authority is delivered explicitly by Session as `(bLocked, monotonic epoch)`, not inferred only by pawn polling. Rising is published synchronously after reducer reservation and before transport; every falling transition (terminal, `FAILEDACTION`, transport rollback, reset, logout, or disconnect) is published. Manual `PendingMove` never publishes an authority transition.
+- After any reentrant authority broadcast or transport callback, `UseSkillOn` must still own the exact `(packetId, Skill, Requested)` reservation before sending or reporting `Sent`. A superseded outer request skips its stale transport and returns `TransportFailed` without asking reducer `Begin` to restore its old snapshot over the reentrant state.
 - Every rising skill or invalid-`ATTR_MSPD` prediction lock immediately stops character movement and consumes pending movement input. Timer reporting refreshes the lock and returns unless the neutral/re-press gate allows prediction.
 - Characters use the half-meter block raster; scene objects use the separate triangular surface sampler.
 - `databases/game.db` is unrelated and must not be modified or staged.
@@ -638,6 +639,14 @@ disconnect publish falling synchronously; manual MOVE reservation emits
 nothing. Pawn binds/detaches this delegate alongside `OnMovementChanged` and
 ignores stale epochs.
 
+The Skill send lambda validates the exact active packet id, action type and
+`Requested` phase after rising broadcast and again after transport. If a
+same-generation listener completed or replaced that reservation, the callback
+returns internal success only to prevent `ActionReducer::Begin` from restoring
+its pre-call snapshot. The outer `UseSkillOn` maps that superseded request to
+`TransportFailed`; reentrant confirmed position and any newly reserved action
+remain intact.
+
 - [ ] **Step 1: Add RED pure gate tests**
 
 Register:
@@ -664,6 +673,7 @@ Corsairs.Movement.Pawn.FirstSegmentFromSpawn
 Corsairs.Movement.Pawn.HeldInputNoPacketFlood
 Corsairs.Movement.Pawn.ReconcilesTerminalExactly
 Corsairs.Movement.Pawn.AuthorityTransitionRace
+Corsairs.Movement.Pawn.SessionAuthorityRollback
 ```
 
 The first test attaches an in-world session at `(223325,278475)`, moves before the first 0.5-second report, and requires the first captured path to be `[spawn,current]`, not omitted and not `[current,current]`.
@@ -679,12 +689,20 @@ zero, held samples remain blocked, and only neutral/re-press allows one MOVE.
 A second fixture changes a previously positive `ATTR_MSPD` to zero and requires
 the same stop/consume/report gate.
 
+`SessionAuthorityRollback` uses real `Session::UseSkillOn`, the production
+dynamic multicast, and a transport rollback; it never manually broadcasts the
+authority delegate. A `WITH_DEV_AUTOMATION_TESTS` visible-target seam supplies
+only the target record that packet-hidden `CorsairsGame` cannot deserialize.
+Deleting production `OnMovementAuthorityChanged.Broadcast` must fail the pawn
+stop/latch/timer assertions.
+
 - [ ] **Step 3: Add RED Session authority-transition test**
 
 Register:
 
 ```text
 Corsairs.Movement.Session.AuthorityTransitions
+Corsairs.Movement.Session.AuthorityReentrantSupersession
 ```
 
 Through real `UseSkillOn` and serialized terminal/`FAILEDACTION` delivery,
@@ -693,13 +711,22 @@ sample. The rising event must already be observable inside the transport
 callback. Transport rollback, logout/reset and disconnect emit ordered
 rising/falling; manual `SendMovePath` emits none.
 
+The reentrant test delivers a matching Skill MOVE terminal from inside the
+rising observer, then reserves a new item action without incrementing reducer
+generation. The outer Skill transport count remains zero, outer result is
+`TransportFailed`, terminal confirmation and the new reservation survive, and
+epochs remain exactly `true/1, false/2`.
+
 - [ ] **Step 4: Verify RED**
 
 Expected original failures: old code discards the first segment and advances
 `ReportedPosition` on socket send. Expected authority review-fix failures:
 Session observes zero transition events instead of each ordered pair; pawn
 leaves velocity and pending input nonzero after transient rising/falling and
-the timer sends one MOVE instead of zero.
+the timer sends one MOVE instead of zero. Expected scoped re-review failures:
+the superseded outer Skill still reports `Sent` and reaches transport once;
+deleting the production dynamic broadcast leaves pawn velocity/input nonzero
+and again leaks one MOVE.
 
 - [ ] **Step 5: Implement Session and pawn integration**
 

@@ -350,6 +350,8 @@ public:
 	void SetInWorldForTests(
 		int64 InWorldId, FIntPoint Spawn);
 	void SetMovementSpeedForTests(int64 Speed);
+	void AddVisibleActorForTests(
+		const FCorsairsWorldActor& Actor);
 	void SetMovementAuthorityObserverForTests(
 		TFunction<void(bool, int64)> Observer);
 	void HandlePacketForTests(

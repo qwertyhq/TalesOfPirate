@@ -442,6 +442,85 @@ bool FCorsairsPlayerAuthorityTransitionRaceTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsPlayerSessionAuthorityRollbackTest,
+	"Corsairs.Movement.Pawn.SessionAuthorityRollback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsPlayerSessionAuthorityRollbackTest::RunTest(const FString&)
+{
+	// Mutation: remove Session's production dynamic Broadcast or the pawn's
+	// AddDynamic binding. Direct delegate tests still pass, but a real
+	// UseSkillOn transport rollback then fails to stop/latch held prediction.
+	FTestWorldWrapper TestWorld;
+	ACorsairsPlayerCharacter* Pawn = nullptr;
+	UCorsairsSession* Session = nullptr;
+	if (!CreatePossessedPawn(this, TestWorld, Pawn, Session))
+	{
+		return false;
+	}
+
+	FCorsairsWorldActor Target;
+	Target.WorldId = 88;
+	Target.Position = FIntPoint(224000, 279000);
+	Target.Handle = 9088;
+	Session->AddVisibleActorForTests(Target);
+	TestEqual(TEXT("pawn has one production authority listener"),
+		CountAuthorityBindings(Session, Pawn), 1);
+
+	int32 SkillTransportAttempts = 0;
+	Session->SetSendOverrideForTests(
+		[&](WPacket&)
+		{
+			++SkillTransportAttempts;
+			return false;
+		});
+	Pawn->SetActorLocation(FVector(Spawn.X + 200, -Spawn.Y, 321.0));
+	Pawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
+	Pawn->GetCharacterMovement()->Velocity = FVector(300.0, 125.0, 0.0);
+	const FVector BeforeSkill = Pawn->GetActorLocation();
+	const ECorsairsActionRequestResult SkillResult =
+		Session->UseSkillOn(26, Target.WorldId);
+	TestEqual(TEXT("real Skill rollback is transport failure"),
+		static_cast<uint8>(SkillResult),
+		static_cast<uint8>(ECorsairsActionRequestResult::TransportFailed));
+	TestEqual(TEXT("failed Skill attempts transport exactly once"),
+		SkillTransportAttempts, 1);
+	TestEqual(TEXT("real Session publishes rising and falling epochs"),
+		Session->GetMovementAuthorityEpoch(), 2LL);
+	TestTrue(TEXT("real rising Broadcast zeros velocity"),
+		Pawn->GetCharacterMovement()->Velocity.IsNearlyZero());
+	TestTrue(TEXT("real rising Broadcast consumes pending input"),
+		Pawn->GetPendingMovementInputVector().IsNearlyZero());
+
+	int32 MoveSendCount = 0;
+	Session->SetSendOverrideForTests(
+		[&](WPacket&)
+		{
+			++MoveSendCount;
+			return true;
+		});
+	constexpr float DeltaSeconds = 1.0f / 60.0f;
+	for (int32 Tick = 0; Tick < 120; ++Tick)
+	{
+		Pawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
+		TestWorld.TickTestWorld(DeltaSeconds);
+	}
+	TestEqual(TEXT("real rollback keeps transform stable"),
+		Pawn->GetActorLocation(), BeforeSkill);
+	TestEqual(TEXT("held input after real rollback sends no MOVE"),
+		MoveSendCount, 0);
+
+	Pawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 0.0f);
+	Pawn->ApplyMovementAxisForProbe(TEXT("MoveRight"), 0.0f);
+	Pawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
+	Pawn->Tick(0.51f);
+	TestEqual(TEXT("real rollback neutral/re-press sends one MOVE"),
+		MoveSendCount, 1);
+	TestWorld.ForwardErrorMessages(this);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCorsairsPlayerReconcilesTerminalExactlyTest,
 	"Corsairs.Movement.Pawn.ReconcilesTerminalExactly",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
