@@ -70,6 +70,24 @@ bool FCorsairsCharacterCatalogTest::RunTest(const FString&)
 	TestEqual(TEXT("NPC mesh"),
 		Npc.StaticMesh.ToString(),
 		FString(TEXT("/Game/All/0005000000/SkeletalMeshes/0005000000")));
+
+	Look.bIsBoat = true;
+	FCorsairsResolvedAppearance Boat;
+	TestFalse(TEXT("boat look is rejected"),
+		Catalog.Resolve(1, Look, Boat, Error));
+	TestEqual(TEXT("boat error"),
+		Error,
+		FString(TEXT("boat appearance is not supported for archetype 1")));
+	TestFalse(TEXT("boat is not modular"), Boat.bModular);
+	TestTrue(TEXT("boat driver is absent"), Boat.DriverMesh.IsNull());
+	TestTrue(TEXT("boat animation is absent"), Boat.Animation.IsNull());
+	TestTrue(TEXT("boat static mesh is absent"), Boat.StaticMesh.IsNull());
+	for (int32 Slot = 0; Slot < Boat.PartMeshes.Num(); ++Slot)
+	{
+		TestTrue(
+			FString::Printf(TEXT("boat part %d is absent"), Slot),
+			Boat.PartMeshes[Slot].IsNull());
+	}
 	return true;
 }
 

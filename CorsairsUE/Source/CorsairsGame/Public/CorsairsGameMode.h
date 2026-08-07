@@ -49,6 +49,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
 	UCorsairsSession* GetSession() const { return Session; }
 
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	bool IsStartupReady() const
+	{
+		return CharacterCatalog != nullptr && StartupError.IsEmpty();
+	}
+
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	FString GetStartupError() const { return StartupError; }
+
 	/** Начинает вход с текущими Account и Password.
 	 *
 	 *  Вызывается и при старте уровня, когда включён bAutoLogin, и с экрана
@@ -89,6 +98,7 @@ private:
 		int64 WorldId);
 
 	TUniquePtr<FCorsairsCharacterCatalog> CharacterCatalog;
+	FString StartupError;
 
 	UPROPERTY()
 	TObjectPtr<UCorsairsSession> Session;

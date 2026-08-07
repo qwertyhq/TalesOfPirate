@@ -109,17 +109,21 @@ void ACorsairsGameMode::BeginPlay()
 		&ACorsairsGameMode::HandleActorLookChanged);
 
 	CharacterCatalog = MakeUnique<FCorsairsCharacterCatalog>();
+	StartupError.Empty();
 	const FString CatalogPath =
 		FPaths::ProjectDir() / CharacterMapRelativePath;
 	FString CatalogError;
 	if (!CharacterCatalog->Load(CatalogPath, CatalogError))
 	{
+		StartupError = FString::Printf(
+			TEXT("каталог персонажей '%s' не загрузился: %s"),
+			*CatalogPath,
+			*CatalogError);
 		UE_LOG(
 			LogCorsairsGameMode,
 			Error,
-			TEXT("каталог персонажей не загрузился: %s: %s"),
-			*CatalogPath,
-			*CatalogError);
+			TEXT("ошибка запуска: %s"),
+			*StartupError);
 		CharacterCatalog.Reset();
 		return;
 	}
@@ -135,6 +139,16 @@ void ACorsairsGameMode::BeginPlay()
 
 void ACorsairsGameMode::StartLogin()
 {
+	if (!IsStartupReady())
+	{
+		UE_LOG(
+			LogCorsairsGameMode,
+			Error,
+			TEXT("вход заблокирован ошибкой запуска: %s"),
+			*StartupError);
+		return;
+	}
+
 	if (Session == nullptr)
 	{
 		return;
@@ -160,6 +174,16 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 	{
 	case ECorsairsLoginStage::SelectingCha:
 	{
+		if (!IsStartupReady())
+		{
+			UE_LOG(
+				LogCorsairsGameMode,
+				Error,
+				TEXT("выбор персонажа заблокирован ошибкой запуска: %s"),
+				*StartupError);
+			break;
+		}
+
 		// Пока экрана выбора нет — берём первого пригодного персонажа.
 		const TArray<FCorsairsCharacterSlot>& Characters = Session->GetCharacters();
 		for (int32 Index = 0; Index < Characters.Num(); ++Index)
@@ -177,6 +201,16 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 
 	case ECorsairsLoginStage::InWorld:
 	{
+		if (!IsStartupReady())
+		{
+			UE_LOG(
+				LogCorsairsGameMode,
+				Error,
+				TEXT("вход в мир заблокирован ошибкой запуска: %s"),
+				*StartupError);
+			break;
+		}
+
 		const FCorsairsWorldActor LocalActor = Session->GetLocalActor();
 		APlayerController* Controller =
 			UGameplayStatics::GetPlayerController(this, 0);
@@ -193,12 +227,19 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 			break;
 		}
 
-		ResolveAndApplyAppearance(
-			Character,
-			LocalActor.TypeId,
-			LocalActor.Look,
-			LocalActor.Name,
-			LocalActor.WorldId);
+		if (!ResolveAndApplyAppearance(
+				Character,
+				LocalActor.TypeId,
+				LocalActor.Look,
+				LocalActor.Name,
+				LocalActor.WorldId))
+		{
+			UE_LOG(
+				LogCorsairsGameMode,
+				Error,
+				TEXT("вход в мир остановлен: внешность локального персонажа недоступна"));
+			break;
+		}
 
 		// Персонажа ставим туда, где его держит сервер. Ось Y
 		// инвертируется, как при размещении объектов; высота берётся
@@ -256,6 +297,17 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 
 void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 {
+	if (!IsStartupReady())
+	{
+		UE_LOG(
+			LogCorsairsGameMode,
+			Error,
+			TEXT("появление персонажа %lld заблокировано ошибкой запуска: %s"),
+			Actor.WorldId,
+			*StartupError);
+		return;
+	}
+
 	if (WorldActors.Contains(Actor.WorldId))
 	{
 		return;

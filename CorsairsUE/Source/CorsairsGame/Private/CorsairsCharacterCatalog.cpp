@@ -226,6 +226,14 @@ bool FCorsairsCharacterCatalog::Resolve(
 	OutAppearance = FCorsairsResolvedAppearance{};
 	OutError.Empty();
 
+	if (Look.bIsBoat)
+	{
+		OutError = FString::Printf(
+			TEXT("boat appearance is not supported for archetype %d"),
+			ArchetypeId);
+		return false;
+	}
+
 	const FCharacterEntry* Entry = Characters.Find(ArchetypeId);
 	if (Entry == nullptr)
 	{

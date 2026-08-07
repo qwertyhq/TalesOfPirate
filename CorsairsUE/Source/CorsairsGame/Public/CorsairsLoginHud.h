@@ -6,6 +6,19 @@
 
 #include "CorsairsLoginHud.generated.h"
 
+struct CORSAIRSGAME_API FCorsairsLoginPresentation
+{
+	bool bAcceptInput = false;
+	bool bShowLoginForm = false;
+	FString Title;
+	FString Message;
+};
+
+CORSAIRSGAME_API FCorsairsLoginPresentation MakeCorsairsLoginPresentation(
+	bool bStartupReady,
+	const FString& StartupError,
+	ECorsairsLoginStage Stage);
+
 /**
  * Экран входа и состояния сессии.
  *
@@ -44,7 +57,6 @@ public:
 	bool IsAcceptingInput() const;
 
 private:
-	FString DescribeStage(ECorsairsLoginStage Stage) const;
 	void DrawLoginForm(class UFont* Font);
 
 	/** Что редактируется сейчас. Полей всего два, поэтому хватает флага. */

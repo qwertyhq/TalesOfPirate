@@ -17,6 +17,50 @@ namespace
 	const FLinearColor SuccessColour(0.55f, 1.0f, 0.6f, 1.0f);
 }
 
+FCorsairsLoginPresentation MakeCorsairsLoginPresentation(
+	const bool bStartupReady,
+	const FString& StartupError,
+	const ECorsairsLoginStage Stage)
+{
+	FCorsairsLoginPresentation Result;
+	if (!bStartupReady)
+	{
+		Result.Title = TEXT("Ошибка запуска");
+		Result.Message = StartupError;
+		return Result;
+	}
+
+	Result.bAcceptInput =
+		Stage == ECorsairsLoginStage::Idle ||
+		Stage == ECorsairsLoginStage::Failed;
+	Result.bShowLoginForm = Result.bAcceptInput;
+	switch (Stage)
+	{
+	case ECorsairsLoginStage::Idle:
+		Result.Title = TEXT("Не подключён");
+		break;
+	case ECorsairsLoginStage::Connecting:
+		Result.Title = TEXT("Подключение к серверу...");
+		break;
+	case ECorsairsLoginStage::Authenticating:
+		Result.Title = TEXT("Проверка учётной записи...");
+		break;
+	case ECorsairsLoginStage::SelectingCha:
+		Result.Title = TEXT("Выбор персонажа");
+		break;
+	case ECorsairsLoginStage::EnteringWorld:
+		Result.Title = TEXT("Вход в мир...");
+		break;
+	case ECorsairsLoginStage::InWorld:
+		Result.Title = TEXT("В мире");
+		break;
+	case ECorsairsLoginStage::Failed:
+		Result.Title = TEXT("Ошибка подключения");
+		break;
+	}
+	return Result;
+}
+
 void ACorsairsLoginHud::DrawHUD()
 {
 	Super::DrawHUD();
@@ -34,29 +78,31 @@ void ACorsairsLoginHud::DrawHUD()
 		return;
 	}
 
-	const UCorsairsSession* Session = GameMode->GetSession();
-	if (Session == nullptr)
-	{
-		return;
-	}
-
 	UFont* Font = GEngine != nullptr ? GEngine->GetMediumFont() : nullptr;
 	if (Font == nullptr)
 	{
 		return;
 	}
 
-	const ECorsairsLoginStage Stage = Session->GetStage();
+	const UCorsairsSession* Session = GameMode->GetSession();
+	const ECorsairsLoginStage Stage = Session != nullptr
+		? Session->GetStage()
+		: ECorsairsLoginStage::Idle;
+	const FCorsairsLoginPresentation Presentation =
+		MakeCorsairsLoginPresentation(
+			GameMode->IsStartupReady(),
+			GameMode->GetStartupError(),
+			Stage);
 
 	// Форма показывается, пока сессия не начата или отклонена: в остальное
 	// время вводить нечего, а перекрывать игру полем ввода не нужно.
-	if (Stage == ECorsairsLoginStage::Idle || Stage == ECorsairsLoginStage::Failed)
+	if (Presentation.bShowLoginForm)
 	{
 		DrawLoginForm(Font);
 	}
 
 	FLinearColor Colour = NormalColour;
-	if (Stage == ECorsairsLoginStage::Failed)
+	if (!GameMode->IsStartupReady() || Stage == ECorsairsLoginStage::Failed)
 	{
 		Colour = FailureColour;
 	}
@@ -68,12 +114,24 @@ void ACorsairsLoginHud::DrawHUD()
 	float Y = MarginY;
 
 	FCanvasTextItem Title(FVector2D(MarginX, Y),
-						  FText::FromString(DescribeStage(Stage)), Font, Colour);
+						  FText::FromString(Presentation.Title), Font, Colour);
 	Title.EnableShadow(FLinearColor::Black);
 	Canvas->DrawItem(Title);
 	Y += LineHeight;
 
-	if (Stage == ECorsairsLoginStage::SelectingCha)
+	if (!Presentation.Message.IsEmpty())
+	{
+		FCanvasTextItem Message(
+			FVector2D(MarginX, Y),
+			FText::FromString(Presentation.Message),
+			Font,
+			FailureColour);
+		Message.EnableShadow(FLinearColor::Black);
+		Canvas->DrawItem(Message);
+		Y += LineHeight;
+	}
+
+	if (Session != nullptr && Stage == ECorsairsLoginStage::SelectingCha)
 	{
 		// Список персонажей полезен даже без возможности выбрать: видно, что
 		// именно вернул сервер.
@@ -93,7 +151,7 @@ void ACorsairsLoginHud::DrawHUD()
 		}
 	}
 
-	if (Stage == ECorsairsLoginStage::InWorld)
+	if (Session != nullptr && Stage == ECorsairsLoginStage::InWorld)
 	{
 		const FIntPoint Spawn = Session->GetSpawnPosition();
 		const FString Line = FString::Printf(
@@ -111,14 +169,19 @@ bool ACorsairsLoginHud::IsAcceptingInput() const
 	const ACorsairsGameMode* GameMode = GetWorld() != nullptr
 		? GetWorld()->GetAuthGameMode<ACorsairsGameMode>()
 		: nullptr;
-	const UCorsairsSession* Session = GameMode != nullptr ? GameMode->GetSession() : nullptr;
-	if (Session == nullptr)
+	if (GameMode == nullptr)
 	{
 		return false;
 	}
 
-	const ECorsairsLoginStage Stage = Session->GetStage();
-	return Stage == ECorsairsLoginStage::Idle || Stage == ECorsairsLoginStage::Failed;
+	const UCorsairsSession* Session = GameMode->GetSession();
+	const ECorsairsLoginStage Stage = Session != nullptr
+		? Session->GetStage()
+		: ECorsairsLoginStage::Idle;
+	return MakeCorsairsLoginPresentation(
+		GameMode->IsStartupReady(),
+		GameMode->GetStartupError(),
+		Stage).bAcceptInput;
 }
 
 void ACorsairsLoginHud::AppendCharacter(const FString& Character)
@@ -201,19 +264,4 @@ void ACorsairsLoginHud::DrawLoginForm(UFont* Font)
 		Canvas->DrawItem(Item);
 		Y += LineHeight;
 	}
-}
-
-FString ACorsairsLoginHud::DescribeStage(ECorsairsLoginStage Stage) const
-{
-	switch (Stage)
-	{
-	case ECorsairsLoginStage::Idle:           return TEXT("Не подключён");
-	case ECorsairsLoginStage::Connecting:     return TEXT("Подключение к серверу...");
-	case ECorsairsLoginStage::Authenticating: return TEXT("Проверка учётной записи...");
-	case ECorsairsLoginStage::SelectingCha:   return TEXT("Выбор персонажа");
-	case ECorsairsLoginStage::EnteringWorld:  return TEXT("Вход в мир...");
-	case ECorsairsLoginStage::InWorld:        return TEXT("В мире");
-	case ECorsairsLoginStage::Failed:         return TEXT("Ошибка подключения");
-	}
-	return TEXT("Неизвестная стадия");
 }
