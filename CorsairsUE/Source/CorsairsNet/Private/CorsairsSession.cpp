@@ -309,6 +309,14 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		// идентификатор сообщества, и в нём приходят отрицательные значения.
 		Actor.TypeId = static_cast<int32>(Message.base.look.typeId);
 		Actor.CtrlType = static_cast<int32>(Message.base.ctrlType);
+		Actor.ChaId = static_cast<int32>(Message.base.chaId);
+
+		// У игроков модель задаёт внешность, у NPC — запись в таблице
+		// персонажей: поле внешности у них не заполняется.
+		if (Actor.TypeId == 0)
+		{
+			Actor.TypeId = Actor.ChaId;
+		}
 
 		VisibleActors.Add(Actor);
 		OnActorSeen.Broadcast(Actor);

@@ -57,6 +57,11 @@ struct FCorsairsWorldActor
 	/** Управляющий тип: игрок, NPC, монстр. */
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
 	int32 CtrlType = 0;
+
+	/** Запись в таблице персонажей. У NPC именно она задаёт модель: поле
+	 *  внешности, которым пользуются игроки, у них пустое. */
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int32 ChaId = 0;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCorsairsActorSeen,
