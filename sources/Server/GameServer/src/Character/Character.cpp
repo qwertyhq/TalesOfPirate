@@ -515,10 +515,14 @@ void CCharacter::SwitchMap(SubMap *pCSrcMap, const char *szTarMapName, std::int3
         g_pGameApp->DelPlayerIdx(pPlayer->GetDBChaId());
         g_pGameApp->m_dwPlayerCnt--;
 
-		pPlayer->Free();
-		// gate server
+		// Порядок обязателен: Free() возвращает игрока в пул, после чего
+		// объект считается свободным, и любое обращение к нему — обращение к
+		// освобождённой памяти. DELPLAYER читает у игрока его шлюз, поэтому
+		// освобождение идёт последним. Прежний порядок ронял сервер при
+		// каждом переходе между картами.
 		pPlayer->OnLogoff();
-        DELPLAYER(pPlayer);
+		DELPLAYER(pPlayer);
+		pPlayer->Free();
 		//LG("enter_map", "\n\n");
 		ToLogService("map", "finish enter map");
 	}
