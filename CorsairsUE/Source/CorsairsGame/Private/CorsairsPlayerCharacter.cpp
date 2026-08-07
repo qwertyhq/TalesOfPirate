@@ -89,7 +89,11 @@ ACorsairsPlayerCharacter::ACorsairsPlayerCharacter()
 	// Меш смещён вниз на половину капсулы: начало координат модели — под
 	// ногами, а капсулы — в центре.
 	GetMesh()->SetRelativeLocation(FVector(0.0f, 0.0f, -CapsuleHalfHeight));
-	GetMesh()->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
+	// Поворот: -90 по рысканью ставит модель лицом вперёд, как принято в
+	// Unreal, а 90 по крену поднимает её из положения лёжа. Ось «вверх» у
+	// исходных моделей не совпадает с движковой, и в файле она не записана —
+	// это знание живёт в самом движке оригинала.
+	GetMesh()->SetRelativeRotation(FRotator(0.0f, -90.0f, -90.0f));
 }
 
 bool ACorsairsPlayerCharacter::SetBodyMesh(const FString& AssetPath)
