@@ -117,6 +117,12 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 	FCorsairsProtocolError,
 	const FString&,
 	Message);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+	FCorsairsMovementAuthorityChanged,
+	bool,
+	bLocked,
+	int64,
+	Epoch);
 
 /** Стадия входа. Именно она определяет, что показывать на экране. */
 UENUM(BlueprintType)
@@ -205,6 +211,9 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
 	FCorsairsProtocolError OnProtocolError;
 
+	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
+	FCorsairsMovementAuthorityChanged OnMovementAuthorityChanged;
+
 	/** Отправляет серверу путь движения.
 	 *
 	 *  Путь — список точек в координатах карты (100 единиц на клетку). Сервер
@@ -226,6 +235,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
 	bool IsMovementAuthorityLocked() const;
+
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	int64 GetMovementAuthorityEpoch() const;
 
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
 	double GetMovementSpeedCmPerSecond() const;
@@ -338,6 +350,8 @@ public:
 	void SetInWorldForTests(
 		int64 InWorldId, FIntPoint Spawn);
 	void SetMovementSpeedForTests(int64 Speed);
+	void SetMovementAuthorityObserverForTests(
+		TFunction<void(bool, int64)> Observer);
 	void HandlePacketForTests(
 		Corsairs::Net::RPacket& Packet);
 	void HandleConnectionStateForTests(
@@ -364,6 +378,7 @@ private:
 	bool CanSendBeginActionPacket() const;
 	void ApplyReducerEffects(
 		const FCorsairsReducerEffects& Effects);
+	void PublishMovementAuthorityIfChanged();
 
 	UPROPERTY()
 	TObjectPtr<UCorsairsConnection> Connection;
@@ -382,6 +397,8 @@ private:
 	FCorsairsActionReducer ActionReducer;
 	uint64 ActionReducerGeneration = 0;
 	int64 MovementBeginSendCount = 0;
+	bool bPublishedMovementAuthorityLocked = false;
+	int64 MovementAuthorityEpoch = 0;
 
 	TMap<int32, int32> ReceivedCommands;
 	TArray<FCorsairsWorldActor> VisibleActors;
@@ -405,5 +422,6 @@ private:
 	TFunction<void(const FCorsairsMovementEvent&)> TestMovementObserver;
 	TFunction<void(const FString&)> TestProtocolErrorObserver;
 	TFunction<void(ECorsairsLoginStage)> TestStageObserver;
+	TFunction<void(bool, int64)> TestMovementAuthorityObserver;
 #endif
 };

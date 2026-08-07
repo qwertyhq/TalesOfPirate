@@ -79,10 +79,14 @@ private:
 	void TurnCamera(float Value);
 	void PitchCamera(float Value);
 	void UpdateMovementPredictionState();
+	void ApplyMovementPredictionLock(bool bLocked);
 	void ReportMovementSpeedProtocolError();
 
 	UFUNCTION()
 	void HandleMovementChanged(const FCorsairsMovementEvent& Event);
+
+	UFUNCTION()
+	void HandleMovementAuthorityChanged(bool bLocked, int64 Epoch);
 
 	UPROPERTY()
 	TObjectPtr<UCorsairsSession> Session;
@@ -100,7 +104,10 @@ private:
 	float DiagnosticTimer = 0.0f;
 	bool bDiagnosticLogged = false;
 	bool bHasValidMovementSpeed = false;
+	bool bSessionMovementAuthorityLocked = false;
+	bool bPredictionLocked = false;
 	bool bMovementSpeedProtocolErrorReported = false;
+	int64 LastMovementAuthorityEpoch = 0;
 
 	float TimeSinceReport = 0.0f;
 };

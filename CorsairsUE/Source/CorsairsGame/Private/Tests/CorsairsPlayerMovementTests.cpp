@@ -148,6 +148,22 @@ int32 CountMovementBindings(
 	return Count;
 }
 
+int32 CountAuthorityBindings(
+	const UCorsairsSession* Session,
+	const ACorsairsPlayerCharacter* Pawn)
+{
+	int32 Count = 0;
+	for (const UObject* Object :
+		Session->OnMovementAuthorityChanged.GetAllObjects())
+	{
+		if (Object == Pawn)
+		{
+			++Count;
+		}
+	}
+	return Count;
+}
+
 bool CreatePossessedPawn(
 	FAutomationTestBase* Test,
 	FTestWorldWrapper& TestWorld,
@@ -326,6 +342,106 @@ bool FCorsairsPlayerHeldInputNoPacketFloodTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsPlayerAuthorityTransitionRaceTest,
+	"Corsairs.Movement.Pawn.AuthorityTransitionRace",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsPlayerAuthorityTransitionRaceTest::RunTest(const FString&)
+{
+	// Mutation: poll Session authority only from axis callbacks, omit report
+	// gating, or forget stop/consume on a rising combined lock. A skill that
+	// reserves and finishes between samples then leaks held prediction/MOVE.
+	FTestWorldWrapper SkillWorld;
+	ACorsairsPlayerCharacter* SkillPawn = nullptr;
+	UCorsairsSession* SkillSession = nullptr;
+	if (!CreatePossessedPawn(
+		this, SkillWorld, SkillPawn, SkillSession))
+	{
+		return false;
+	}
+
+	int32 SkillSendCount = 0;
+	SkillSession->SetSendOverrideForTests(
+		[&](WPacket&)
+		{
+			++SkillSendCount;
+			return true;
+		});
+	SkillPawn->SetActorLocation(
+		FVector(Spawn.X + 200, -Spawn.Y, 321.0));
+	SkillPawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
+	SkillPawn->GetCharacterMovement()->Velocity =
+		FVector(300.0, 125.0, 0.0);
+	const FVector BeforeSkill = SkillPawn->GetActorLocation();
+	SkillSession->OnMovementAuthorityChanged.Broadcast(true, 1);
+	SkillSession->OnMovementAuthorityChanged.Broadcast(false, 2);
+	TestTrue(TEXT("transient skill lock immediately zeros velocity"),
+		SkillPawn->GetCharacterMovement()->Velocity.IsNearlyZero());
+	TestTrue(TEXT("transient skill lock immediately consumes input"),
+		SkillPawn->GetPendingMovementInputVector().IsNearlyZero());
+
+	constexpr float DeltaSeconds = 1.0f / 60.0f;
+	for (int32 Tick = 0; Tick < 120; ++Tick)
+	{
+		SkillPawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
+		SkillWorld.TickTestWorld(DeltaSeconds);
+	}
+	TestEqual(TEXT("locked/unlocked race keeps transform stable"),
+		SkillPawn->GetActorLocation(), BeforeSkill);
+	TestEqual(TEXT("held input after transient skill sends no MOVE"),
+		SkillSendCount, 0);
+
+	SkillPawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 0.0f);
+	SkillPawn->ApplyMovementAxisForProbe(TEXT("MoveRight"), 0.0f);
+	SkillPawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
+	SkillPawn->Tick(0.51f);
+	TestEqual(TEXT("neutral and re-press permit exactly one MOVE"),
+		SkillSendCount, 1);
+	SkillWorld.ForwardErrorMessages(this);
+
+	FTestWorldWrapper SpeedWorld;
+	ACorsairsPlayerCharacter* SpeedPawn = nullptr;
+	UCorsairsSession* SpeedSession = nullptr;
+	if (!CreatePossessedPawn(
+		this, SpeedWorld, SpeedPawn, SpeedSession))
+	{
+		return false;
+	}
+	int32 SpeedSendCount = 0;
+	SpeedSession->SetSendOverrideForTests(
+		[&](WPacket&)
+		{
+			++SpeedSendCount;
+			return true;
+		});
+	SpeedPawn->SetActorLocation(
+		FVector(Spawn.X + 200, -Spawn.Y, 321.0));
+	SpeedPawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
+	SpeedPawn->GetCharacterMovement()->Velocity =
+		FVector(300.0, 125.0, 0.0);
+	const FVector BeforeZeroSpeed = SpeedPawn->GetActorLocation();
+	AddExpectedError(
+		TEXT("ATTR_MSPD"),
+		EAutomationExpectedErrorFlags::Contains,
+		1);
+	SpeedSession->SetMovementSpeedForTests(0);
+	for (int32 Tick = 0; Tick < 120; ++Tick)
+	{
+		SpeedWorld.TickTestWorld(DeltaSeconds);
+	}
+	TestEqual(TEXT("zero ATTR_MSPD keeps transform stable"),
+		SpeedPawn->GetActorLocation(), BeforeZeroSpeed);
+	TestTrue(TEXT("zero ATTR_MSPD immediately zeros velocity"),
+		SpeedPawn->GetCharacterMovement()->Velocity.IsNearlyZero());
+	TestTrue(TEXT("zero ATTR_MSPD consumes pending input"),
+		SpeedPawn->GetPendingMovementInputVector().IsNearlyZero());
+	TestEqual(TEXT("zero ATTR_MSPD suppresses timer reports"),
+		SpeedSendCount, 0);
+	SpeedWorld.ForwardErrorMessages(this);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCorsairsPlayerReconcilesTerminalExactlyTest,
 	"Corsairs.Movement.Pawn.ReconcilesTerminalExactly",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -346,6 +462,10 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 	TestEqual(
 		TEXT("reattach leaves exactly one delegate receiver"),
 		CountMovementBindings(Session, Pawn),
+		1);
+	TestEqual(
+		TEXT("reattach leaves exactly one authority receiver"),
+		CountAuthorityBindings(Session, Pawn),
 		1);
 	Pawn->SetActorLocation(FVector(224000.0, -279000.0, 321.0));
 	Pawn->GetCharacterMovement()->Velocity = FVector(120.0, 80.0, 0.0);
@@ -395,6 +515,10 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 		TEXT("replacement has one receiver after repeated attach"),
 		CountMovementBindings(Replacement, Pawn),
 		1);
+	TestEqual(
+		TEXT("replacement has one authority receiver after repeated attach"),
+		CountAuthorityBindings(Replacement, Pawn),
+		1);
 
 	FCorsairsMovementEvent ReplacementTerminal;
 	ReplacementTerminal.WorldId = LocalWorldId;
@@ -412,6 +536,9 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 	TestFalse(
 		TEXT("EndPlay removes movement delegate"),
 		CountMovementBindings(Replacement, Pawn) > 0);
+	TestFalse(
+		TEXT("EndPlay removes authority delegate"),
+		CountAuthorityBindings(Replacement, Pawn) > 0);
 	TestWorld.ForwardErrorMessages(this);
 	return true;
 }

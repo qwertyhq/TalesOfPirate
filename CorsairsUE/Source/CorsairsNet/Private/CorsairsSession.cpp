@@ -211,6 +211,11 @@ bool UCorsairsSession::IsMovementAuthorityLocked() const
 	return ActionReducer.IsMovementAuthorityLocked();
 }
 
+int64 UCorsairsSession::GetMovementAuthorityEpoch() const
+{
+	return MovementAuthorityEpoch;
+}
+
 double UCorsairsSession::GetMovementSpeedCmPerSecond() const
 {
 	const int64* Speed = Attributes.Find(kAttrMovementSpeed);
@@ -272,7 +277,18 @@ ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
 		PacketId,
 		ECorsairsBeginActionType::Skill,
 		TOptional<FCorsairsPendingMove>(),
-		[&]() { return SendBeginActionPacket(Packet); });
+		[&]()
+		{
+			// Begin уже зарезервировал Skill. Pawn должен увидеть lock до
+			// transport callback, который может синхронно завершить действие.
+			PublishMovementAuthorityIfChanged();
+			if (ActionReducerGeneration != BeginGeneration)
+			{
+				return false;
+			}
+			return SendBeginActionPacket(Packet);
+		});
+	PublishMovementAuthorityIfChanged();
 	if (ActionReducerGeneration != BeginGeneration)
 	{
 		if (Stage == ECorsairsLoginStage::InWorld)
@@ -283,6 +299,7 @@ ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
 		{
 			ActionReducer.Reset();
 		}
+		PublishMovementAuthorityIfChanged();
 		Result = ECorsairsActionRequestResult::TransportFailed;
 	}
 	return Result;
@@ -399,9 +416,35 @@ bool UCorsairsSession::SendBeginActionPacket(WPacket& Packet)
 	return Connection != nullptr && Connection->Send(Packet);
 }
 
+void UCorsairsSession::PublishMovementAuthorityIfChanged()
+{
+	const bool bLocked = ActionReducer.IsMovementAuthorityLocked();
+	if (bLocked == bPublishedMovementAuthorityLocked)
+	{
+		return;
+	}
+
+	bPublishedMovementAuthorityLocked = bLocked;
+	const int64 Epoch = ++MovementAuthorityEpoch;
+	OnMovementAuthorityChanged.Broadcast(bLocked, Epoch);
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestMovementAuthorityObserver)
+	{
+		TestMovementAuthorityObserver(bLocked, Epoch);
+	}
+#endif
+}
+
 void UCorsairsSession::ApplyReducerEffects(
 	const FCorsairsReducerEffects& Effects)
 {
+	const uint64 EffectsGeneration = ActionReducerGeneration;
+	PublishMovementAuthorityIfChanged();
+	if (ActionReducerGeneration != EffectsGeneration)
+	{
+		return;
+	}
+
 	const auto ReportProtocolError =
 		[this](const FString& Message)
 		{
@@ -539,6 +582,7 @@ void UCorsairsSession::Logout()
 	LocalActor = FCorsairsWorldActor{};
 	++ActionReducerGeneration;
 	ActionReducer.Reset();
+	PublishMovementAuthorityIfChanged();
 	ActionPacketId = 0;
 	MovementBeginSendCount = 0;
 	if (Stage != ECorsairsLoginStage::Idle)
@@ -555,6 +599,7 @@ void UCorsairsSession::HandleConnectionState(ECorsairsConnectionState NewState,
 	{
 		++ActionReducerGeneration;
 		ActionReducer.Reset();
+		PublishMovementAuthorityIfChanged();
 		ActionPacketId = 0;
 		MovementBeginSendCount = 0;
 	}
@@ -748,6 +793,7 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		MovementBeginSendCount = 0;
 		++ActionReducerGeneration;
 		ActionReducer.EnterWorld(WorldId, SpawnPosition);
+		PublishMovementAuthorityIfChanged();
 
 		SetStage(ECorsairsLoginStage::InWorld,
 				 FString::Printf(TEXT("карта %s, позиция (%d, %d)"),
@@ -1039,6 +1085,7 @@ void UCorsairsSession::SetInWorldForTests(
 	MovementBeginSendCount = 0;
 	++ActionReducerGeneration;
 	ActionReducer.EnterWorld(InWorldId, Spawn);
+	PublishMovementAuthorityIfChanged();
 	Stage = ECorsairsLoginStage::InWorld;
 }
 
@@ -1046,6 +1093,12 @@ void UCorsairsSession::SetMovementSpeedForTests(const int64 Speed)
 {
 	Attributes.Add(kAttrMovementSpeed, Speed);
 	LocalActor.MovementSpeedCmPerSecond = static_cast<double>(Speed);
+}
+
+void UCorsairsSession::SetMovementAuthorityObserverForTests(
+	TFunction<void(bool, int64)> Observer)
+{
+	TestMovementAuthorityObserver = MoveTemp(Observer);
 }
 
 void UCorsairsSession::HandlePacketForTests(RPacket& Packet)

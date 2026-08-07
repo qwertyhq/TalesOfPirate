@@ -79,17 +79,29 @@ void ACorsairsPlayerCharacter::AttachSession(UCorsairsSession* InSession)
 		Session->OnMovementChanged.RemoveDynamic(
 			this,
 			&ACorsairsPlayerCharacter::HandleMovementChanged);
+		Session->OnMovementAuthorityChanged.RemoveDynamic(
+			this,
+			&ACorsairsPlayerCharacter::HandleMovementAuthorityChanged);
 	}
 
 	Session = InSession;
 	TimeSinceReport = 0.0f;
 	bHasValidMovementSpeed = false;
+	bSessionMovementAuthorityLocked = false;
 	bMovementSpeedProtocolErrorReported = false;
+	LastMovementAuthorityEpoch = 0;
 	if (Session != nullptr)
 	{
 		Session->OnMovementChanged.AddDynamic(
 			this,
 			&ACorsairsPlayerCharacter::HandleMovementChanged);
+		Session->OnMovementAuthorityChanged.AddDynamic(
+			this,
+			&ACorsairsPlayerCharacter::HandleMovementAuthorityChanged);
+		LastMovementAuthorityEpoch =
+			Session->GetMovementAuthorityEpoch();
+		bSessionMovementAuthorityLocked =
+			Session->IsMovementAuthorityLocked();
 	}
 	UpdateMovementPredictionState();
 }
@@ -127,6 +139,9 @@ void ACorsairsPlayerCharacter::EndPlay(
 		Session->OnMovementChanged.RemoveDynamic(
 			this,
 			&ACorsairsPlayerCharacter::HandleMovementChanged);
+		Session->OnMovementAuthorityChanged.RemoveDynamic(
+			this,
+			&ACorsairsPlayerCharacter::HandleMovementAuthorityChanged);
 		Session = nullptr;
 	}
 	Super::EndPlay(EndPlayReason);
@@ -153,6 +168,10 @@ bool ACorsairsPlayerCharacter::UseTerrainHeights(const FString& MapName)
 
 void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 {
+	// Authority и ATTR_MSPD могли измениться без нового axis sample. Lock
+	// применяется до CharacterMovement tick, чтобы не утёк даже один кадр.
+	UpdateMovementPredictionState();
+
 	// Удержание на земле — каждый кадр: персонаж ходит, и высота под ним
 	// меняется. Половина капсулы добавляется, потому что её начало отсчёта в
 	// центре, а стоять надо подошвами.
@@ -223,6 +242,15 @@ void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 
 void ACorsairsPlayerCharacter::ReportMovement()
 {
+	UpdateMovementPredictionState();
+	if (Session != nullptr && !bHasValidMovementSpeed)
+	{
+		ReportMovementSpeedProtocolError();
+	}
+	if (!MovementInputGate.AllowsPrediction())
+	{
+		return;
+	}
 	if (Session == nullptr || Session->GetStage() != ECorsairsLoginStage::InWorld)
 	{
 		return;
@@ -361,7 +389,8 @@ void ACorsairsPlayerCharacter::UpdateMovementPredictionState()
 {
 	if (Session == nullptr)
 	{
-		MovementInputGate.SetAuthorityLocked(false);
+		bSessionMovementAuthorityLocked = false;
+		ApplyMovementPredictionLock(false);
 		return;
 	}
 
@@ -377,8 +406,22 @@ void ACorsairsPlayerCharacter::UpdateMovementPredictionState()
 	{
 		bHasValidMovementSpeed = false;
 	}
-	MovementInputGate.SetAuthorityLocked(
-		Session->IsMovementAuthorityLocked() || !bHasValidMovementSpeed);
+	bSessionMovementAuthorityLocked =
+		Session->IsMovementAuthorityLocked();
+	ApplyMovementPredictionLock(
+		bSessionMovementAuthorityLocked || !bHasValidMovementSpeed);
+}
+
+void ACorsairsPlayerCharacter::ApplyMovementPredictionLock(
+	const bool bLocked)
+{
+	MovementInputGate.SetAuthorityLocked(bLocked);
+	if (bLocked && !bPredictionLocked)
+	{
+		GetCharacterMovement()->StopMovementImmediately();
+		ConsumeMovementInputVector();
+	}
+	bPredictionLocked = bLocked;
 }
 
 void ACorsairsPlayerCharacter::ReportMovementSpeedProtocolError()
@@ -429,6 +472,21 @@ void ACorsairsPlayerCharacter::HandleMovementChanged(
 		false,
 		nullptr,
 		ETeleportType::TeleportPhysics);
+}
+
+void ACorsairsPlayerCharacter::HandleMovementAuthorityChanged(
+	const bool bLocked,
+	const int64 Epoch)
+{
+	if (Epoch <= LastMovementAuthorityEpoch)
+	{
+		return;
+	}
+
+	LastMovementAuthorityEpoch = Epoch;
+	bSessionMovementAuthorityLocked = bLocked;
+	ApplyMovementPredictionLock(
+		bSessionMovementAuthorityLocked || !bHasValidMovementSpeed);
 }
 
 #if !UE_BUILD_SHIPPING

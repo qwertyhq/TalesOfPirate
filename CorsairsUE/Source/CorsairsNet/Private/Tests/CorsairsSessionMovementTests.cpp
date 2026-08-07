@@ -164,6 +164,34 @@ bool SameBytes(
 	return ActualCount == ExpectedCount &&
 		FMemory::Memcmp(Actual, Expected, ExpectedCount) == 0;
 }
+
+struct FAuthorityTransition
+{
+	bool bLocked = false;
+	int64 Epoch = 0;
+};
+
+UCorsairsSession* CreateSkillSession()
+{
+	UCorsairsSession* Session = NewObject<UCorsairsSession>();
+	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	Session->SetMovementSpeedForTests(static_cast<int64>(LocalSpeed));
+	Deliver(
+		Session,
+		MakeActorSeen(RemoteWorldId, FIntPoint(2000, 3000), 325));
+	return Session;
+}
+
+void ObserveAuthority(
+	UCorsairsSession* Session,
+	TArray<FAuthorityTransition>& Transitions)
+{
+	Session->SetMovementAuthorityObserverForTests(
+		[&Transitions](const bool bLocked, const int64 Epoch)
+		{
+			Transitions.Add({bLocked, Epoch});
+		});
+}
 } // namespace
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -362,6 +390,155 @@ bool FCorsairsSessionEnterMapAndSkillOriginTest::RunTest(const FString&)
 	TestTrue(
 		TEXT("skill path starts at reducer confirmation, not spawn"),
 		bSkillWireMatches);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionAuthorityTransitionsTest,
+	"Corsairs.Movement.Session.AuthorityTransitions",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionAuthorityTransitionsTest::RunTest(const FString&)
+{
+	// Mutation: publish only from pawn axis polling, after transport, or only
+	// on MOVE notifications. Any of those misses a synchronous skill lock or
+	// its rollback when no axis sample occurs between the two transitions.
+	UCorsairsSession* Failure = CreateSkillSession();
+	TArray<FAuthorityTransition> FailureTransitions;
+	ObserveAuthority(Failure, FailureTransitions);
+	bool bRisingObservedInsideTransport = false;
+	Failure->SetSendOverrideForTests(
+		[&](WPacket&)
+		{
+			bRisingObservedInsideTransport =
+				FailureTransitions.Num() == 1 &&
+				FailureTransitions[0].bLocked &&
+				FailureTransitions[0].Epoch == 1;
+			return true;
+		});
+	TestResult(
+		this,
+		TEXT("successful skill reserves authority"),
+		Failure->UseSkillOn(26, RemoteWorldId),
+		ECorsairsActionRequestResult::Sent);
+	TestTrue(TEXT("rising transition precedes the transport callback"),
+		bRisingObservedInsideTransport);
+	Deliver(
+		Failure,
+		Msg::McFailedActionMessage{
+			LocalWorldId,
+			Msg::ActionType::SKILL,
+			0,
+		});
+	TestEqual(TEXT("FAILEDACTION emits rising and falling"),
+		FailureTransitions.Num(), 2);
+	if (FailureTransitions.Num() == 2)
+	{
+		TestTrue(TEXT("skill reservation rises before transport returns"),
+			FailureTransitions[0].bLocked);
+		TestFalse(TEXT("FAILEDACTION releases skill authority"),
+			FailureTransitions[1].bLocked);
+		TestEqual(TEXT("authority epochs are monotonic"),
+			FailureTransitions[0].Epoch, 1LL);
+		TestEqual(TEXT("falling transition advances the epoch"),
+			FailureTransitions[1].Epoch, 2LL);
+	}
+
+	UCorsairsSession* Terminal = CreateSkillSession();
+	TArray<FAuthorityTransition> TerminalTransitions;
+	ObserveAuthority(Terminal, TerminalTransitions);
+	Terminal->SetSendOverrideForTests([](WPacket&) { return true; });
+	Terminal->UseSkillOn(26, RemoteWorldId);
+	Deliver(
+		Terminal,
+		MakeMove(
+			LocalWorldId,
+			1,
+			2,
+			Endpoint1100Bytes,
+			UE_ARRAY_COUNT(Endpoint1100Bytes)));
+	TestEqual(TEXT("skill MOVE terminal emits rising and falling"),
+		TerminalTransitions.Num(), 2);
+	if (TerminalTransitions.Num() == 2)
+	{
+		TestTrue(TEXT("terminal case starts locked"),
+			TerminalTransitions[0].bLocked);
+		TestFalse(TEXT("terminal case ends unlocked"),
+			TerminalTransitions[1].bLocked);
+	}
+
+	UCorsairsSession* Rollback = CreateSkillSession();
+	TArray<FAuthorityTransition> RollbackTransitions;
+	ObserveAuthority(Rollback, RollbackTransitions);
+	bool bRollbackRisingInsideTransport = false;
+	Rollback->SetSendOverrideForTests(
+		[&](WPacket&)
+		{
+			bRollbackRisingInsideTransport =
+				RollbackTransitions.Num() == 1 &&
+				RollbackTransitions[0].bLocked &&
+				RollbackTransitions[0].Epoch == 1;
+			return false;
+		});
+	TestResult(
+		this,
+		TEXT("skill transport failure is explicit"),
+		Rollback->UseSkillOn(26, RemoteWorldId),
+		ECorsairsActionRequestResult::TransportFailed);
+	TestTrue(TEXT("rollback rising precedes the failed transport callback"),
+		bRollbackRisingInsideTransport);
+	TestEqual(TEXT("transport rollback emits ordered pair"),
+		RollbackTransitions.Num(), 2);
+	if (RollbackTransitions.Num() == 2)
+	{
+		TestTrue(TEXT("rollback publishes reservation before send"),
+			RollbackTransitions[0].bLocked);
+		TestFalse(TEXT("rollback publishes release after failed send"),
+			RollbackTransitions[1].bLocked);
+	}
+
+	UCorsairsSession* Disconnect = CreateSkillSession();
+	TArray<FAuthorityTransition> DisconnectTransitions;
+	ObserveAuthority(Disconnect, DisconnectTransitions);
+	Disconnect->SetSendOverrideForTests([](WPacket&) { return true; });
+	Disconnect->UseSkillOn(26, RemoteWorldId);
+	Disconnect->HandleConnectionStateForTests(
+		ECorsairsConnectionState::Disconnected,
+		TEXT("authority transition test"));
+	TestEqual(TEXT("disconnect emits rising and falling"),
+		DisconnectTransitions.Num(), 2);
+	if (DisconnectTransitions.Num() == 2)
+	{
+		TestFalse(TEXT("disconnect releases authority"),
+			DisconnectTransitions[1].bLocked);
+	}
+
+	UCorsairsSession* Logout = CreateSkillSession();
+	TArray<FAuthorityTransition> LogoutTransitions;
+	ObserveAuthority(Logout, LogoutTransitions);
+	Logout->SetSendOverrideForTests([](WPacket&) { return true; });
+	Logout->UseSkillOn(26, RemoteWorldId);
+	Logout->Logout();
+	TestEqual(TEXT("logout reset emits rising and falling"),
+		LogoutTransitions.Num(), 2);
+	if (LogoutTransitions.Num() == 2)
+	{
+		TestFalse(TEXT("logout reset releases authority"),
+			LogoutTransitions[1].bLocked);
+	}
+
+	UCorsairsSession* Manual = NewObject<UCorsairsSession>();
+	Manual->SetInWorldForTests(LocalWorldId, Spawn);
+	TArray<FAuthorityTransition> ManualTransitions;
+	ObserveAuthority(Manual, ManualTransitions);
+	Manual->SetSendOverrideForTests([](WPacket&) { return true; });
+	TestResult(
+		this,
+		TEXT("manual MOVE is sent"),
+		Manual->SendMovePath({Spawn, FIntPoint(1300, 2400)}),
+		ECorsairsActionRequestResult::Sent);
+	TestEqual(TEXT("manual PendingMove emits no authority transition"),
+		ManualTransitions.Num(), 0);
 	return true;
 }
 

@@ -20,18 +20,21 @@
 - No packet-ID correlation assumption may bypass the action reservation: `MC_FAILEDACTION` has no packet ID and GameServer owns one mutable `m_ulPacketID`.
 - `BLOCK`, negative MOVE terminals, skill-path interruption, and `FAILEDACTION(MOVE, reason)` require neutral/re-press before local prediction resumes.
 - A held axis does not count as new input. Both movement axes must be observed at zero before the next nonzero edge.
+- Skill authority is delivered explicitly by Session as `(bLocked, monotonic epoch)`, not inferred only by pawn polling. Rising is published synchronously after reducer reservation and before transport; every falling transition (terminal, `FAILEDACTION`, transport rollback, reset, logout, or disconnect) is published. Manual `PendingMove` never publishes an authority transition.
+- Every rising skill or invalid-`ATTR_MSPD` prediction lock immediately stops character movement and consumes pending movement input. Timer reporting refreshes the lock and returns unless the neutral/re-press gate allows prediction.
 - Characters use the half-meter block raster; scene objects use the separate triangular surface sampler.
 - `databases/game.db` is unrelated and must not be modified or staged.
 - The live probe may change only the isolated local fixture rows, must snapshot them first, and must restore them in `finally` on every exit path.
 - Each GREEN task receives an implementation review and a separate commit.
+- Run heavy commands strictly serial, prefix them with `nice -n 10`, cap Unreal builds with `-MaxParallelActions=4`, and verify that Unreal GUI/editor/client and Wine/CrossOver processes are closed after every run.
 
 ## Common Verification Commands
 
 ```bash
-"/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/Mac/Build.sh" \
+nice -n 10 "/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/Mac/Build.sh" \
   CorsairsUEEditor Mac Development \
-  "$PWD/CorsairsUE/CorsairsUE.uproject" -WaitMutex
-"/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac/UnrealEditor-Cmd" \
+  "$PWD/CorsairsUE/CorsairsUE.uproject" -WaitMutex -MaxParallelActions=4
+nice -n 10 "/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac/UnrealEditor-Cmd" \
   "$PWD/CorsairsUE/CorsairsUE.uproject" \
   -unattended -nop4 -NullRHI -NoSound \
   -ExecCmds="Automation RunTests Corsairs.Movement" \
@@ -565,6 +568,9 @@ git commit -m "feat(net): integrate authoritative movement session"
 - Modify: `CorsairsUE/Source/CorsairsGame/Public/CorsairsPlayerCharacter.h`
 - Modify: `CorsairsUE/Source/CorsairsGame/Private/CorsairsPlayerCharacter.cpp`
 - Create: `CorsairsUE/Source/CorsairsGame/Private/Tests/CorsairsPlayerMovementTests.cpp`
+- Modify: `CorsairsUE/Source/CorsairsNet/Public/CorsairsSession.h`
+- Modify: `CorsairsUE/Source/CorsairsNet/Private/CorsairsSession.cpp`
+- Modify: `CorsairsUE/Source/CorsairsNet/Private/Tests/CorsairsSessionMovementTests.cpp`
 
 **Pure interface:**
 
@@ -609,6 +615,29 @@ void HandleMovementChanged(
 
 `AttachSession` uses `AddDynamic`; detach/end play removes that binding. The test asserts one broadcast invokes the handler exactly once after reattachment, not twice.
 
+Add the Session authority delegate and state:
+
+```cpp
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+    FCorsairsMovementAuthorityChanged,
+    bool, bLocked,
+    int64, Epoch);
+
+UPROPERTY(BlueprintAssignable, Category = "Corsairs")
+FCorsairsMovementAuthorityChanged OnMovementAuthorityChanged;
+
+UFUNCTION(BlueprintPure, Category = "Corsairs")
+int64 GetMovementAuthorityEpoch() const;
+```
+
+Session owns one compare/publish helper. It increments the epoch only when the
+reducer's skill-authority state changes. `UseSkillOn` publishes rising inside
+the `ActionReducer.Begin` send lambda, after reservation and before transport.
+Reducer terminal/`FAILEDACTION`, transport rollback, logout/reset and
+disconnect publish falling synchronously; manual MOVE reservation emits
+nothing. Pawn binds/detaches this delegate alongside `OnMovementChanged` and
+ignores stale epochs.
+
 - [ ] **Step 1: Add RED pure gate tests**
 
 Register:
@@ -634,6 +663,7 @@ Register:
 Corsairs.Movement.Pawn.FirstSegmentFromSpawn
 Corsairs.Movement.Pawn.HeldInputNoPacketFlood
 Corsairs.Movement.Pawn.ReconcilesTerminalExactly
+Corsairs.Movement.Pawn.AuthorityTransitionRace
 ```
 
 The first test attaches an in-world session at `(223325,278475)`, moves before the first 0.5-second report, and requires the first captured path to be `[spawn,current]`, not omitted and not `[current,current]`.
@@ -642,23 +672,56 @@ The held-input test injects a rejected event while Forward remains 1, simulates 
 
 The terminal test requires exact XY teleport to the server endpoint and zero velocity/input vector.
 
-- [ ] **Step 3: Verify RED**
+The authority-race test starts with held input, nonzero velocity and pending
+input, broadcasts rising then falling before the next axis sample, and ticks
+for two seconds. Transform and send count remain unchanged, velocity/input are
+zero, held samples remain blocked, and only neutral/re-press allows one MOVE.
+A second fixture changes a previously positive `ATTR_MSPD` to zero and requires
+the same stop/consume/report gate.
 
-Expected failures: old code discards the first segment and advances `ReportedPosition` on socket send.
+- [ ] **Step 3: Add RED Session authority-transition test**
 
-- [ ] **Step 4: Implement pawn integration**
+Register:
 
-Remove `ReportedPosition`, `bHasReported`, and the initial-report discard. Store both axis values, including zeros. Before `AddMovementInput`, update the pure gate with `Session->IsMovementAuthorityLocked()`.
+```text
+Corsairs.Movement.Session.AuthorityTransitions
+```
 
-`ReportMovement` calls `SubmitPredictedPosition(ToMapCoordinates(GetActorLocation()))`; no result advances confirmed state.
+Through real `UseSkillOn` and serialized terminal/`FAILEDACTION` delivery,
+require ordered `(true, 1), (false, 2)` transitions without an intervening axis
+sample. The rising event must already be observable inside the transport
+callback. Transport rollback, logout/reset and disconnect emit ordered
+rising/falling; manual `SendMovePath` emits none.
+
+- [ ] **Step 4: Verify RED**
+
+Expected original failures: old code discards the first segment and advances
+`ReportedPosition` on socket send. Expected authority review-fix failures:
+Session observes zero transition events instead of each ordered pair; pawn
+leaves velocity and pending input nonzero after transient rising/falling and
+the timer sends one MOVE instead of zero.
+
+- [ ] **Step 5: Implement Session and pawn integration**
+
+Remove `ReportedPosition`, `bHasReported`, and the initial-report discard. Store both axis values, including zeros. The Session authority delegate updates the pure gate synchronously; polling remains only a current-state refresh and cannot replace transition delivery.
+
+`ReportMovement` refreshes speed/authority, returns unless
+`MovementInputGate.AllowsPrediction()`, then calls
+`SubmitPredictedPosition(ToMapCoordinates(GetActorLocation()))`; no result
+advances confirmed state. Tick refreshes before `CharacterMovement` so a zero
+speed cannot leak one local frame.
 
 Bind `OnMovementChanged` in `AttachSession`. For terminal/rejected events, zero velocity, consume the movement vector, require neutral when requested, and teleport exact authoritative XY. Z is supplied by Task 6 ground.
 
 Set `CharacterMovement->MaxFlySpeed` from positive session `ATTR_MSPD=44`; missing/zero speed keeps prediction locked and exposes the protocol error instead of using an arbitrary fallback. Manual (`bServerDriven=false`) AcceptedPath events never start a follower and therefore cannot fight local prediction.
 
+On every combined-lock rising edge (skill authority or invalid speed), call
+`StopMovementImmediately` and `ConsumeMovementInputVector` before prediction
+can continue. Falling preserves the neutral/re-press latch.
+
 Implement `ApplyMovementAxisForProbe` as the only non-shipping runtime seam used by Task 8; unit-test both accepted axis names and rejection of an unknown name.
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [ ] **Step 6: Verify GREEN and commit**
 
 ```bash
 git add \
@@ -667,7 +730,10 @@ git add \
   CorsairsUE/Source/CorsairsGame/Private/Tests/CorsairsMovementInputGateTests.cpp \
   CorsairsUE/Source/CorsairsGame/Public/CorsairsPlayerCharacter.h \
   CorsairsUE/Source/CorsairsGame/Private/CorsairsPlayerCharacter.cpp \
-  CorsairsUE/Source/CorsairsGame/Private/Tests/CorsairsPlayerMovementTests.cpp
+  CorsairsUE/Source/CorsairsGame/Private/Tests/CorsairsPlayerMovementTests.cpp \
+  CorsairsUE/Source/CorsairsNet/Public/CorsairsSession.h \
+  CorsairsUE/Source/CorsairsNet/Private/CorsairsSession.cpp \
+  CorsairsUE/Source/CorsairsNet/Private/Tests/CorsairsSessionMovementTests.cpp
 git commit -m "fix(ue): reconcile blocked movement input"
 ```
 
