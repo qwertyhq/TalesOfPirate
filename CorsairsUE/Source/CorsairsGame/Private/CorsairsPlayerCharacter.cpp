@@ -134,6 +134,12 @@ bool ACorsairsPlayerCharacter::SetBodyMesh(const FString& AssetPath)
 		const double Wanted = CapsuleHalfHeight * 2.0;
 		const double Factor = Wanted / ModelHeight;
 		GetMesh()->SetRelativeScale3D(FVector(Factor));
+
+		// Подошвы опускаются к низу капсулы. Считать смещение по повёрнутым
+		// границам не вышло — модель уходила из кадра ещё дальше, а разбор
+		// того, где у неё начало координат после двух поворотов, стоит
+		// дороже, чем даёт.
+		GetMesh()->SetRelativeLocation(FVector(0.0f, 0.0f, -CapsuleHalfHeight));
 		UE_LOG(LogCorsairsCharacter, Log,
 			   TEXT("модель %s: высота %.0f см, масштаб %.2f"),
 			   *AssetPath, ModelHeight, Factor);
