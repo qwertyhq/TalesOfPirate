@@ -9,6 +9,30 @@ DEFINE_LOG_CATEGORY_STATIC(LogCorsairsCharacter, Log, All);
 namespace
 {
 	constexpr double CharacterHeight = 176.0;
+
+	UAnimSequence* LoadAppearanceAnimation(
+		const FSoftObjectPath& AnimationPath)
+	{
+		UAnimSequence* Sequence =
+			Cast<UAnimSequence>(AnimationPath.TryLoad());
+		if (Sequence == nullptr)
+		{
+			UE_LOG(
+				LogCorsairsCharacter,
+				Warning,
+				TEXT("анимация не загрузилась: %s"),
+				*AnimationPath.ToString());
+		}
+		return Sequence;
+	}
+
+	void PlayLoopingAnimation(
+		USkeletalMeshComponent* Mesh,
+		UAnimSequence* Sequence)
+	{
+		Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+		Mesh->PlayAnimation(Sequence, true);
+	}
 }
 
 ACorsairsCharacter::ACorsairsCharacter()
@@ -53,6 +77,41 @@ bool ACorsairsCharacter::ApplyAppearance(
 			return false;
 		}
 
+		UAnimSequence* Animation =
+			LoadAppearanceAnimation(Appearance.Animation);
+		if (Animation == nullptr)
+		{
+			return false;
+		}
+
+		TStaticArray<USkeletalMesh*, 5> PartMeshes = {
+			nullptr,
+			nullptr,
+			nullptr,
+			nullptr,
+			nullptr
+		};
+		for (int32 Slot = 0; Slot < VisibleParts.Num(); ++Slot)
+		{
+			const FSoftObjectPath& PartPath = Appearance.PartMeshes[Slot];
+			if (PartPath.IsNull())
+			{
+				continue;
+			}
+
+			PartMeshes[Slot] =
+				Cast<USkeletalMesh>(PartPath.TryLoad());
+			if (PartMeshes[Slot] == nullptr)
+			{
+				UE_LOG(
+					LogCorsairsCharacter,
+					Warning,
+					TEXT("часть %d не загрузилась: %s"),
+					Slot,
+					*PartPath.ToString());
+			}
+		}
+
 		GetMesh()->SetSkeletalMesh(Driver);
 		GetMesh()->VisibilityBasedAnimTickOption =
 			EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
@@ -61,32 +120,16 @@ bool ACorsairsCharacter::ApplyAppearance(
 		for (int32 Slot = 0; Slot < VisibleParts.Num(); ++Slot)
 		{
 			USkeletalMeshComponent* Part = VisibleParts[Slot];
-			const FSoftObjectPath& PartPath = Appearance.PartMeshes[Slot];
-			USkeletalMesh* PartMesh = nullptr;
-			if (!PartPath.IsNull())
-			{
-				PartMesh = Cast<USkeletalMesh>(PartPath.TryLoad());
-				if (PartMesh == nullptr)
-				{
-					UE_LOG(
-						LogCorsairsCharacter,
-						Warning,
-						TEXT("часть %d не загрузилась: %s"),
-						Slot,
-						*PartPath.ToString());
-				}
-			}
-
-			Part->SetSkeletalMesh(PartMesh);
+			Part->SetSkeletalMesh(PartMeshes[Slot]);
 			Part->SetLeaderPoseComponent(GetMesh(), true, false);
 			Part->SetVisibility(true, false);
 		}
 
 		ApplySharedScale();
-		return PlayAppearanceAnimation(Appearance.Animation);
+		PlayLoopingAnimation(GetMesh(), Animation);
+		return true;
 	}
 
-	HideVisibleParts();
 	USkeletalMesh* Mesh =
 		Cast<USkeletalMesh>(Appearance.StaticMesh.TryLoad());
 	if (Mesh == nullptr)
@@ -99,10 +142,19 @@ bool ACorsairsCharacter::ApplyAppearance(
 		return false;
 	}
 
+	UAnimSequence* Animation =
+		LoadAppearanceAnimation(Appearance.Animation);
+	if (Animation == nullptr)
+	{
+		return false;
+	}
+
+	HideVisibleParts();
 	GetMesh()->SetSkeletalMesh(Mesh);
 	GetMesh()->SetVisibility(true, false);
 	ApplySharedScale();
-	return PlayAppearanceAnimation(Appearance.Animation);
+	PlayLoopingAnimation(GetMesh(), Animation);
+	return true;
 }
 
 USkeletalMeshComponent* ACorsairsCharacter::GetPartComponent(
@@ -114,19 +166,13 @@ USkeletalMeshComponent* ACorsairsCharacter::GetPartComponent(
 bool ACorsairsCharacter::PlayAppearanceAnimation(
 	const FSoftObjectPath& AnimationPath)
 {
-	UAnimSequence* Sequence = Cast<UAnimSequence>(AnimationPath.TryLoad());
+	UAnimSequence* Sequence = LoadAppearanceAnimation(AnimationPath);
 	if (Sequence == nullptr)
 	{
-		UE_LOG(
-			LogCorsairsCharacter,
-			Warning,
-			TEXT("анимация не загрузилась: %s"),
-			*AnimationPath.ToString());
 		return false;
 	}
 
-	GetMesh()->SetAnimationMode(EAnimationMode::AnimationSingleNode);
-	GetMesh()->PlayAnimation(Sequence, true);
+	PlayLoopingAnimation(GetMesh(), Sequence);
 	return true;
 }
 
