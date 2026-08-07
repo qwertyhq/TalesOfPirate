@@ -475,6 +475,58 @@ let private checkEquip =
             let ids = live.Kitbag.Values |> Seq.distinct |> Seq.truncate 8 |> Seq.map string |> String.concat ", "
             Skipped $"оружия в сумке нет; предметы: {ids}" }
 
+
+/// Проверяет умения, у которых аудит данных не нашёл сценария эффекта.
+///
+/// Аудит видит лишь пустое поле и может ошибаться в трактовке; живой сервер
+/// отвечает окончательно. Умение, которое принято к исполнению, но не сняло
+/// цели ни единицы здоровья, — подтверждённый пробел в данных.
+let private checkSuspectSkills (suspects: int64 list) =
+    { Name = "умения без сценария эффекта"
+      Run = fun ctx ->
+        let live = ctx.Live
+        if suspects.IsEmpty then Skipped "список подозрительных умений пуст" else
+        match findMonster ctx with
+        | None -> Skipped "монстра не нашлось"
+        | Some mons ->
+            equipWeapon live |> ignore
+            say live "&dev on"
+            drain live 3.0
+            let verdicts =
+                suspects
+                |> List.map (fun skillId ->
+                    say live $"&skill {skillId},1"
+                    drain live 2.0
+                    let before =
+                        match live.Seen.TryGetValue mons.WorldId with
+                        | true, actor -> actor.Hp
+                        | _ -> 0L
+                    useSkillOnWith live skillId mons 2L
+                    drain live 6.0
+                    let after =
+                        match live.Seen.TryGetValue mons.WorldId with
+                        | true, actor -> actor.Hp
+                        | _ -> 0L
+                    // Монстра лечим обратно, иначе следующее умение бьёт по
+                    // трупу и все последующие приговоры станут ложными.
+                    say live $"&summon {ctx.SummonId}"
+                    drain live 2.0
+                    skillId, before, after)
+
+            say live "&dev off"
+            drain live 1.0
+
+            let harmless =
+                verdicts
+                |> List.filter (fun (_, before, after) -> before > 0L && after >= before)
+                |> List.map (fun (skillId, _, _) -> string skillId)
+
+            if harmless.IsEmpty then
+                Passed $"все {verdicts.Length} проверенных умений наносят урон"
+            else
+                let listed = String.concat ", " harmless
+                Failed $"умения не наносят урона совсем: {listed}" }
+
 let private checkTeleport =
     { Name = "телепорт внутри карты"
       Run = fun ctx ->
@@ -499,6 +551,9 @@ let private ALL =
       checkAttack
       checkDamage
       checkExperience
+      // Номера взяты из аудита данных: у этих умений поле сценария пусто,
+      // тогда как у 278 собратьев того же типа оно заполнено.
+      checkSuspectSkills [ 1L; 2L; 5L ]
       // Инвентарь последним: выдача предмета — тоже действие, и следующий за
       // ней удар сервер отклоняет, пока прежнее действие не завершилось.
       checkKitbag ]
