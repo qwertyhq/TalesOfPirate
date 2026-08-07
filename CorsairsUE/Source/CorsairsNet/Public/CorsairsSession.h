@@ -62,6 +62,15 @@ struct FCorsairsWorldActor
 	 *  внешности, которым пользуются игроки, у них пустое. */
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
 	int32 ChaId = 0;
+
+	/** Ключ сущности на сервере. Идёт в паре с идентификатором: одного
+	 *  идентификатора серверу мало, он сверяет обе половины. */
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int64 Handle = 0;
+
+	/** Здоровье. Обновляется итогами ударов — по нему и видно урон. */
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int64 Hp = 0;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCorsairsActorSeen,
@@ -154,6 +163,59 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	bool SendMovePath(const TArray<FIntPoint>& Path);
 
+	/** Применяет умение к цели.
+	 *
+	 *  Признак движения в пакете жёстко равен двум — «подойти и ударить».
+	 *  С нулём сервер не отвечает вовсе, а путь из одной точки не
+	 *  разыгрывает: подводить персонажа к цели обязан он сам.
+	 *
+	 *  Учтите: без оружия в руках сервер подтвердит действие, но удара не
+	 *  случится — по цели не придёт ничего. Молчание здесь неотличимо от
+	 *  поломки, поэтому оружие надевается заранее. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	bool UseSkillOn(int64 SkillId, int64 TargetWorldId);
+
+	/** Надевает вещь: перекладывает её из ячейки сумки в слот экипировки.
+	 *
+	 *  Слоты — из enumEQUIP_* (правая рука 9). Действие адресуется ячейками,
+	 *  а не номерами предметов, поэтому содержимое сумки нужно знать заранее;
+	 *  оно приходит внутри входа в карту. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	bool EquipItem(int64 FromGrid, int64 ToSlot);
+
+	/** Поднимает лежащий на земле предмет. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	bool PickUpItem(int64 ItemWorldId, int64 ItemHandle);
+
+	/** Начинает разговор с NPC.
+	 *
+	 *  Сервер ищет NPC вокруг положения персонажа, а не по полю зрения: с
+	 *  дальней дистанции запрос не найдёт цели и останется без ответа. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	bool TalkToNpc(int64 NpcWorldId);
+
+	/** Продаёт торговцу вещь из ячейки сумки.
+	 *
+	 *  Сделке должно предшествовать открытие лавки: она ссылается на уже
+	 *  начатый разговор. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	bool SellItemToNpc(int64 NpcWorldId, int64 Grid, int64 Count);
+
+	/** Отправляет реплику в чат. GM-команды идут туда же с префиксом «&». */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	bool Say(const FString& Text);
+
+	/** Характеристики персонажа по номеру атрибута (ChaAttrType.h).
+	 *
+	 *  Пополняются и обновлениями характеристик, и результатами ударов:
+	 *  опыт с расходом маны приходят внутри уведомления о действии. */
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	TMap<int64, int64> GetAttributes() const { return Attributes; }
+
+	/** Содержимое сумки: номер ячейки → номер предмета. */
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	TMap<int64, int64> GetKitbag() const { return Kitbag; }
+
 	/** Идентификатор персонажа в мире. Приходит при входе в карту и нужен в
 	 *  каждой команде действия. */
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
@@ -213,6 +275,16 @@ private:
 
 	TMap<int32, int32> ReceivedCommands;
 	TArray<FCorsairsWorldActor> VisibleActors;
+
+	/** Характеристики персонажа и содержимое сумки — состояние, без которого
+	 *  не собрать ни удар, ни экипировку. */
+	TMap<int64, int64> Attributes;
+	TMap<int64, int64> Kitbag;
+
+	/** Ищет цель в поле зрения. Удар адресуется парой «идентификатор +
+	 *  handle», и handle берётся отсюда: у сущностей вроде NPC старший бит
+	 *  идентификатора установлен, и одного его серверу мало. */
+	const FCorsairsWorldActor* FindActor(int64 TargetWorldId) const;
 
 	FString PendingAccount;
 	FString PendingPasswordHash;

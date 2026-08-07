@@ -21,6 +21,16 @@ namespace
 	 *  вход. Значение зафиксировано протоколом. */
 	constexpr int32 EquipSlotNum = 34;
 
+	/** Номер атрибута здоровья (ChaAttrType.h). Массив атрибутов плотный, без
+	 *  дыр, поэтому номера заданы числами. */
+	constexpr int64 kAttrHp = 1;
+
+	/** Действия внутри разговора с NPC (BuildNpcActionTable в NpcScript.cpp).
+	 *  Сервер читает код действия вторым полем и по нему выбирает ветку
+	 *  скрипта; без кода скрипт разбирает мусор и молчит. */
+	constexpr int64 kNpcActionTalkPage = 302;
+	constexpr int64 kNpcActionTradeItem = 309;
+
 	FString ToFString(const std::string& Value)
 	{
 		return FString(UTF8_TO_TCHAR(Value.c_str()));
@@ -107,6 +117,126 @@ bool UCorsairsSession::SendMovePath(const TArray<FIntPoint>& Path)
 	Packet.WriteInt64(Corsairs::Net::Msg::ActionType::MOVE);
 	Packet.WriteSequence(Blob.GetData(), static_cast<uint16>(Blob.Num()));
 
+	return Connection->Send(Packet);
+}
+
+const FCorsairsWorldActor* UCorsairsSession::FindActor(int64 TargetWorldId) const
+{
+	return VisibleActors.FindByPredicate(
+		[TargetWorldId](const FCorsairsWorldActor& A) { return A.WorldId == TargetWorldId; });
+}
+
+bool UCorsairsSession::UseSkillOn(int64 SkillId, int64 TargetWorldId)
+{
+	if (Connection == nullptr || Stage != ECorsairsLoginStage::InWorld)
+	{
+		return false;
+	}
+	const FCorsairsWorldActor* Target = FindActor(TargetWorldId);
+	if (Target == nullptr)
+	{
+		// Цели нет в поле зрения — сервер всё равно ответил бы отказом
+		// «цели не существует», и разбирать его пришлось бы вслепую.
+		return false;
+	}
+
+	// Путь ведёт от персонажа к цели. Сервер сам проводит по нему персонажа и
+	// бьёт по прибытии; путь из одной точки он не разыгрывает вовсе.
+	const int32 Coordinates[4] = {
+		SpawnPosition.X, SpawnPosition.Y,
+		Target->Position.X, Target->Position.Y };
+	TArray<uint8> Blob;
+	Blob.Append(reinterpret_cast<const uint8*>(Coordinates), sizeof(Coordinates));
+
+	WPacket Packet(128 + Blob.Num());
+	Packet.WriteCmd(CMD_CM_BEGINACTION);
+	Packet.WriteInt64(WorldId);
+	Packet.WriteInt64(++ActionPacketId);
+	Packet.WriteInt64(Corsairs::Net::Msg::ActionType::SKILL);
+	// Признак движения строго 2 — «подойти и ударить». С нулём сервер молчит.
+	Packet.WriteInt64(2);
+	Packet.WriteInt64(ActionPacketId);
+	Packet.WriteSequence(Blob.GetData(), static_cast<uint16>(Blob.Num()));
+	Packet.WriteInt64(SkillId);
+	Packet.WriteInt64(Target->WorldId);
+	Packet.WriteInt64(Target->Handle);
+
+	return Connection->Send(Packet);
+}
+
+bool UCorsairsSession::EquipItem(int64 FromGrid, int64 ToSlot)
+{
+	if (Connection == nullptr || Stage != ECorsairsLoginStage::InWorld)
+	{
+		return false;
+	}
+	WPacket Packet(64);
+	Packet.WriteCmd(CMD_CM_BEGINACTION);
+	Packet.WriteInt64(WorldId);
+	Packet.WriteInt64(++ActionPacketId);
+	Packet.WriteInt64(Corsairs::Net::Msg::ActionType::ITEM_USE);
+	Packet.WriteInt64(FromGrid);
+	Packet.WriteInt64(ToSlot);
+	return Connection->Send(Packet);
+}
+
+bool UCorsairsSession::PickUpItem(int64 ItemWorldId, int64 ItemHandle)
+{
+	if (Connection == nullptr || Stage != ECorsairsLoginStage::InWorld)
+	{
+		return false;
+	}
+	WPacket Packet(64);
+	Packet.WriteCmd(CMD_CM_BEGINACTION);
+	Packet.WriteInt64(WorldId);
+	Packet.WriteInt64(++ActionPacketId);
+	Packet.WriteInt64(Corsairs::Net::Msg::ActionType::ITEM_PICK);
+	Packet.WriteInt64(ItemWorldId);
+	Packet.WriteInt64(ItemHandle);
+	return Connection->Send(Packet);
+}
+
+bool UCorsairsSession::TalkToNpc(int64 NpcWorldId)
+{
+	if (Connection == nullptr || Stage != ECorsairsLoginStage::InWorld)
+	{
+		return false;
+	}
+	WPacket Packet(64);
+	Packet.WriteCmd(CMD_CM_REQUESTNPC);
+	Packet.WriteInt64(NpcWorldId);
+	// Код действия и номер страницы обязательны: без них скрипт NPC разберёт
+	// мусор и промолчит.
+	Packet.WriteInt64(kNpcActionTalkPage);
+	Packet.WriteInt64(0);
+	return Connection->Send(Packet);
+}
+
+bool UCorsairsSession::SellItemToNpc(int64 NpcWorldId, int64 Grid, int64 Count)
+{
+	if (Connection == nullptr || Stage != ECorsairsLoginStage::InWorld)
+	{
+		return false;
+	}
+	WPacket Packet(96);
+	Packet.WriteCmd(CMD_CM_REQUESTNPC);
+	Packet.WriteInt64(NpcWorldId);
+	Packet.WriteInt64(kNpcActionTradeItem);
+	Packet.WriteInt64(0);              // ROLE_TRADE_SALE
+	Packet.WriteInt64(Grid);
+	Packet.WriteInt64(Count);
+	return Connection->Send(Packet);
+}
+
+bool UCorsairsSession::Say(const FString& Text)
+{
+	if (Connection == nullptr || Stage != ECorsairsLoginStage::InWorld)
+	{
+		return false;
+	}
+	WPacket Packet(64 + Text.Len() * 2);
+	Packet.WriteCmd(CMD_CM_SAY);
+	Packet.WriteString(TCHAR_TO_UTF8(*Text));
 	return Connection->Send(Packet);
 }
 
@@ -280,6 +410,23 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 
 		const auto& Data = Message.data.value();
 		WorldId = Data.baseInfo.worldId;
+
+		// Сумка и характеристики приходят вместе со входом. Без содержимого
+		// сумки нечем надеть оружие, а без него сервер подтвердит удар, но
+		// разыгрывать его не станет.
+		Kitbag.Reset();
+		for (const auto& Item : Data.kitbag.items)
+		{
+			if (Item.itemId > 0)
+			{
+				Kitbag.Add(Item.gridId, Item.itemId);
+			}
+		}
+		Attributes.Reset();
+		for (const auto& Entry : Data.attr.attrs)
+		{
+			Attributes.Add(Entry.attrId, Entry.attrVal);
+		}
 		SpawnPosition = FIntPoint(static_cast<int32>(Data.baseInfo.posX),
 								  static_cast<int32>(Data.baseInfo.posY));
 		MapName = ToFString(Data.mapName);
@@ -287,6 +434,68 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		SetStage(ECorsairsLoginStage::InWorld,
 				 FString::Printf(TEXT("карта %s, позиция (%d, %d)"),
 								 *MapName, SpawnPosition.X, SpawnPosition.Y));
+		return;
+	}
+
+	if (Cmd == CMD_MC_NOTIACTION)
+	{
+		// Итог удара приходит именно здесь, а не отдельным сообщением о
+		// характеристиках: новое здоровье цели лежит в перечне изменений
+		// действия, а опыт и расход бьющего — в наборе для источника.
+		Corsairs::Net::Msg::McCharacterActionMessage Message;
+		Corsairs::Net::Msg::deserialize(Packet, Message);
+
+		if (const auto* TarData =
+				std::get_if<Corsairs::Net::Msg::ActionSkillTarData>(&Message.data))
+		{
+			if (FCorsairsWorldActor* Actor = VisibleActors.FindByPredicate(
+					[&Message](const FCorsairsWorldActor& A)
+					{ return A.WorldId == Message.worldId; }))
+			{
+				for (const auto& Entry : TarData->effects)
+				{
+					if (Entry.attrId == kAttrHp)
+					{
+						Actor->Hp = Entry.attrVal;
+						break;
+					}
+				}
+			}
+			if (TarData->srcId == WorldId)
+			{
+				for (const auto& Entry : TarData->srcEffects)
+				{
+					Attributes.Add(Entry.attrId, Entry.attrVal);
+				}
+			}
+		}
+		return;
+	}
+
+	if (Cmd == CMD_MC_SYNATTR)
+	{
+		Corsairs::Net::Msg::McSynAttributeMessage Message;
+		Corsairs::Net::Msg::deserialize(Packet, Message);
+		if (Message.worldId == WorldId)
+		{
+			for (const auto& Entry : Message.attr.attrs)
+			{
+				Attributes.Add(Entry.attrId, Entry.attrVal);
+			}
+		}
+		else if (FCorsairsWorldActor* Actor = VisibleActors.FindByPredicate(
+					 [&Message](const FCorsairsWorldActor& A)
+					 { return A.WorldId == Message.worldId; }))
+		{
+			for (const auto& Entry : Message.attr.attrs)
+			{
+				if (Entry.attrId == kAttrHp)
+				{
+					Actor->Hp = Entry.attrVal;
+					break;
+				}
+			}
+		}
 		return;
 	}
 
@@ -310,6 +519,15 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		Actor.TypeId = static_cast<int32>(Message.base.look.typeId);
 		Actor.CtrlType = static_cast<int32>(Message.base.ctrlType);
 		Actor.ChaId = static_cast<int32>(Message.base.chaId);
+		Actor.Handle = Message.base.handle;
+		for (const auto& Entry : Message.attr.attrs)
+		{
+			if (Entry.attrId == kAttrHp)
+			{
+				Actor.Hp = Entry.attrVal;
+				break;
+			}
+		}
 
 		// У игроков модель задаёт внешность, у NPC — запись в таблице
 		// персонажей: поле внешности у них не заполняется.
