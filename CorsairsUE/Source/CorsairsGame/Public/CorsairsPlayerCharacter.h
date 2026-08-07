@@ -14,10 +14,10 @@ class USpringArmComponent;
 /**
  * Персонаж игрока: тело, камера и движение.
  *
- * Наследуется от ACharacter ради CharacterMovementComponent — он уже умеет
- * ходьбу по поверхности, ступеньки и гравитацию. Переносить эту механику из
- * MindPower3D не нужно: сервер всё равно остаётся источником истины о
- * положении, а клиентское движение служит предсказанием.
+ * Наследуется от ACharacter ради CharacterMovementComponent, капсулы и
+ * стандартного input path. Высота берётся напрямую из half-meter block
+ * raster без гравитации: сервер остаётся источником истины о положении, а
+ * локальное движение служит предсказанием.
  *
  * Модель подбирается по типу персонажа из ответа на вход. Соответствие «тип ->
  * скелет и наборы кожи» лежит в таблице character_models игровых данных.
@@ -36,6 +36,8 @@ public:
 	/** Кому отправлять путь движения. Задаётся режимом игры после входа. */
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	void AttachSession(UCorsairsSession* InSession);
+	virtual void AttachCharacterGround(
+		const FCorsairsCharacterGround* InGround) override;
 
 #if !UE_BUILD_SHIPPING
 	void ApplyMovementAxisForProbe(FName AxisName, float Value);
@@ -44,11 +46,6 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-
-public:
-	/** Привязывает персонажа к карте высот указанной карты. */
-	UFUNCTION(BlueprintCallable, Category = "Corsairs")
-	bool UseTerrainHeights(const FString& MapName);
 
 protected:
 
@@ -92,13 +89,6 @@ private:
 	TObjectPtr<UCorsairsSession> Session;
 
 	FCorsairsMovementInputGate MovementInputGate;
-
-	/** Карта высот текущей карты. Персонаж удерживается на ней вручную:
-	 *  рельеф пришёл из glTF без физических данных, и провалиться сквозь
-	 *  землю иначе — вопрос одного кадра. Оригинальный движок делал так же и
-	 *  физикой рельефа не пользовался вовсе. */
-	UPROPERTY()
-	TObjectPtr<class UCorsairsTerrainHeights> TerrainHeights;
 
 	/** Разовая диагностика вида: копит время и срабатывает один раз. */
 	float DiagnosticTimer = 0.0f;

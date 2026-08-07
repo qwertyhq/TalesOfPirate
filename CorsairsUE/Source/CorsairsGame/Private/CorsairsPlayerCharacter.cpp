@@ -2,12 +2,12 @@
 
 #include "Camera/CameraComponent.h"
 #include "CorsairsCameraProfile.h"
+#include "CorsairsCharacterGround.h"
 #include "CorsairsLoginHud.h"
 #include "CorsairsSession.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
-#include "TerrainHeights.h"
 
 namespace
 {
@@ -106,6 +106,21 @@ void ACorsairsPlayerCharacter::AttachSession(UCorsairsSession* InSession)
 	UpdateMovementPredictionState();
 }
 
+void ACorsairsPlayerCharacter::AttachCharacterGround(
+	const FCorsairsCharacterGround* InGround)
+{
+	Super::AttachCharacterGround(InGround);
+	if (InGround == nullptr)
+	{
+		return;
+	}
+
+	// CharacterGridHeight является единственным источником Z. Физическая
+	// форма terrain для движения персонажа не используется.
+	GetCharacterMovement()->GravityScale = 0.0f;
+	GetCharacterMovement()->SetMovementMode(MOVE_Flying);
+}
+
 void ACorsairsPlayerCharacter::BeginPlay()
 {
 	Super::BeginPlay();
@@ -147,25 +162,6 @@ void ACorsairsPlayerCharacter::EndPlay(
 	Super::EndPlay(EndPlayReason);
 }
 
-bool ACorsairsPlayerCharacter::UseTerrainHeights(const FString& MapName)
-{
-	if (TerrainHeights == nullptr)
-	{
-		TerrainHeights = NewObject<UCorsairsTerrainHeights>(this);
-	}
-	if (!TerrainHeights->Load(MapName))
-	{
-		TerrainHeights = nullptr;
-		return false;
-	}
-
-	// Гравитация выключается: высоту задаёт карта, а не падение. С включённой
-	// персонаж проваливался сквозь землю — у рельефа нет физической формы.
-	GetCharacterMovement()->GravityScale = 0.0f;
-	GetCharacterMovement()->SetMovementMode(MOVE_Flying);
-	return true;
-}
-
 void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 {
 	// Authority и ATTR_MSPD могли измениться без нового axis sample. Lock
@@ -178,7 +174,7 @@ void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 	//
 	// Перемещение только при заметном расхождении: телепорт каждый кадр даёт
 	// дрожание и смазывание картинки в движении, даже когда высота уже верна.
-	if (TerrainHeights != nullptr && TerrainHeights->IsLoaded())
+	if (CharacterGround != nullptr && CharacterGround->IsLoaded())
 	{
 		// Без ввода персонаж обязан стоять. В режиме полёта, куда его
 		// переводит удержание на земле, остаточная скорость не гасится ничем,
@@ -190,8 +186,12 @@ void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 		}
 
 		FVector Location = GetActorLocation();
-		const double Wanted = TerrainHeights->HeightAt(Location.X, Location.Y)
-			+ GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+		const FIntPoint SourcePosition(
+			FMath::RoundToInt(Location.X),
+			FMath::RoundToInt(-Location.Y));
+		const double Wanted = CharacterGround->ActorCenter(
+			SourcePosition,
+			GetCapsuleComponent()->GetScaledCapsuleHalfHeight()).Z;
 		if (FMath::Abs(Location.Z - Wanted) > 1.0)
 		{
 			Location.Z = Wanted;

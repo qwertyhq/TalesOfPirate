@@ -1,11 +1,10 @@
 #include "CorsairsGameMode.h"
 
-#include "TerrainHeights.h"
-
 #include "CorsairsCharacter.h"
 #include "CorsairsLoginHud.h"
 #include "CorsairsPlayerCharacter.h"
 
+#include "Components/CapsuleComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/Paths.h"
@@ -18,73 +17,6 @@ namespace
 	 *  Scripts/build_character_map.py по таблице characters игровых данных:
 	 *  внутри игры нет ни sqlite3, ни доступа к исходникам. */
 	const TCHAR* CharacterMapRelativePath = TEXT("Data/character_map.json");
-
-	/** На сколько поднять персонажа над серверной позицией при появлении.
-	 *  Точная высота земли в этой точке клиенту неизвестна, а падение с
-	 *  запасом безопаснее застревания в грунте. */
-	constexpr double SpawnHeightMargin = 500.0;
-
-	/** С какой высоты искать землю и как далеко вниз. Рельеф карты лежит в
-	 *  пределах десяти метров от нуля, но объекты сцены поднимаются выше, и
-	 *  запас берётся с большим избытком. */
-	constexpr double GroundTraceStart = 100000.0;
-	constexpr double GroundTraceDepth = 200000.0;
-
-	/** Тег плиток рельефа. Метка актёра живёт только в редакторе, а отличить
-	 *  землю от построек нужно в игре: иначе персонаж встаёт на крышу. */
-	const FName TerrainTag(TEXT("CorsairsTerrain"));
-
-	/** Ставит точку на землю под ней.
-	 *
-	 *  Без этого высота бралась от места, где стоит PlayerStart, а он на
-	 *  карте один и к серверной позиции отношения не имеет: персонаж
-	 *  оказывался в пустоте на высоте девятнадцати метров и висел в небе,
-	 *  потому что земли под ним в этом месте нет вовсе. */
-	bool DropToGround(UWorld* World, FVector& Location)
-	{
-		if (World == nullptr)
-		{
-			return false;
-		}
-		const FVector From(Location.X, Location.Y, GroundTraceStart);
-		const FVector To(Location.X, Location.Y, GroundTraceStart - GroundTraceDepth);
-
-		// Собираем все пересечения и ищем среди них рельеф. Брать первое
-		// сверху нельзя — это крыша дома или ветка; брать самое нижнее тоже,
-		// потому что ниже земли попадаются подвалы и вода. Нужен именно
-		// грунт, и узнаётся он по тегу.
-		TArray<FHitResult> Hits;
-		FCollisionQueryParams Params(SCENE_QUERY_STAT(CorsairsSpawnGround), false);
-		if (!World->LineTraceMultiByChannel(Hits, From, To, ECC_WorldStatic, Params))
-		{
-			return false;
-		}
-
-		for (const FHitResult& Hit : Hits)
-		{
-			const AActor* HitActor = Hit.GetActor();
-			if (HitActor != nullptr && HitActor->ActorHasTag(TerrainTag))
-			{
-				Location.Z = Hit.Location.Z + SpawnHeightMargin;
-				return true;
-			}
-		}
-
-		// Рельефа под точкой не оказалось — падаем на то, что нашлось ниже
-		// всего, лишь бы не остаться висеть в воздухе.
-		double Lowest = TNumericLimits<double>::Max();
-		for (const FHitResult& Hit : Hits)
-		{
-			Lowest = FMath::Min(Lowest, Hit.Location.Z);
-		}
-		if (Lowest == TNumericLimits<double>::Max())
-		{
-			return false;
-		}
-
-		Location.Z = Lowest + SpawnHeightMargin;
-		return true;
-	}
 }
 
 ACorsairsGameMode::ACorsairsGameMode()
@@ -158,6 +90,29 @@ void ACorsairsGameMode::StartLogin()
 
 void ACorsairsGameMode::EndPlay(const EEndPlayReason::Type Reason)
 {
+	APlayerController* Controller =
+		UGameplayStatics::GetPlayerController(this, 0);
+	if (ACorsairsPlayerCharacter* Local = Controller != nullptr
+		? Cast<ACorsairsPlayerCharacter>(Controller->GetPawn())
+		: nullptr)
+	{
+		Local->AttachSession(nullptr);
+		Local->AttachCharacterGround(nullptr);
+	}
+
+	for (TPair<int64, TObjectPtr<ACorsairsCharacter>>& Pair : WorldActors)
+	{
+		if (Pair.Value != nullptr)
+		{
+			Pair.Value->AttachCharacterGround(nullptr);
+			Pair.Value->Destroy();
+		}
+	}
+	WorldActors.Empty();
+	WorldActorNames.Empty();
+	WorldActorArchetypes.Empty();
+	CharacterGround.Reset();
+
 	if (Session != nullptr)
 	{
 		Session->Logout();
@@ -241,38 +196,14 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 			break;
 		}
 
-		// Персонажа ставим туда, где его держит сервер. Ось Y
-		// инвертируется, как при размещении объектов; высота берётся
-		// с запасом над рельефом, дальше персонаж падает на землю сам.
+		// Персонажа ставим ровно в source-cell, который подтвердил сервер.
+		// Z и block flag берутся из half-meter character grid, отдельно от
+		// интерполируемой поверхности сцены.
 		const FIntPoint Spawn = LocalActor.Position;
-		FVector Location(
-			static_cast<double>(Spawn.X),
-			-static_cast<double>(Spawn.Y),
-			Character->GetActorLocation().Z + SpawnHeightMargin);
-
-		// Высота берётся из карты высот — той же, из которой построена
-		// видимая земля. Трассировка тут не годится: рельеф пришёл из
-		// glTF без физической формы, и луч проходит сквозь него.
-		// Карта высот загружается один раз на всех: и свой персонаж, и
-		// показанные сервером ставятся по ней.
-		if (TerrainHeights == nullptr)
-		{
-			TerrainHeights = NewObject<UCorsairsTerrainHeights>(this);
-		}
-		TerrainHeights->Load(Session->GetMapName());
-
-		const bool bGrounded =
-			Character->UseTerrainHeights(Session->GetMapName());
-		if (!bGrounded)
-		{
-			DropToGround(GetWorld(), Location);
-		}
-
-		Character->SetActorLocation(
-			Location,
-			false,
-			nullptr,
-			ETeleportType::TeleportPhysics);
+		const bool bGroundLoaded =
+			LoadCharacterGround(Session->GetMapName());
+		GroundCharacter(Character, Spawn);
+		const FVector Location = Character->GetActorLocation();
 		UE_LOG(
 			LogCorsairsGameMode,
 			Log,
@@ -283,7 +214,7 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 			Location.X,
 			Location.Y,
 			Location.Z,
-			bGrounded ? TEXT("найдена") : TEXT("НЕ НАЙДЕНА"));
+			bGroundLoaded ? TEXT("найдена") : TEXT("НЕ НАЙДЕНА"));
 
 		// С этого момента персонаж сам сообщает серверу о перемещении.
 		Character->AttachSession(Session);
@@ -294,6 +225,116 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 		break;
 	}
 }
+
+bool ACorsairsGameMode::LoadCharacterGround(const FString& MapName)
+{
+	if (CharacterGround == nullptr)
+	{
+		CharacterGround = MakeUnique<FCorsairsCharacterGround>();
+	}
+	FString Error;
+	if (CharacterGround->Load(MapName, Error))
+	{
+		return true;
+	}
+
+	UE_LOG(
+		LogCorsairsGameMode,
+		Error,
+		TEXT("character ground карты %s не загрузился: %s"),
+		*MapName,
+		*Error);
+	return false;
+}
+
+void ACorsairsGameMode::GroundCharacter(
+	ACorsairsCharacter* Character,
+	const FIntPoint SourcePosition)
+{
+	if (Character == nullptr)
+	{
+		return;
+	}
+	if (CharacterGround == nullptr)
+	{
+		CharacterGround = MakeUnique<FCorsairsCharacterGround>();
+	}
+
+	Character->AttachCharacterGround(CharacterGround.Get());
+	const FVector Center = CharacterGround->ActorCenter(
+		SourcePosition,
+		Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+	Character->SetActorLocation(
+		Center,
+		false,
+		nullptr,
+		ETeleportType::TeleportPhysics);
+}
+
+ACorsairsCharacter* ACorsairsGameMode::SpawnRemoteCharacter(
+	const FIntPoint SourcePosition,
+	const FRotator Rotation)
+{
+	UWorld* World = GetWorld();
+	if (World == nullptr)
+	{
+		return nullptr;
+	}
+	if (CharacterGround == nullptr)
+	{
+		CharacterGround = MakeUnique<FCorsairsCharacterGround>();
+	}
+
+	const ACorsairsCharacter* DefaultCharacter =
+		GetDefault<ACorsairsCharacter>();
+	const double HalfHeight = DefaultCharacter->GetCapsuleComponent()
+		->GetScaledCapsuleHalfHeight();
+	const FVector Center =
+		CharacterGround->ActorCenter(SourcePosition, HalfHeight);
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.SpawnCollisionHandlingOverride =
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ACorsairsCharacter* Spawned = World->SpawnActor<ACorsairsCharacter>(
+		ACorsairsCharacter::StaticClass(),
+		Center,
+		Rotation,
+		SpawnParameters);
+	GroundCharacter(Spawned, SourcePosition);
+	return Spawned;
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+bool ACorsairsGameMode::LoadCharacterGroundFromBytesForTests(
+	const int32 TileWidth,
+	const int32 TileHeight,
+	const TConstArrayView<uint8> Bytes,
+	FString& OutError)
+{
+	if (CharacterGround == nullptr)
+	{
+		CharacterGround = MakeUnique<FCorsairsCharacterGround>();
+	}
+	return CharacterGround->LoadFromBytes(
+		TileWidth,
+		TileHeight,
+		Bytes,
+		OutError);
+}
+
+void ACorsairsGameMode::GroundCharacterForTests(
+	ACorsairsCharacter* Character,
+	const FIntPoint SourcePosition)
+{
+	GroundCharacter(Character, SourcePosition);
+}
+
+ACorsairsCharacter* ACorsairsGameMode::SpawnRemoteCharacterForTests(
+	const FIntPoint SourcePosition,
+	const FRotator Rotation)
+{
+	return SpawnRemoteCharacter(SourcePosition, Rotation);
+}
+#endif
 
 void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 {
@@ -313,35 +354,11 @@ void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 		return;
 	}
 
-	UWorld* World = GetWorld();
-	if (World == nullptr)
-	{
-		return;
-	}
-
 	// Координаты и поворот переводятся так же, как для объектов сцены: ось Y
 	// инвертируется, угол приходит в десятых долях градуса.
-	FVector Location(static_cast<double>(Actor.Position.X),
-					 -static_cast<double>(Actor.Position.Y),
-					 SpawnHeightMargin);
-
-	// Высота — из карты высот, той же, из которой построена видимая земля.
-	// Трассировка оставляла каждого на своей высоте: кого на крыше, кого в
-	// воздухе, и толпа стояла ступеньками.
-	if (TerrainHeights != nullptr && TerrainHeights->IsLoaded())
-	{
-		Location.Z = TerrainHeights->HeightAt(Location.X, Location.Y);
-	}
-	else
-	{
-		DropToGround(World, Location);
-	}
 	const FRotator Rotation(0.0, static_cast<double>(Actor.Angle) / 10.0, 0.0);
-
-	ACorsairsCharacter* Spawned = World->SpawnActor<ACorsairsCharacter>(
-		ACorsairsCharacter::StaticClass(),
-		Location,
-		Rotation);
+	ACorsairsCharacter* Spawned =
+		SpawnRemoteCharacter(Actor.Position, Rotation);
 	if (Spawned == nullptr)
 	{
 		return;
@@ -371,6 +388,7 @@ void ACorsairsGameMode::HandleActorLeft(int64 WorldId)
 	{
 		if (*Found != nullptr)
 		{
+			(*Found)->AttachCharacterGround(nullptr);
 			(*Found)->Destroy();
 		}
 		WorldActors.Remove(WorldId);

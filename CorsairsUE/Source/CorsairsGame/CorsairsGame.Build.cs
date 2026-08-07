@@ -17,9 +17,6 @@ public class CorsairsGame : ModuleRules
 			"InputCore",
 			"EnhancedInput",
 			"CorsairsNet",
-			// Карты высот: персонаж удерживается на земле по ним, а не
-			// физикой — у рельефа из glTF физической формы нет.
-			"CorsairsImport",
 			"Json",
 			"JsonUtilities",
 		});

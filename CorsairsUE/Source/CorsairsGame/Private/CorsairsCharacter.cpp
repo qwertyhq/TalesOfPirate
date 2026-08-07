@@ -60,6 +60,12 @@ ACorsairsCharacter::ACorsairsCharacter()
 	}
 }
 
+void ACorsairsCharacter::AttachCharacterGround(
+	const FCorsairsCharacterGround* InGround)
+{
+	CharacterGround = InGround;
+}
+
 bool ACorsairsCharacter::ApplyAppearance(
 	const FCorsairsResolvedAppearance& Appearance)
 {

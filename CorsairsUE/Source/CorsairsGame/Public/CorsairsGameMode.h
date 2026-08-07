@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "CorsairsCharacterCatalog.h"
+#include "CorsairsCharacterGround.h"
 #include "CorsairsSession.h"
 #include "GameFramework/GameModeBase.h"
 
@@ -65,14 +66,21 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	void StartLogin();
 
-private:
-	/** Карта высот текущей карты — общая для своего персонажа и для всех, кого
-	 *  показывает сервер. Трассировка тут не годится: рельеф пришёл из glTF
-	 *  без физической формы, и луч проходит сквозь него, оставляя каждого на
-	 *  случайной высоте. */
-	UPROPERTY()
-	TObjectPtr<class UCorsairsTerrainHeights> TerrainHeights;
+#if WITH_DEV_AUTOMATION_TESTS
+	bool LoadCharacterGroundFromBytesForTests(
+		int32 TileWidth,
+		int32 TileHeight,
+		TConstArrayView<uint8> Bytes,
+		FString& OutError);
+	void GroundCharacterForTests(
+		ACorsairsCharacter* Character,
+		FIntPoint SourcePosition);
+	ACorsairsCharacter* SpawnRemoteCharacterForTests(
+		FIntPoint SourcePosition,
+		FRotator Rotation);
+#endif
 
+private:
 	UFUNCTION()
 	void HandleStageChanged(ECorsairsLoginStage Stage, const FString& Message);
 
@@ -96,8 +104,16 @@ private:
 		const FCorsairsCharacterLook& Look,
 		const FString& ActorName,
 		int64 WorldId);
+	bool LoadCharacterGround(const FString& MapName);
+	void GroundCharacter(
+		ACorsairsCharacter* Character,
+		FIntPoint SourcePosition);
+	ACorsairsCharacter* SpawnRemoteCharacter(
+		FIntPoint SourcePosition,
+		FRotator Rotation);
 
 	TUniquePtr<FCorsairsCharacterCatalog> CharacterCatalog;
+	TUniquePtr<FCorsairsCharacterGround> CharacterGround;
 	FString StartupError;
 
 	UPROPERTY()
