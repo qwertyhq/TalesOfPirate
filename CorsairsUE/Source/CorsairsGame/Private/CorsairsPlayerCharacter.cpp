@@ -9,6 +9,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "TerrainHeights.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCorsairsCharacter, Log, All);
 
@@ -94,6 +95,22 @@ bool ACorsairsPlayerCharacter::SetBodyMesh(const FString& AssetPath)
 	}
 
 	GetMesh()->SetSkeletalMesh(Mesh);
+
+	// Модели персонажей приходят в своём масштабе — исходный движок приводил
+	// их к росту сам, и в файле он не записан. Замеренная модель имеет высоту
+	// около сорока сантиметров при капсуле в сто семьдесят шесть: без
+	// подгонки персонаж выглядит игрушкой у подножия домов.
+	const FBoxSphereBounds Bounds = Mesh->GetBounds();
+	const double ModelHeight = Bounds.BoxExtent.Z * 2.0;
+	if (ModelHeight > KINDA_SMALL_NUMBER)
+	{
+		const double Wanted = CapsuleHalfHeight * 2.0;
+		const double Factor = Wanted / ModelHeight;
+		GetMesh()->SetRelativeScale3D(FVector(Factor));
+		UE_LOG(LogCorsairsCharacter, Log,
+			   TEXT("модель %s: высота %.0f см, масштаб %.2f"),
+			   *AssetPath, ModelHeight, Factor);
+	}
 	return true;
 }
 
@@ -162,8 +179,38 @@ void ACorsairsPlayerCharacter::BeginPlay()
 	}
 }
 
+bool ACorsairsPlayerCharacter::UseTerrainHeights(const FString& MapName)
+{
+	if (TerrainHeights == nullptr)
+	{
+		TerrainHeights = NewObject<UCorsairsTerrainHeights>(this);
+	}
+	if (!TerrainHeights->Load(MapName))
+	{
+		TerrainHeights = nullptr;
+		return false;
+	}
+
+	// Гравитация выключается: высоту задаёт карта, а не падение. С включённой
+	// персонаж проваливался сквозь землю — у рельефа нет физической формы.
+	GetCharacterMovement()->GravityScale = 0.0f;
+	GetCharacterMovement()->SetMovementMode(MOVE_Flying);
+	return true;
+}
+
 void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 {
+	// Удержание на земле — каждый кадр: персонаж ходит, и высота под ним
+	// меняется. Половина капсулы добавляется, потому что её начало отсчёта в
+	// центре, а стоять надо подошвами.
+	if (TerrainHeights != nullptr && TerrainHeights->IsLoaded())
+	{
+		FVector Location = GetActorLocation();
+		Location.Z = TerrainHeights->HeightAt(Location.X, Location.Y)
+			+ GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+		SetActorLocation(Location, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+
 	// Разовый снимок состояния через несколько секунд после старта: по нему
 	// видно, где персонаж и куда смотрит камера. Без этих чисел причина
 	// «видно только небо» неотличима от десятка других.

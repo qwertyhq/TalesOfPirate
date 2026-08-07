@@ -35,6 +35,10 @@ namespace
 	 *  около сорока пяти градусов — отсюда и значение. */
 	constexpr double CameraPitch = -45.0;
 
+	/** Тег плиток рельефа. Метка актёра живёт только в редакторе, а отличить
+	 *  землю от построек нужно в игре: иначе персонаж встаёт на крышу. */
+	const FName TerrainTag(TEXT("CorsairsTerrain"));
+
 	/** Ставит точку на землю под ней.
 	 *
 	 *  Без этого высота бралась от места, где стоит PlayerStart, а он на
@@ -50,9 +54,10 @@ namespace
 		const FVector From(Location.X, Location.Y, GroundTraceStart);
 		const FVector To(Location.X, Location.Y, GroundTraceStart - GroundTraceDepth);
 
-		// Собираем все пересечения и берём самое нижнее. Одиночная трассировка
-		// возвращает первое сверху, а это крыша дома или ветка дерева —
-		// персонаж оказывался на них, и земля пропадала из виду.
+		// Собираем все пересечения и ищем среди них рельеф. Брать первое
+		// сверху нельзя — это крыша дома или ветка; брать самое нижнее тоже,
+		// потому что ниже земли попадаются подвалы и вода. Нужен именно
+		// грунт, и узнаётся он по тегу.
 		TArray<FHitResult> Hits;
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(CorsairsSpawnGround), false);
 		if (!World->LineTraceMultiByChannel(Hits, From, To, ECC_WorldStatic, Params))
@@ -60,6 +65,31 @@ namespace
 			return false;
 		}
 
+		for (const FHitResult& Hit : Hits)
+		{
+			const AActor* HitActor = Hit.GetActor();
+			FString TagList;
+			if (HitActor != nullptr)
+			{
+				for (const FName& Tag : HitActor->Tags)
+				{
+					TagList += Tag.ToString() + TEXT(" ");
+				}
+			}
+			UE_LOG(LogCorsairsGameMode, Log,
+				   TEXT("  трассировка: %s (%s) на Z %.0f, теги [%s]"),
+				   HitActor != nullptr ? *HitActor->GetName() : TEXT("?"),
+				   HitActor != nullptr ? *HitActor->GetClass()->GetName() : TEXT("?"),
+				   Hit.Location.Z, *TagList);
+			if (HitActor != nullptr && HitActor->ActorHasTag(TerrainTag))
+			{
+				Location.Z = Hit.Location.Z + SpawnHeightMargin;
+				return true;
+			}
+		}
+
+		// Рельефа под точкой не оказалось — падаем на то, что нашлось ниже
+		// всего, лишь бы не остаться висеть в воздухе.
 		double Lowest = TNumericLimits<double>::Max();
 		for (const FHitResult& Hit : Hits)
 		{
@@ -193,9 +223,14 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 							 -static_cast<double>(Spawn.Y),
 							 Character->GetActorLocation().Z + SpawnHeightMargin);
 
-			// Высота ищется трассировкой, а не берётся от PlayerStart: тот на
-			// карте один и к серверной позиции отношения не имеет.
-			const bool bGrounded = DropToGround(GetWorld(), Location);
+			// Высота берётся из карты высот — той же, из которой построена
+			// видимая земля. Трассировка тут не годится: рельеф пришёл из
+			// glTF без физической формы, и луч проходит сквозь него.
+			const bool bGrounded = Character->UseTerrainHeights(Session->GetMapName());
+			if (!bGrounded)
+			{
+				DropToGround(GetWorld(), Location);
+			}
 
 			Character->SetActorLocation(Location, false, nullptr,
 										ETeleportType::TeleportPhysics);

@@ -61,13 +61,20 @@ def main(report):
 
         nanite = mesh.get_editor_property("nanite_settings")
         collision = component.get_collision_enabled()
+        body = mesh.get_editor_property("body_setup")
+        trace_flag = body.get_editor_property("collision_trace_flag") if body else "нет body"
+        tags = [str(t) for t in actor.tags]
+        profile = component.get_collision_profile_name()
+        object_type = component.get_collision_object_type()
+
         if len(samples) < 4:
             origin, extent = actor.get_actor_bounds(only_colliding_components=False)
             samples.append(
                 f"{actor.get_actor_label()}: треугольников {triangles}, материал {name}, "
                 f"центр ({origin.x:.0f}, {origin.y:.0f}, {origin.z:.0f}), "
                 f"полуразмер ({extent.x:.0f}, {extent.y:.0f}, {extent.z:.0f}), "
-                f"Nanite {'вкл' if nanite.enabled else 'выкл'}, столкновения {collision}")
+                f"Nanite {'вкл' if nanite.enabled else 'выкл'}, столкновения {collision}, "
+                f"режим {trace_flag}, теги {tags}, профиль {profile}, тип {object_type}")
 
     report.line(f"проверено: {checked}, скрытых: {hidden}, пустых: {empty}, "
                 f"без материала: {no_material}, с сеткой-заглушкой: {grid_material}")

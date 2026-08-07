@@ -52,6 +52,13 @@ public:
 protected:
 	virtual void BeginPlay() override;
 
+public:
+	/** Привязывает персонажа к карте высот указанной карты. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	bool UseTerrainHeights(const FString& MapName);
+
+protected:
+
 	/** Камера на кронштейне: обзор от третьего лица, как в оригинале. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Corsairs")
 	TObjectPtr<USpringArmComponent> CameraBoom;
@@ -85,6 +92,13 @@ private:
 
 	/** Положение, о котором серверу уже сообщено, в координатах карты. */
 	FIntPoint ReportedPosition = FIntPoint::ZeroValue;
+
+	/** Карта высот текущей карты. Персонаж удерживается на ней вручную:
+	 *  рельеф пришёл из glTF без физических данных, и провалиться сквозь
+	 *  землю иначе — вопрос одного кадра. Оригинальный движок делал так же и
+	 *  физикой рельефа не пользовался вовсе. */
+	UPROPERTY()
+	TObjectPtr<class UCorsairsTerrainHeights> TerrainHeights;
 
 	/** Разовая диагностика вида: копит время и срабатывает один раз. */
 	float DiagnosticTimer = 0.0f;

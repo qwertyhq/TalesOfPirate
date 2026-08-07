@@ -107,16 +107,18 @@ TerrainMeshStats WriteTerrainMesh(const MapTerrain& terrain,
                         static_cast<std::uint32_t>((row + 1) * cols + col);
                     const std::uint32_t bottomRight = bottomLeft + 1;
 
-                    // Порядок обхода учитывает инверсию оси строк: без него
-                    // земля оказалась бы вывернутой лицом вниз и исчезала бы
-                    // при взгляде сверху.
+                    // Порядок обхода учитывает инверсию оси строк. Считать
+                    // его надо по векторному произведению: при Y = -row обход
+                    // topLeft → topRight → bottomLeft даёт нормаль вниз, и
+                    // земля пропадает при взгляде сверху, оставаясь видимой
+                    // снизу. Правильный обход — против часовой в плоскости XY.
                     object.Mesh.Indices.push_back(topLeft);
-                    object.Mesh.Indices.push_back(topRight);
                     object.Mesh.Indices.push_back(bottomLeft);
+                    object.Mesh.Indices.push_back(topRight);
 
                     object.Mesh.Indices.push_back(topRight);
-                    object.Mesh.Indices.push_back(bottomRight);
                     object.Mesh.Indices.push_back(bottomLeft);
+                    object.Mesh.Indices.push_back(bottomRight);
                 }
             }
 
