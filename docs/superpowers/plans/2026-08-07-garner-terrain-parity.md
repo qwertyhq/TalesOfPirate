@@ -142,7 +142,7 @@ Assert:
 - absent section returns `Present=false` and no tile body;
 - corrupt offset produces `MapStatus::BODY_TRUNCATED`;
 - Garner cell `(2233,2784)` resolves through section offset `35564436`, tile byte offset `35564451`, `BaseTex=4`, `TileInfo=0x02cf2000`, `Color=0xffff`, and `Height=6`;
-- `ReadWindow({2176,2688,128,128},1,1)` stores `129×129`, reports `LargestBodyRead == 960`, and reports `PeakResidentTiles <= 16641`. Offset-table reads count only as metadata and do not weaken the body bound.
+- `ReadWindow({2176,2688,128,128},1,1)` stores `129×129`, reports `LargestBodyRead == 960`, and reports `PeakResidentTiles == 16705`: `16641` output-page tiles plus the current `64`-tile section held during copying. Offset-table reads count only as metadata and do not weaken the body bound.
 
 - [ ] **Step 2: Run focused tests and Verify RED**
 
@@ -158,15 +158,15 @@ Expected: compile fails because `MapSectionReader.h` does not exist.
 Read the 20-byte header and complete offset table once. Validate dimensions exactly as `ParseMap` does. Validate every nonzero absolute offset against:
 
 ```cpp
-const std::uint64_t end =
-    static_cast<std::uint64_t>(offset) + sectionBytes;
-if (offset < prefixBytes || end > fileBytes) {
+if (sectionBytes > fileBytes ||
+    offset < prefixBytes ||
+    static_cast<std::uint64_t>(offset) > fileBytes - sectionBytes) {
     diagnostics.Status = MapStatus::BODY_TRUNCATED;
     return std::nullopt;
 }
 ```
 
-`ReadSection` performs one bounded seek/read. `ReadWindow` copies only intersecting tiles into its page-plus-halo arrays and records section/tile presence. Never allocate `Width * Height` tiles.
+`ReadSection` performs one bounded seek/read. `ReadWindow` copies only intersecting tiles into its page-plus-halo arrays and records section/tile presence. `PeakResidentTiles` counts simultaneous operation residency, so the window path includes both the output page and the current section. Never allocate `Width * Height` tiles.
 
 - [ ] **Step 4: Verify GREEN and compatibility**
 

@@ -76,6 +76,58 @@ std::vector<std::uint8_t> MakeSparseMap(
     return bytes;
 }
 
+std::vector<std::uint8_t> MakeSingleSectionMap(
+    std::int32_t sectionWidth,
+    std::int32_t sectionHeight,
+    std::uint32_t offset) {
+    std::vector<std::uint8_t> bytes;
+    AppendI32Le(bytes, AC::kMapFlagCurrent);
+    AppendI32Le(bytes, sectionWidth);
+    AppendI32Le(bytes, sectionHeight);
+    AppendI32Le(bytes, sectionWidth);
+    AppendI32Le(bytes, sectionHeight);
+    AppendU32Le(bytes, offset);
+    return bytes;
+}
+
+AC::MapTile MakeTaggedTile(std::uint8_t tag) {
+    return AC::MapTile{
+        0x70000000u | tag,
+        tag,
+        static_cast<std::int16_t>(0x1000u + tag),
+        static_cast<std::int8_t>(tag),
+        static_cast<std::int16_t>(100u + tag),
+        tag,
+        {tag, tag, tag, tag},
+    };
+}
+
+std::vector<std::uint8_t> MakeCrossBoundaryMap() {
+    std::vector<std::uint8_t> bytes;
+    AppendI32Le(bytes, AC::kMapFlagCurrent);
+    AppendI32Le(bytes, 4);
+    AppendI32Le(bytes, 4);
+    AppendI32Le(bytes, 2);
+    AppendI32Le(bytes, 2);
+
+    // Row-major присутствие секций: [есть, нет, есть, есть].
+    AppendU32Le(bytes, 36u);
+    AppendU32Le(bytes, 0u);
+    AppendU32Le(bytes, 96u);
+    AppendU32Le(bytes, 156u);
+
+    for (const std::uint8_t tag : {11u, 12u, 13u, 14u}) {
+        AppendTile(bytes, MakeTaggedTile(tag));
+    }
+    for (const std::uint8_t tag : {21u, 22u, 23u, 24u}) {
+        AppendTile(bytes, MakeTaggedTile(tag));
+    }
+    for (const std::uint8_t tag : {31u, 32u, 33u, 34u}) {
+        AppendTile(bytes, MakeTaggedTile(tag));
+    }
+    return bytes;
+}
+
 class ScopedMapFile {
 public:
     ScopedMapFile(std::string_view name, std::span<const std::uint8_t> bytes)
@@ -195,6 +247,84 @@ CORSAIRS_TEST(MapSectionReader_RejectsAnyNonZeroOffsetOutsideFile) {
                static_cast<std::uint32_t>(AC::MapStatus::BODY_TRUNCATED));
 }
 
+CORSAIRS_TEST(MapSectionReader_RejectsOffsetWhenSectionEndOverflows) {
+    // tilesPerSection=1,229,782,938,000,000,000, поэтому sectionBytes равен
+    // UINT64_MAX-3,709,551,615. В непроверенной uint64-арифметике прибавление
+    // literal offset оборачивается в ноль и делало 24-байтный файл валидным.
+    const std::vector<std::uint8_t> bytes = MakeSingleSectionMap(
+        1'000'000'000,
+        1'229'782'938,
+        3'709'551'616u);
+    const ScopedMapFile fixture{"overflow-offset", bytes};
+    REQUIRE(fixture.Written());
+
+    AC::MapDiagnostics diagnostics;
+    const auto reader = AC::MapSectionReader::Open(fixture.Path(), diagnostics);
+    REQUIRE(!reader.has_value());
+    REQUIRE_EQ(static_cast<std::uint32_t>(diagnostics.Status),
+               static_cast<std::uint32_t>(AC::MapStatus::BODY_TRUNCATED));
+}
+
+CORSAIRS_TEST(MapSectionReader_ReadsSparseWindowAcrossSectionBoundaries) {
+    const std::vector<std::uint8_t> bytes = MakeCrossBoundaryMap();
+    const ScopedMapFile fixture{"cross-boundary", bytes};
+    REQUIRE(fixture.Written());
+
+    AC::MapDiagnostics diagnostics;
+    auto reader = AC::MapSectionReader::Open(fixture.Path(), diagnostics);
+    REQUIRE(reader.has_value());
+
+    const auto page = reader->ReadWindow(
+        AC::MapCellRect{1u, 1u, 2u, 2u},
+        1u,
+        1u,
+        diagnostics);
+    REQUIRE(page.has_value());
+    REQUIRE_EQ(page->StoredWidth, 3u);
+    REQUIRE_EQ(page->StoredHeight, 3u);
+    REQUIRE_EQ(page->Tiles.size(), 9u);
+
+    const std::array<std::uint8_t, 4> expectedSections{1u, 0u, 1u, 1u};
+    REQUIRE_EQ(page->SectionPresent.size(), expectedSections.size());
+    for (std::size_t index = 0; index < expectedSections.size(); ++index) {
+        REQUIRE_EQ(page->SectionPresent[index], expectedSections[index]);
+    }
+
+    const std::array<std::uint8_t, 9> expectedTiles{
+        1u, 0u, 0u,
+        1u, 1u, 1u,
+        1u, 1u, 1u,
+    };
+    REQUIRE_EQ(page->TilePresent.size(), expectedTiles.size());
+    for (std::size_t index = 0; index < expectedTiles.size(); ++index) {
+        REQUIRE_EQ(page->TilePresent[index], expectedTiles[index]);
+    }
+
+    const AC::MapTile zero{};
+    RequireTileEquals(corsairsTestOk, page->Tiles[1u], zero);
+    if (!corsairsTestOk) {
+        return;
+    }
+    RequireTileEquals(corsairsTestOk, page->Tiles[2u], zero);
+    if (!corsairsTestOk) {
+        return;
+    }
+
+    // Значения основного окна, затем literal-значения правого и нижнего halo.
+    REQUIRE_EQ(page->Tiles[0u].BaseTex, 14u);
+    REQUIRE_EQ(page->Tiles[3u].BaseTex, 22u);
+    REQUIRE_EQ(page->Tiles[4u].BaseTex, 31u);
+    REQUIRE_EQ(page->Tiles[2u].BaseTex, 0u);
+    REQUIRE_EQ(page->Tiles[5u].BaseTex, 32u);
+    REQUIRE_EQ(page->Tiles[8u].BaseTex, 34u);
+    REQUIRE_EQ(page->Tiles[6u].BaseTex, 24u);
+    REQUIRE_EQ(page->Tiles[7u].BaseTex, 33u);
+
+    REQUIRE_EQ(reader->Stats().BodyBytesRead, 180u);
+    REQUIRE_EQ(reader->Stats().LargestBodyRead, 60u);
+    REQUIRE_EQ(reader->Stats().PeakResidentTiles, 9u + 4u);
+}
+
 CORSAIRS_TEST(MapSectionReader_ReadsGarnerGoldenCell) {
     const std::filesystem::path path = GarnerMapPath();
     constexpr std::uint32_t sectionX = 279u;
@@ -249,7 +379,7 @@ CORSAIRS_TEST(MapSectionReader_ReadsBoundedPageAndHalo) {
     REQUIRE_EQ(reader->Stats().MetadataBytesRead, 1048596u);
     REQUIRE_EQ(reader->Stats().LargestMetadataRead, 1048576u);
     REQUIRE_EQ(reader->Stats().LargestBodyRead, 960u);
-    REQUIRE(reader->Stats().PeakResidentTiles <= 16641u);
+    REQUIRE_EQ(reader->Stats().PeakResidentTiles, 16641u + 64u);
 }
 
 } // namespace

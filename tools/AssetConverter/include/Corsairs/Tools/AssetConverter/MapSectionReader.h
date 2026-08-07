@@ -24,6 +24,8 @@ struct MapReadStats {
     std::size_t LargestMetadataRead{0};
     std::uint64_t BodyBytesRead{0};
     std::size_t LargestBodyRead{0};
+    // Максимум по всем вызовам: число одновременно материализованных MapTile.
+    // ReadWindow учитывает output page и текущую секцию.
     std::size_t PeakResidentTiles{0};
 };
 

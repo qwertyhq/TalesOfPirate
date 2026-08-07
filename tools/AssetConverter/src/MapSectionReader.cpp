@@ -142,9 +142,10 @@ std::optional<MapSectionReader> MapSectionReader::Open(
             continue;
         }
 
-        const std::uint64_t end =
-            static_cast<std::uint64_t>(offset) + reader._sectionBytes;
-        if (offset < reader._prefixBytes || end > reader._fileBytes) {
+        if (reader._sectionBytes > reader._fileBytes ||
+            offset < reader._prefixBytes ||
+            static_cast<std::uint64_t>(offset) >
+                reader._fileBytes - reader._sectionBytes) {
             diagnostics.Status = MapStatus::BODY_TRUNCATED;
             diagnostics.Detail = std::format(
                 "секция {}: смещение {} + {} байт выходит за пределы файла ({} байт)",
@@ -300,6 +301,9 @@ std::optional<MapPageTiles> MapSectionReader::ReadWindow(
             if (!section.has_value()) {
                 return std::nullopt;
             }
+            _stats.PeakResidentTiles = std::max(
+                _stats.PeakResidentTiles,
+                page.Tiles.size() + section->Tiles.size());
 
             const std::size_t presenceIndex =
                 static_cast<std::size_t>(sectionY - firstSectionY) *
