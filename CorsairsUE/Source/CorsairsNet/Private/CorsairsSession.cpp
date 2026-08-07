@@ -1,5 +1,6 @@
 #include "CorsairsSession.h"
 
+#include "CorsairsLookAdapter.h"
 #include "common/src/Crypto/Blake2s.h"
 #include "common/src/Network/NetCommand.h"
 
@@ -44,6 +45,7 @@ void UCorsairsSession::Login(const FString& Host, int32 Port,
 	Logout();
 
 	Characters.Reset();
+	LocalActor = FCorsairsWorldActor{};
 	bHasPassword2 = false;
 	PendingAccount = Account;
 
@@ -271,6 +273,7 @@ void UCorsairsSession::Logout()
 		Connection->Disconnect();
 		Connection = nullptr;
 	}
+	LocalActor = FCorsairsWorldActor{};
 	if (Stage != ECorsairsLoginStage::Idle)
 	{
 		SetStage(ECorsairsLoginStage::Idle, FString());
@@ -425,7 +428,17 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		}
 
 		const auto& Data = Message.data.value();
-		WorldId = Data.baseInfo.worldId;
+		LocalActor.WorldId = Data.baseInfo.worldId;
+		LocalActor.Name = ToFString(Data.baseInfo.name);
+		LocalActor.Position = FIntPoint(
+			static_cast<int32>(Data.baseInfo.posX),
+			static_cast<int32>(Data.baseInfo.posY));
+		LocalActor.Angle = static_cast<int32>(Data.baseInfo.angle);
+		LocalActor.TypeId = static_cast<int32>(Data.baseInfo.look.typeId);
+		LocalActor.CtrlType = static_cast<int32>(Data.baseInfo.ctrlType);
+		LocalActor.ChaId = static_cast<int32>(Data.baseInfo.chaId);
+		LocalActor.Handle = Data.baseInfo.handle;
+		LocalActor.Look = MakeCharacterLook(Data.baseInfo.look);
 
 		// Сумка и характеристики приходят вместе со входом. Без содержимого
 		// сумки нечем надеть оружие, а без него сервер подтвердит удар, но
@@ -442,9 +455,13 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		for (const auto& Entry : Data.attr.attrs)
 		{
 			Attributes.Add(Entry.attrId, Entry.attrVal);
+			if (Entry.attrId == kAttrHp)
+			{
+				LocalActor.Hp = Entry.attrVal;
+			}
 		}
-		SpawnPosition = FIntPoint(static_cast<int32>(Data.baseInfo.posX),
-								  static_cast<int32>(Data.baseInfo.posY));
+		WorldId = LocalActor.WorldId;
+		SpawnPosition = LocalActor.Position;
 		MapName = ToFString(Data.mapName);
 
 		SetStage(ECorsairsLoginStage::InWorld,
@@ -460,6 +477,26 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		// действия, а опыт и расход бьющего — в наборе для источника.
 		Corsairs::Net::Msg::McCharacterActionMessage Message;
 		Corsairs::Net::Msg::deserialize(Packet, Message);
+
+		if (const auto* Look =
+				std::get_if<Corsairs::Net::Msg::ChaLookInfo>(&Message.data))
+		{
+			const FCorsairsCharacterLook Converted = MakeCharacterLook(*Look);
+			if (Message.worldId == WorldId)
+			{
+				LocalActor.Look = Converted;
+				LocalActor.TypeId = Converted.TypeId;
+			}
+			else if (FCorsairsWorldActor* Actor = VisibleActors.FindByPredicate(
+						 [&Message](const FCorsairsWorldActor& Candidate)
+						 { return Candidate.WorldId == Message.worldId; }))
+			{
+				Actor->Look = Converted;
+				Actor->TypeId = Converted.TypeId;
+			}
+			OnActorLookChanged.Broadcast(Message.worldId, Converted);
+			return;
+		}
 
 		if (const auto* TarData =
 				std::get_if<Corsairs::Net::Msg::ActionSkillTarData>(&Message.data))
@@ -530,9 +567,8 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		Actor.Position = FIntPoint(static_cast<int32>(Message.base.posX),
 								   static_cast<int32>(Message.base.posY));
 		Actor.Angle = static_cast<int32>(Message.base.angle);
-		// Тип модели лежит в сведениях о внешности, а не в commId: последний —
-		// идентификатор сообщества, и в нём приходят отрицательные значения.
-		Actor.TypeId = static_cast<int32>(Message.base.look.typeId);
+		Actor.Look = MakeCharacterLook(Message.base.look);
+		Actor.TypeId = Actor.Look.TypeId;
 		Actor.CtrlType = static_cast<int32>(Message.base.ctrlType);
 		Actor.ChaId = static_cast<int32>(Message.base.chaId);
 		Actor.Handle = Message.base.handle;

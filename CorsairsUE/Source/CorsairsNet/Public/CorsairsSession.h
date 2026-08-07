@@ -29,6 +29,29 @@ struct FCorsairsCharacterSlot
 	int32 TypeId = 0;
 };
 
+inline constexpr int32 CorsairsEquipSlotCount = 34;
+
+USTRUCT(BlueprintType)
+struct FCorsairsCharacterLook
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int32 SynType = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int32 TypeId = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int32 HairId = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	bool bIsBoat = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	TArray<int32> EquipIds;
+};
+
 /** Персонаж, попавший в поле зрения: другой игрок, NPC или монстр. */
 USTRUCT(BlueprintType)
 struct FCorsairsWorldActor
@@ -71,11 +94,17 @@ struct FCorsairsWorldActor
 	/** Здоровье. Обновляется итогами ударов — по нему и видно урон. */
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
 	int64 Hp = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	FCorsairsCharacterLook Look;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCorsairsActorSeen,
 											const FCorsairsWorldActor&, Actor);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCorsairsActorLeft, int64, WorldId);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FCorsairsActorLookChanged,
+											 int64, WorldId,
+											 const FCorsairsCharacterLook&, Look);
 
 /** Стадия входа. Именно она определяет, что показывать на экране. */
 UENUM(BlueprintType)
@@ -140,6 +169,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
 	const TArray<FCorsairsCharacterSlot>& GetCharacters() const { return Characters; }
 
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	FCorsairsWorldActor GetLocalActor() const { return LocalActor; }
+
 	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
 	FCorsairsLoginStageChanged OnStageChanged;
 
@@ -151,6 +183,9 @@ public:
 	/** Персонаж вышел из поля зрения. */
 	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
 	FCorsairsActorLeft OnActorLeft;
+
+	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
+	FCorsairsActorLookChanged OnActorLookChanged;
 
 	/** Отправляет серверу путь движения.
 	 *
@@ -273,6 +308,7 @@ private:
 	TArray<FCorsairsCharacterSlot> Characters;
 
 	int64 WorldId = 0;
+	FCorsairsWorldActor LocalActor;
 	FIntPoint SpawnPosition = FIntPoint::ZeroValue;
 	FString MapName;
 
