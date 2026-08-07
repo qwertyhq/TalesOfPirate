@@ -264,12 +264,23 @@ void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 			? GetController()->GetControlRotation() : FRotator::ZeroRotator;
 		const FVector CameraLocation = FollowCamera->GetComponentLocation();
 		const FRotator CameraRotation = FollowCamera->GetComponentRotation();
+		const FVector MeshLocation = GetMesh()->GetComponentLocation();
+		const FVector MeshScale = GetMesh()->GetComponentScale();
+		const bool bMeshVisible = GetMesh()->IsVisible()
+			&& GetMesh()->GetSkeletalMeshAsset() != nullptr;
+		const FBoxSphereBounds MeshBounds = GetMesh()->Bounds;
+
 		UE_LOG(LogTemp, Warning,
 			   TEXT("ДИАГНОСТИКА: персонаж (%.0f, %.0f, %.0f), контроллер тангаж %.1f, "
-					"камера (%.0f, %.0f, %.0f) тангаж %.1f, рука %.0f"),
+					"камера (%.0f, %.0f, %.0f) тангаж %.1f, рука %.0f; "
+					"меш виден %s, в (%.0f, %.0f, %.0f), масштаб %.2f, "
+					"полуразмер (%.0f, %.0f, %.0f)"),
 			   Location.X, Location.Y, Location.Z, Control.Pitch,
 			   CameraLocation.X, CameraLocation.Y, CameraLocation.Z,
-			   CameraRotation.Pitch, CameraBoom->TargetArmLength);
+			   CameraRotation.Pitch, CameraBoom->TargetArmLength,
+			   bMeshVisible ? TEXT("да") : TEXT("НЕТ"),
+			   MeshLocation.X, MeshLocation.Y, MeshLocation.Z, MeshScale.X,
+			   MeshBounds.BoxExtent.X, MeshBounds.BoxExtent.Y, MeshBounds.BoxExtent.Z);
 	}
 
 	Super::Tick(DeltaSeconds);
