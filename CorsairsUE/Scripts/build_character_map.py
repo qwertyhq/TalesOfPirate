@@ -1,32 +1,78 @@
-"""Строит таблицу «тип персонажа -> модель тела» для клиента.
-
-    python3 Scripts/build_character_map.py <gamedata.sqlite> <выход.json>
-
-Пример:
-    python3 Scripts/build_character_map.py ../databases/gamedata.sqlite \\
-        ../CorsairsUE/Data/character_map.json
-
-Ответ на вход содержит числовой тип персонажа. Имя файла модели выводится
-через таблицу `characters`: тип — это идентификатор записи, а поле `model`
-разворачивается в четырёхзначный номер. Скины при этом называются
-`<модель><вариант>.lgo`, где вариант шестизначный; нулевой вариант — базовое
-тело.
-
-Таблица считается заранее и кладётся обычным JSON: внутри игры нет ни sqlite3,
-ни доступа к исходным данным.
-"""
+"""Generate the authoritative character and item appearance catalog."""
 
 import json
 import os
 import sqlite3
 import sys
 
-# Куда import_assets.py кладёт ассеты.
 CONTENT_ROOT = "/Game/All"
 ANIMATION_ROOT = "/Game/Animations"
+PLAYER_MODAL_TYPE = 1
+VISIBLE_PART_COUNT = 5
+MODULE_COLUMNS = ("module_1", "module_2", "module_3", "module_4")
 
-# Нулевой вариант скина — базовое тело без снаряжения.
-BASE_SKIN_VARIANT = "000000"
+
+def mesh_path(module):
+    if module is None:
+        return None
+    value = str(module)
+    if not value or value == "0":
+        return None
+    return f"{CONTENT_ROOT}/{value}/SkeletalMeshes/{value}"
+
+
+def parse_item_ids(value):
+    fields = [] if value is None else str(value).split(",")
+    result = [int(field or 0) for field in fields[:VISIBLE_PART_COUNT]]
+    return result + [0] * (VISIBLE_PART_COUNT - len(result))
+
+
+def static_mesh_path(model, suit_id):
+    asset = f"{int(model) * 1_000_000 + int(suit_id or 0) * 10_000:010d}"
+    return mesh_path(asset)
+
+
+def build_catalog(db_path):
+    db = sqlite3.connect(db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        character_rows = db.execute(
+            "SELECT id, name, modal_type, model, suit_id, skin_info "
+            "FROM characters ORDER BY id").fetchall()
+        item_rows = db.execute(
+            "SELECT id, module_1, module_2, module_3, module_4 "
+            "FROM items ORDER BY id").fetchall()
+    finally:
+        db.close()
+
+    items = {}
+    for row in item_rows:
+        meshes = {}
+        for index, column in enumerate(MODULE_COLUMNS, start=1):
+            resolved = mesh_path(row[column])
+            if resolved is not None:
+                meshes[str(index)] = resolved
+        if meshes:
+            items[str(row["id"])] = {"meshesByModule": meshes}
+
+    characters = {}
+    for row in character_rows:
+        model = int(row["model"])
+        bone = f"{model:04d}"
+        characters[str(row["id"])] = {
+            "animation": (
+                f"{ANIMATION_ROOT}/{bone}/SkeletalMeshes/{bone}_Anim"),
+            "defaultItemIds": parse_item_ids(row["skin_info"]),
+            "driverMesh": (
+                f"{ANIMATION_ROOT}/{bone}/SkeletalMeshes/{bone}"),
+            "modalType": int(row["modal_type"]),
+            "modelId": model,
+            "moduleIndex": model + 1 if 0 <= model < 4 else 0,
+            "name": row["name"],
+            "staticMesh": static_mesh_path(model, row["suit_id"]),
+        }
+
+    return {"characters": characters, "items": items}
 
 
 def main():
@@ -35,34 +81,14 @@ def main():
         return 2
 
     db_path, out_path = sys.argv[1], sys.argv[2]
-
-    db = sqlite3.connect(db_path)
-    rows = list(db.execute("SELECT id, name, model FROM characters"))
-    db.close()
-
-    mapping = {}
-    for cha_id, name, model in rows:
-        if model is None:
-            continue
-        bone = f"{int(model):04d}"
-        asset_name = f"{bone}{BASE_SKIN_VARIANT}"
-        mapping[str(cha_id)] = {
-            "name": name,
-            "mesh": f"{CONTENT_ROOT}/{asset_name}/SkeletalMeshes/{asset_name}",
-            # Скелет и дорожка приходят из одного .lab, поэтому анимация
-            # адресуется тем же четырёхзначным номером.
-            "animation": f"{ANIMATION_ROOT}/{bone}/SkeletalMeshes/{bone}_Anim",
-        }
+    catalog = build_catalog(db_path)
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as handle:
-        json.dump({"characters": mapping}, handle,
-                  ensure_ascii=False, indent=1, sort_keys=True)
+        json.dump(catalog, handle, ensure_ascii=False, indent=1, sort_keys=True)
 
-    print(f"записей в characters: {len(rows)}")
-    print(f"  сопоставлено: {len(mapping)}")
-    for cha_id in list(sorted(mapping, key=int))[:4]:
-        print(f"    тип {cha_id}: {mapping[cha_id]['name']} -> {mapping[cha_id]['mesh']}")
+    print(f"записей в characters: {len(catalog['characters'])}")
+    print(f"записей в items: {len(catalog['items'])}")
     print(f"таблица записана: {out_path}")
     return 0
 
