@@ -39,8 +39,13 @@ namespace
 	}
 
 	/** Длина кронштейна камеры. Обзор в оригинале — с заметного отдаления,
-	 *  чтобы видеть окружение боя, а не затылок. */
-	constexpr float CameraDistance = 600.0f;
+	 *  чтобы видеть окружение боя, а не затылок. Мерка взята с оригинального
+	 *  клиента: персонаж занимает примерно седьмую часть высоты экрана. */
+	constexpr float CameraDistance = 1400.0f;
+
+	/** Наклон камеры. Мир показывается сверху под углом, как в оригинале.
+	 *  В Unreal отрицательный тангаж означает взгляд вниз. */
+	constexpr float CameraPitch = -45.0f;
 }
 
 ACorsairsPlayerCharacter::ACorsairsPlayerCharacter()
@@ -142,8 +147,43 @@ void ACorsairsPlayerCharacter::AttachSession(UCorsairsSession* InSession)
 	TimeSinceReport = 0.0f;
 }
 
+void ACorsairsPlayerCharacter::BeginPlay()
+{
+	Super::BeginPlay();
+
+	// Наклон камеры задаётся здесь, а не в режиме игры: там контроллера у
+	// персонажа может ещё не быть, и вызов уходит в пустоту. Без наклона
+	// камера наследует ориентацию PlayerStart — единственной точки на карте,
+	// к игре отношения не имеющей, — и смотрит мимо мира.
+	if (AController* OwningController = GetController())
+	{
+		const FRotator Current = OwningController->GetControlRotation();
+		OwningController->SetControlRotation(FRotator(CameraPitch, Current.Yaw, 0.0f));
+	}
+}
+
 void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 {
+	// Разовый снимок состояния через несколько секунд после старта: по нему
+	// видно, где персонаж и куда смотрит камера. Без этих чисел причина
+	// «видно только небо» неотличима от десятка других.
+	DiagnosticTimer += DeltaSeconds;
+	if (!bDiagnosticLogged && DiagnosticTimer > 4.0f)
+	{
+		bDiagnosticLogged = true;
+		const FVector Location = GetActorLocation();
+		const FRotator Control = GetController() != nullptr
+			? GetController()->GetControlRotation() : FRotator::ZeroRotator;
+		const FVector CameraLocation = FollowCamera->GetComponentLocation();
+		const FRotator CameraRotation = FollowCamera->GetComponentRotation();
+		UE_LOG(LogTemp, Warning,
+			   TEXT("ДИАГНОСТИКА: персонаж (%.0f, %.0f, %.0f), контроллер тангаж %.1f, "
+					"камера (%.0f, %.0f, %.0f) тангаж %.1f, рука %.0f"),
+			   Location.X, Location.Y, Location.Z, Control.Pitch,
+			   CameraLocation.X, CameraLocation.Y, CameraLocation.Z,
+			   CameraRotation.Pitch, CameraBoom->TargetArmLength);
+	}
+
 	Super::Tick(DeltaSeconds);
 
 	TimeSinceReport += DeltaSeconds;

@@ -50,6 +50,8 @@ public:
 	void AttachSession(UCorsairsSession* InSession);
 
 protected:
+	virtual void BeginPlay() override;
+
 	/** Камера на кронштейне: обзор от третьего лица, как в оригинале. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Corsairs")
 	TObjectPtr<USpringArmComponent> CameraBoom;
@@ -83,6 +85,10 @@ private:
 
 	/** Положение, о котором серверу уже сообщено, в координатах карты. */
 	FIntPoint ReportedPosition = FIntPoint::ZeroValue;
+
+	/** Разовая диагностика вида: копит время и срабатывает один раз. */
+	float DiagnosticTimer = 0.0f;
+	bool bDiagnosticLogged = false;
 	bool bHasReported = false;
 
 	float TimeSinceReport = 0.0f;

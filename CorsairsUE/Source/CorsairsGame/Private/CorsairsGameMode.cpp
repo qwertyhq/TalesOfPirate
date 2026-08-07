@@ -24,6 +24,55 @@ namespace
 	 *  Точная высота земли в этой точке клиенту неизвестна, а падение с
 	 *  запасом безопаснее застревания в грунте. */
 	constexpr double SpawnHeightMargin = 500.0;
+
+	/** С какой высоты искать землю и как далеко вниз. Рельеф карты лежит в
+	 *  пределах десяти метров от нуля, но объекты сцены поднимаются выше, и
+	 *  запас берётся с большим избытком. */
+	constexpr double GroundTraceStart = 100000.0;
+	constexpr double GroundTraceDepth = 200000.0;
+
+	/** Наклон камеры при появлении. Оригинал показывает мир сверху под углом
+	 *  около сорока пяти градусов — отсюда и значение. */
+	constexpr double CameraPitch = -45.0;
+
+	/** Ставит точку на землю под ней.
+	 *
+	 *  Без этого высота бралась от места, где стоит PlayerStart, а он на
+	 *  карте один и к серверной позиции отношения не имеет: персонаж
+	 *  оказывался в пустоте на высоте девятнадцати метров и висел в небе,
+	 *  потому что земли под ним в этом месте нет вовсе. */
+	bool DropToGround(UWorld* World, FVector& Location)
+	{
+		if (World == nullptr)
+		{
+			return false;
+		}
+		const FVector From(Location.X, Location.Y, GroundTraceStart);
+		const FVector To(Location.X, Location.Y, GroundTraceStart - GroundTraceDepth);
+
+		// Собираем все пересечения и берём самое нижнее. Одиночная трассировка
+		// возвращает первое сверху, а это крыша дома или ветка дерева —
+		// персонаж оказывался на них, и земля пропадала из виду.
+		TArray<FHitResult> Hits;
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(CorsairsSpawnGround), false);
+		if (!World->LineTraceMultiByChannel(Hits, From, To, ECC_WorldStatic, Params))
+		{
+			return false;
+		}
+
+		double Lowest = TNumericLimits<double>::Max();
+		for (const FHitResult& Hit : Hits)
+		{
+			Lowest = FMath::Min(Lowest, Hit.Location.Z);
+		}
+		if (Lowest == TNumericLimits<double>::Max())
+		{
+			return false;
+		}
+
+		Location.Z = Lowest + SpawnHeightMargin;
+		return true;
+	}
 }
 
 ACorsairsGameMode::ACorsairsGameMode()
@@ -140,14 +189,32 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 			// инвертируется, как при размещении объектов; высота берётся
 			// с запасом над рельефом, дальше персонаж падает на землю сам.
 			const FIntPoint Spawn = Session->GetSpawnPosition();
-			const FVector Location(static_cast<double>(Spawn.X),
-								   -static_cast<double>(Spawn.Y),
-								   Character->GetActorLocation().Z + SpawnHeightMargin);
+			FVector Location(static_cast<double>(Spawn.X),
+							 -static_cast<double>(Spawn.Y),
+							 Character->GetActorLocation().Z + SpawnHeightMargin);
+
+			// Высота ищется трассировкой, а не берётся от PlayerStart: тот на
+			// карте один и к серверной позиции отношения не имеет.
+			const bool bGrounded = DropToGround(GetWorld(), Location);
+
 			Character->SetActorLocation(Location, false, nullptr,
 										ETeleportType::TeleportPhysics);
 			UE_LOG(LogCorsairsGameMode, Log,
-				   TEXT("позиция от сервера: (%d, %d) на карте %s"),
-				   Spawn.X, Spawn.Y, *Session->GetMapName());
+				   TEXT("позиция от сервера: (%d, %d) на карте %s -> (%.0f, %.0f, %.0f), земля %s"),
+				   Spawn.X, Spawn.Y, *Session->GetMapName(),
+				   Location.X, Location.Y, Location.Z,
+				   bGrounded ? TEXT("найдена") : TEXT("НЕ НАЙДЕНА"));
+
+			// Направление взгляда задаётся явно. Камера следует за поворотом
+			// контроллера, а тот наследует поворот PlayerStart — единственной
+			// точки на карте, ориентация которой к игре отношения не имеет:
+			// при её нулевом наклоне камера смотрит в горизонт, а при любом
+			// другом — в небо или в землю. Вид сверху под наклоном повторяет
+			// обзор оригинала.
+			if (AController* ViewController = Character->GetController())
+			{
+				ViewController->SetControlRotation(FRotator(CameraPitch, 0.0, 0.0));
+			}
 
 			// С этого момента персонаж сам сообщает серверу о перемещении.
 			Character->AttachSession(Session);
@@ -176,9 +243,12 @@ void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 
 	// Координаты и поворот переводятся так же, как для объектов сцены: ось Y
 	// инвертируется, угол приходит в десятых долях градуса.
-	const FVector Location(static_cast<double>(Actor.Position.X),
-						   -static_cast<double>(Actor.Position.Y),
-						   SpawnHeightMargin);
+	FVector Location(static_cast<double>(Actor.Position.X),
+					 -static_cast<double>(Actor.Position.Y),
+					 SpawnHeightMargin);
+	// Тем же способом, что и своего персонажа: иначе NPC висят на нулевой
+	// высоте независимо от того, где под ними земля.
+	DropToGround(World, Location);
 	const FRotator Rotation(0.0, static_cast<double>(Actor.Angle) / 10.0, 0.0);
 
 	ACorsairsPlayerCharacter* Spawned = World->SpawnActor<ACorsairsPlayerCharacter>(
