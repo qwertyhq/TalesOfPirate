@@ -22,8 +22,6 @@ namespace
 	 *  а редкая — рассинхронизировала бы положение. Полсекунды и метр
 	 *  соответствуют шагу, с которым двигался оригинальный клиент. */
 	constexpr float ReportInterval = 0.5f;
-	constexpr float ReportDistance = 100.0f;
-
 	/** Сколько единиц координат карты приходится на сантиметр UE.
 	 *
 	 *  Клетка занимает 100 единиц карты и 100 сантиметров UE, поэтому
@@ -76,9 +74,25 @@ ACorsairsPlayerCharacter::ACorsairsPlayerCharacter()
 
 void ACorsairsPlayerCharacter::AttachSession(UCorsairsSession* InSession)
 {
+	if (Session != nullptr)
+	{
+		Session->OnMovementChanged.RemoveDynamic(
+			this,
+			&ACorsairsPlayerCharacter::HandleMovementChanged);
+	}
+
 	Session = InSession;
-	bHasReported = false;
 	TimeSinceReport = 0.0f;
+	bHasValidMovementSpeed = false;
+	bUsesEventMovementSpeedFallback = false;
+	bMovementSpeedProtocolErrorReported = false;
+	if (Session != nullptr)
+	{
+		Session->OnMovementChanged.AddDynamic(
+			this,
+			&ACorsairsPlayerCharacter::HandleMovementChanged);
+	}
+	UpdateMovementPredictionState();
 }
 
 void ACorsairsPlayerCharacter::BeginPlay()
@@ -104,6 +118,19 @@ void ACorsairsPlayerCharacter::BeginPlay()
 			}
 		}
 	}
+}
+
+void ACorsairsPlayerCharacter::EndPlay(
+	const EEndPlayReason::Type EndPlayReason)
+{
+	if (Session != nullptr)
+	{
+		Session->OnMovementChanged.RemoveDynamic(
+			this,
+			&ACorsairsPlayerCharacter::HandleMovementChanged);
+		Session = nullptr;
+	}
+	Super::EndPlay(EndPlayReason);
 }
 
 bool ACorsairsPlayerCharacter::UseTerrainHeights(const FString& MapName)
@@ -203,30 +230,7 @@ void ACorsairsPlayerCharacter::ReportMovement()
 	}
 
 	const FIntPoint Current = ToMapCoordinates(GetActorLocation());
-
-	if (!bHasReported)
-	{
-		// Первое сообщение отсчитывается от места, куда персонажа поставил
-		// сервер, а не от нуля: иначе первый же путь пройдёт через полкарты.
-		ReportedPosition = Current;
-		bHasReported = true;
-		return;
-	}
-
-	const FVector2D Delta(Current.X - ReportedPosition.X, Current.Y - ReportedPosition.Y);
-	if (Delta.SizeSquared() < ReportDistance * ReportDistance)
-	{
-		return;
-	}
-
-	TArray<FIntPoint> Path;
-	Path.Add(ReportedPosition);
-	Path.Add(Current);
-	if (Session->SendMovePath(Path) ==
-		ECorsairsActionRequestResult::Sent)
-	{
-		ReportedPosition = Current;
-	}
+	Session->SubmitPredictedPosition(Current);
 }
 
 void ACorsairsPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -306,7 +310,15 @@ void ACorsairsPlayerCharacter::HandleTypedKey(FKey Key)
 
 void ACorsairsPlayerCharacter::MoveForward(float Value)
 {
-	if (Controller == nullptr || FMath::IsNearlyZero(Value))
+	MovementInputGate.SetForward(Value);
+	UpdateMovementPredictionState();
+	if (Session != nullptr && !bHasValidMovementSpeed &&
+		!FMath::IsNearlyZero(Value))
+	{
+		ReportMovementSpeedProtocolError();
+	}
+	if (Controller == nullptr || FMath::IsNearlyZero(Value) ||
+		!MovementInputGate.AllowsPrediction())
 	{
 		return;
 	}
@@ -319,7 +331,15 @@ void ACorsairsPlayerCharacter::MoveForward(float Value)
 
 void ACorsairsPlayerCharacter::MoveRight(float Value)
 {
-	if (Controller == nullptr || FMath::IsNearlyZero(Value))
+	MovementInputGate.SetRight(Value);
+	UpdateMovementPredictionState();
+	if (Session != nullptr && !bHasValidMovementSpeed &&
+		!FMath::IsNearlyZero(Value))
+	{
+		ReportMovementSpeedProtocolError();
+	}
+	if (Controller == nullptr || FMath::IsNearlyZero(Value) ||
+		!MovementInputGate.AllowsPrediction())
 	{
 		return;
 	}
@@ -337,3 +357,109 @@ void ACorsairsPlayerCharacter::PitchCamera(float Value)
 {
 	AddControllerPitchInput(Value);
 }
+
+void ACorsairsPlayerCharacter::UpdateMovementPredictionState()
+{
+	if (Session == nullptr)
+	{
+		MovementInputGate.SetAuthorityLocked(false);
+		return;
+	}
+
+	const double MovementSpeed = Session->GetMovementSpeedCmPerSecond();
+	if (MovementSpeed > 0.0)
+	{
+		GetCharacterMovement()->MaxFlySpeed =
+			static_cast<float>(MovementSpeed);
+		bHasValidMovementSpeed = true;
+		bUsesEventMovementSpeedFallback = false;
+		bMovementSpeedProtocolErrorReported = false;
+	}
+	else if (!bUsesEventMovementSpeedFallback)
+	{
+		bHasValidMovementSpeed = false;
+	}
+	MovementInputGate.SetAuthorityLocked(
+		Session->IsMovementAuthorityLocked() || !bHasValidMovementSpeed);
+}
+
+void ACorsairsPlayerCharacter::ReportMovementSpeedProtocolError()
+{
+	if (Session == nullptr || bMovementSpeedProtocolErrorReported)
+	{
+		return;
+	}
+
+	bMovementSpeedProtocolErrorReported = true;
+	const FString Message =
+		TEXT("для локального движения отсутствует положительный ATTR_MSPD");
+	UE_LOG(LogTemp, Error, TEXT("%s"), *Message);
+	Session->OnProtocolError.Broadcast(Message);
+}
+
+void ACorsairsPlayerCharacter::HandleMovementChanged(
+	const FCorsairsMovementEvent& Event)
+{
+	if (!Event.bLocal)
+	{
+		return;
+	}
+
+	if (Event.MovementSpeedCmPerSecond > 0.0)
+	{
+		GetCharacterMovement()->MaxFlySpeed =
+			static_cast<float>(Event.MovementSpeedCmPerSecond);
+		bHasValidMovementSpeed = true;
+		bUsesEventMovementSpeedFallback =
+			Session == nullptr ||
+			Session->GetMovementSpeedCmPerSecond() <= 0.0;
+		bMovementSpeedProtocolErrorReported = false;
+	}
+	else
+	{
+		bHasValidMovementSpeed = false;
+		bUsesEventMovementSpeedFallback = false;
+	}
+	UpdateMovementPredictionState();
+	if (!bHasValidMovementSpeed)
+	{
+		ReportMovementSpeedProtocolError();
+	}
+
+	if (Event.Type == ECorsairsMovementEventType::AcceptedPath)
+	{
+		return;
+	}
+
+	GetCharacterMovement()->StopMovementImmediately();
+	ConsumeMovementInputVector();
+	if (Event.bRequireNeutral)
+	{
+		MovementInputGate.RequireNeutral();
+	}
+
+	FVector AuthoritativeLocation = GetActorLocation();
+	AuthoritativeLocation.X = Event.Endpoint.X;
+	AuthoritativeLocation.Y = -Event.Endpoint.Y;
+	SetActorLocation(
+		AuthoritativeLocation,
+		false,
+		nullptr,
+		ETeleportType::TeleportPhysics);
+}
+
+#if !UE_BUILD_SHIPPING
+void ACorsairsPlayerCharacter::ApplyMovementAxisForProbe(
+	const FName AxisName,
+	const float Value)
+{
+	if (AxisName == TEXT("MoveForward"))
+	{
+		MoveForward(Value);
+	}
+	else if (AxisName == TEXT("MoveRight"))
+	{
+		MoveRight(Value);
+	}
+}
+#endif

@@ -1,7 +1,9 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "CorsairsActionReducer.h"
 #include "CorsairsCharacter.h"
+#include "CorsairsMovementInputGate.h"
 
 #include "CorsairsPlayerCharacter.generated.h"
 
@@ -35,8 +37,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	void AttachSession(UCorsairsSession* InSession);
 
+#if !UE_BUILD_SHIPPING
+	void ApplyMovementAxisForProbe(FName AxisName, float Value);
+#endif
+
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 public:
 	/** Привязывает персонажа к карте высот указанной карты. */
@@ -53,12 +60,11 @@ protected:
 	TObjectPtr<UCameraComponent> FollowCamera;
 
 private:
-	/** Отправляет серверу путь от предыдущего сообщённого положения к текущему.
+	/** Передаёт сессии текущую predicted position.
 	 *
-	 *  Сервер ждёт путь, а не мгновенную позицию: он сам проигрывает
-	 *  перемещение по времени и проверяет проходимость. Отправка идёт не
-	 *  каждый кадр, а по накоплению смещения — иначе канал забивается
-	 *  сообщениями о сдвиге в сантиметр. */
+	 *  Сессия сама строит путь от последней подтверждённой сервером точки и
+	 *  применяет порог смещения. Результат socket send не меняет authoritative
+	 *  baseline до terminal event. */
 	void ReportMovement();
 
 	/** Передаёт нажатие экрану входа, пока тот принимает ввод.
@@ -72,12 +78,16 @@ private:
 	void MoveRight(float Value);
 	void TurnCamera(float Value);
 	void PitchCamera(float Value);
+	void UpdateMovementPredictionState();
+	void ReportMovementSpeedProtocolError();
+
+	UFUNCTION()
+	void HandleMovementChanged(const FCorsairsMovementEvent& Event);
 
 	UPROPERTY()
 	TObjectPtr<UCorsairsSession> Session;
 
-	/** Положение, о котором серверу уже сообщено, в координатах карты. */
-	FIntPoint ReportedPosition = FIntPoint::ZeroValue;
+	FCorsairsMovementInputGate MovementInputGate;
 
 	/** Карта высот текущей карты. Персонаж удерживается на ней вручную:
 	 *  рельеф пришёл из glTF без физических данных, и провалиться сквозь
@@ -89,7 +99,9 @@ private:
 	/** Разовая диагностика вида: копит время и срабатывает один раз. */
 	float DiagnosticTimer = 0.0f;
 	bool bDiagnosticLogged = false;
-	bool bHasReported = false;
+	bool bHasValidMovementSpeed = false;
+	bool bUsesEventMovementSpeedFallback = false;
+	bool bMovementSpeedProtocolErrorReported = false;
 
 	float TimeSinceReport = 0.0f;
 };
