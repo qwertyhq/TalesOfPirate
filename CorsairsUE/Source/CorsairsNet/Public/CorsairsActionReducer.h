@@ -55,6 +55,14 @@ struct FCorsairsPendingMove
 	FIntPoint RequestedEndpoint = FIntPoint::ZeroValue;
 };
 
+struct FCorsairsCompletedMove
+{
+	int64 WorldId = 0;
+	int64 PacketId = 0;
+	int64 MoveState = 0;
+	FIntPoint Endpoint = FIntPoint::ZeroValue;
+};
+
 USTRUCT(BlueprintType)
 struct CORSAIRSNET_API FCorsairsMovementEvent
 {
@@ -141,4 +149,5 @@ private:
 	TOptional<FCorsairsActiveBeginAction> _activeAction;
 	TOptional<FCorsairsPendingMove> _pendingMove;
 	TOptional<FIntPoint> _queuedEndpoint;
+	TOptional<FCorsairsCompletedMove> _lastCompletedMove;
 };

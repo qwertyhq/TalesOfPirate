@@ -9,6 +9,22 @@ constexpr int64 LocalWorldId = 77;
 constexpr int64 SkillPacketId = 700;
 constexpr int64 MovePacketId = 701;
 
+constexpr int64 MoveAction = 1;
+constexpr int64 MoveOn = 0;
+constexpr int64 MoveArrive = 1;
+constexpr int64 MoveBlock = 2;
+constexpr int64 FailedActionExisting = 1;
+
+constexpr int64 ManualPacketA = 10;
+constexpr int64 ManualPacketB = 11;
+constexpr int64 MismatchedPacket = 12;
+constexpr int64 RemoteWorldId = 88;
+constexpr int64 RemotePacketId = 90;
+
+const FIntPoint ManualStart(223325, 278475);
+const FIntPoint ManualEndpointA(223825, 278475);
+const FIntPoint ManualEndpointB(224325, 278475);
+
 const uint8 FirstWaypointBytes[] = {
 	0x6E, 0x00, 0x00, 0x00,
 	0xDC, 0x00, 0x00, 0x00,
@@ -19,6 +35,46 @@ const uint8 TerminalWaypointBytes[] = {
 	0x90, 0x01, 0x00, 0x00,
 };
 
+const uint8 ManualPathABytes[] = {
+	0x57, 0x69, 0x03, 0x00,
+	0xCB, 0x3F, 0x04, 0x00,
+	0x51, 0x6A, 0x03, 0x00,
+	0xCB, 0x3F, 0x04, 0x00,
+};
+
+const uint8 ManualEndpointABytes[] = {
+	0x51, 0x6A, 0x03, 0x00,
+	0xCB, 0x3F, 0x04, 0x00,
+};
+
+const uint8 ManualEndpointBBytes[] = {
+	0x45, 0x6C, 0x03, 0x00,
+	0xCB, 0x3F, 0x04, 0x00,
+};
+
+const uint8 RemotePathBytes[] = {
+	0xE8, 0x03, 0x00, 0x00,
+	0xD0, 0x07, 0x00, 0x00,
+	0x4C, 0x04, 0x00, 0x00,
+	0x34, 0x08, 0x00, 0x00,
+};
+
+const uint8 RemoteOtherEndpointBytes[] = {
+	0xB0, 0x04, 0x00, 0x00,
+	0x98, 0x08, 0x00, 0x00,
+};
+
+const uint8 SevenWaypointBytes[] = {
+	0x51, 0x6A, 0x03, 0x00,
+	0xCB, 0x3F, 0x04,
+};
+
+const uint8 NineWaypointBytes[] = {
+	0x51, 0x6A, 0x03, 0x00,
+	0xCB, 0x3F, 0x04, 0x00,
+	0xFF,
+};
+
 TConstArrayView<uint8> FirstWaypoint()
 {
 	return MakeArrayView(FirstWaypointBytes);
@@ -27,6 +83,31 @@ TConstArrayView<uint8> FirstWaypoint()
 TConstArrayView<uint8> TerminalWaypoint()
 {
 	return MakeArrayView(TerminalWaypointBytes);
+}
+
+TConstArrayView<uint8> ManualPathA()
+{
+	return MakeArrayView(ManualPathABytes);
+}
+
+TConstArrayView<uint8> ManualEndpointAPath()
+{
+	return MakeArrayView(ManualEndpointABytes);
+}
+
+TConstArrayView<uint8> ManualEndpointBPath()
+{
+	return MakeArrayView(ManualEndpointBBytes);
+}
+
+TConstArrayView<uint8> RemotePath()
+{
+	return MakeArrayView(RemotePathBytes);
+}
+
+TConstArrayView<uint8> RemoteOtherEndpointPath()
+{
+	return MakeArrayView(RemoteOtherEndpointBytes);
 }
 } // namespace
 
@@ -316,11 +397,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FCorsairsReducerSkillLifecycleTest::RunTest(const FString&)
 {
-	constexpr int64 MoveOn = 0;
 	constexpr int64 MoveInRange = 8;
 	constexpr int64 FightOn = 0;
 	constexpr int64 FightTerminal = 1;
-	constexpr int64 MoveAction = 1;
 	constexpr int64 SkillAction = 2;
 	constexpr int64 ItemUseAction = 11;
 
@@ -581,6 +660,792 @@ bool FCorsairsReducerResetOnDisconnectTest::RunTest(const FString&)
 		FIntPoint::ZeroValue);
 	TestFalse(TEXT("reset clears movement authority lock"),
 		Reducer.IsMovementAuthorityLocked());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsReducerOnArriveTest,
+	"Corsairs.Movement.Reducer.OnArrive",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsReducerOnArriveTest::RunTest(const FString&)
+{
+	FCorsairsActionReducer Reducer;
+	Reducer.EnterWorld(LocalWorldId, ManualStart);
+	Reducer.Begin(
+		ManualPacketA,
+		ECorsairsBeginActionType::Move,
+		FCorsairsPendingMove{
+			ManualPacketA,
+			ManualStart,
+			ManualEndpointA,
+		},
+		[]()
+		{
+			return true;
+		});
+
+	const FCorsairsReducerEffects OnEffects = Reducer.OnMove(
+		LocalWorldId,
+		ManualPacketA,
+		MoveOn,
+		ManualPathA());
+	TestFalse(TEXT("manual ON is accepted"), OnEffects.bProtocolError);
+	TestTrue(TEXT("manual ON emits an accepted path"),
+		OnEffects.Movement.IsSet());
+	if (OnEffects.Movement.IsSet())
+	{
+		TestEqual(TEXT("manual ON type"),
+			static_cast<uint8>(OnEffects.Movement->Type),
+			static_cast<uint8>(ECorsairsMovementEventType::AcceptedPath));
+		TestFalse(TEXT("manual ON is not server driven"),
+			OnEffects.Movement->bServerDriven);
+		TestEqual(TEXT("manual ON preserves both waypoints"),
+			OnEffects.Movement->Waypoints.Num(),
+			2);
+	}
+	TestTrue(TEXT("manual pending remains open after ON"),
+		Reducer.GetPendingMove().IsSet());
+
+	const FCorsairsReducerEffects ArriveEffects = Reducer.OnMove(
+		LocalWorldId,
+		ManualPacketA,
+		MoveArrive,
+		ManualEndpointAPath());
+	TestFalse(TEXT("ARRIVE is accepted"), ArriveEffects.bProtocolError);
+	TestTrue(TEXT("ARRIVE emits a terminal event"),
+		ArriveEffects.Movement.IsSet());
+	if (ArriveEffects.Movement.IsSet())
+	{
+		TestEqual(TEXT("ARRIVE type"),
+			static_cast<uint8>(ArriveEffects.Movement->Type),
+			static_cast<uint8>(ECorsairsMovementEventType::Terminal));
+		TestEqual(TEXT("ARRIVE state"),
+			ArriveEffects.Movement->MoveState,
+			static_cast<uint8>(1));
+		TestEqual(TEXT("ARRIVE endpoint"),
+			ArriveEffects.Movement->Endpoint,
+			FIntPoint(223825, 278475));
+		TestTrue(TEXT("ARRIVE is local"),
+			ArriveEffects.Movement->bLocal);
+		TestFalse(TEXT("manual ARRIVE is not server driven"),
+			ArriveEffects.Movement->bServerDriven);
+		TestFalse(TEXT("ARRIVE does not require neutral"),
+			ArriveEffects.Movement->bRequireNeutral);
+	}
+	TestEqual(TEXT("ARRIVE confirms the final waypoint"),
+		Reducer.GetConfirmedPosition(),
+		FIntPoint(223825, 278475));
+	TestFalse(TEXT("ARRIVE clears active action"),
+		Reducer.GetActiveAction().IsSet());
+	TestFalse(TEXT("ARRIVE clears pending move"),
+		Reducer.GetPendingMove().IsSet());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsReducerDirectTerminalsTest,
+	"Corsairs.Movement.Reducer.DirectTerminals",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsReducerDirectTerminalsTest::RunTest(const FString&)
+{
+	struct FTerminalCase
+	{
+		int64 State;
+		ECorsairsMovementEventType Type;
+		bool bRequireNeutral;
+		bool bExposeQueue;
+	};
+	const FTerminalCase Cases[] = {
+		{MoveArrive, ECorsairsMovementEventType::Terminal, false, true},
+		{MoveBlock, ECorsairsMovementEventType::Rejected, true, false},
+	};
+	for (const FTerminalCase& TerminalCase : Cases)
+	{
+		FCorsairsActionReducer Reducer;
+		Reducer.EnterWorld(LocalWorldId, ManualStart);
+		Reducer.Begin(
+			ManualPacketA,
+			ECorsairsBeginActionType::Move,
+			FCorsairsPendingMove{
+				ManualPacketA,
+				ManualStart,
+				ManualEndpointA,
+			},
+			[]()
+			{
+				return true;
+			});
+		Reducer.QueueEndpoint(ManualEndpointB);
+
+		const FCorsairsReducerEffects Effects = Reducer.OnMove(
+			LocalWorldId,
+			ManualPacketA,
+			TerminalCase.State,
+			ManualEndpointAPath());
+		TestFalse(TEXT("direct terminal is accepted"),
+			Effects.bProtocolError);
+		TestTrue(TEXT("direct terminal emits movement"),
+			Effects.Movement.IsSet());
+		if (Effects.Movement.IsSet())
+		{
+			TestEqual(TEXT("direct terminal event type"),
+				static_cast<uint8>(Effects.Movement->Type),
+				static_cast<uint8>(TerminalCase.Type));
+			TestEqual(TEXT("direct terminal neutral requirement"),
+				Effects.Movement->bRequireNeutral,
+				TerminalCase.bRequireNeutral);
+		}
+		TestEqual(TEXT("only direct ARRIVE exposes queue"),
+			Effects.QueuedEndpoint.IsSet(),
+			TerminalCase.bExposeQueue);
+		if (Effects.QueuedEndpoint.IsSet())
+		{
+			TestEqual(TEXT("direct ARRIVE exposes literal B"),
+				*Effects.QueuedEndpoint,
+				FIntPoint(224325, 278475));
+		}
+		TestEqual(TEXT("direct terminal confirms endpoint"),
+			Reducer.GetConfirmedPosition(),
+			FIntPoint(223825, 278475));
+		TestFalse(TEXT("direct terminal closes active action"),
+			Reducer.GetActiveAction().IsSet());
+		TestFalse(TEXT("direct terminal closes pending move"),
+			Reducer.GetPendingMove().IsSet());
+		TestFalse(TEXT("direct terminal consumes internal queue"),
+			Reducer.GetQueuedEndpoint().IsSet());
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsReducerQueuesOnceTest,
+	"Corsairs.Movement.Reducer.QueuesOnce",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsReducerQueuesOnceTest::RunTest(const FString&)
+{
+	FCorsairsActionReducer Reducer;
+	Reducer.EnterWorld(LocalWorldId, ManualStart);
+	Reducer.Begin(
+		ManualPacketA,
+		ECorsairsBeginActionType::Move,
+		FCorsairsPendingMove{
+			ManualPacketA,
+			ManualStart,
+			ManualEndpointA,
+		},
+		[]()
+		{
+			return true;
+		});
+	TestTrue(TEXT("B queues while A is pending"),
+		Reducer.QueueEndpoint(ManualEndpointB));
+
+	const FCorsairsReducerEffects Effects = Reducer.OnMove(
+		LocalWorldId,
+		ManualPacketA,
+		MoveArrive,
+		ManualEndpointAPath());
+	TestTrue(TEXT("ARRIVE exposes one queued endpoint"),
+		Effects.QueuedEndpoint.IsSet());
+	if (Effects.QueuedEndpoint.IsSet())
+	{
+		TestEqual(TEXT("ARRIVE exposes exactly B"),
+			*Effects.QueuedEndpoint,
+			FIntPoint(224325, 278475));
+	}
+	TestFalse(TEXT("returned queue is consumed internally"),
+		Reducer.GetQueuedEndpoint().IsSet());
+
+	int32 SendCount = 0;
+	const ECorsairsActionRequestResult Result = Reducer.Begin(
+		ManualPacketB,
+		ECorsairsBeginActionType::Move,
+		FCorsairsPendingMove{
+			ManualPacketB,
+			FIntPoint(223825, 278475),
+			FIntPoint(224325, 278475),
+		},
+		[&]()
+		{
+			++SendCount;
+			return true;
+		});
+	TestEqual(TEXT("queued move begins after ARRIVE"),
+		static_cast<uint8>(Result),
+		static_cast<uint8>(ECorsairsActionRequestResult::Sent));
+	TestEqual(TEXT("queued move sends exactly once"), SendCount, 1);
+	TestTrue(TEXT("queued move is the new pending move"),
+		Reducer.GetPendingMove().IsSet());
+	if (Reducer.GetPendingMove().IsSet())
+	{
+		TestEqual(TEXT("queued move starts at confirmed A"),
+			Reducer.GetPendingMove()->Start,
+			FIntPoint(223825, 278475));
+		TestEqual(TEXT("queued move ends at B"),
+			Reducer.GetPendingMove()->RequestedEndpoint,
+			FIntPoint(224325, 278475));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsReducerDuplicateTerminalTest,
+	"Corsairs.Movement.Reducer.DuplicateTerminal",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsReducerDuplicateTerminalTest::RunTest(const FString&)
+{
+	FCorsairsActionReducer Reducer;
+	Reducer.EnterWorld(LocalWorldId, ManualStart);
+	Reducer.Begin(
+		ManualPacketA,
+		ECorsairsBeginActionType::Move,
+		FCorsairsPendingMove{
+			ManualPacketA,
+			ManualStart,
+			ManualEndpointA,
+		},
+		[]()
+		{
+			return true;
+		});
+	Reducer.QueueEndpoint(ManualEndpointB);
+	const FCorsairsReducerEffects FirstTerminal = Reducer.OnMove(
+		LocalWorldId,
+		ManualPacketA,
+		MoveArrive,
+		ManualEndpointAPath());
+	TestTrue(TEXT("first ARRIVE exposes queued B"),
+		FirstTerminal.QueuedEndpoint.IsSet());
+	TestFalse(TEXT("first ARRIVE consumes queue before replay"),
+		Reducer.GetQueuedEndpoint().IsSet());
+
+	const FCorsairsReducerEffects Duplicate = Reducer.OnMove(
+		LocalWorldId,
+		ManualPacketA,
+		MoveArrive,
+		ManualEndpointAPath());
+	TestTrue(TEXT("replayed terminal is marked duplicate"),
+		Duplicate.bDuplicate);
+	TestFalse(TEXT("duplicate is not a protocol error"),
+		Duplicate.bProtocolError);
+	TestFalse(TEXT("duplicate emits no movement"),
+		Duplicate.Movement.IsSet());
+	TestFalse(TEXT("duplicate emits no queued endpoint"),
+		Duplicate.QueuedEndpoint.IsSet());
+	TestEqual(TEXT("duplicate preserves confirmed endpoint"),
+		Reducer.GetConfirmedPosition(),
+		FIntPoint(223825, 278475));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsReducerStaleTerminalTest,
+	"Corsairs.Movement.Reducer.StaleTerminal",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsReducerStaleTerminalTest::RunTest(const FString&)
+{
+	FCorsairsActionReducer Reducer;
+	Reducer.EnterWorld(LocalWorldId, ManualStart);
+	Reducer.Begin(
+		ManualPacketA,
+		ECorsairsBeginActionType::Move,
+		FCorsairsPendingMove{
+			ManualPacketA,
+			ManualStart,
+			ManualEndpointA,
+		},
+		[]()
+		{
+			return true;
+		});
+	Reducer.OnMove(
+		LocalWorldId,
+		ManualPacketA,
+		MoveArrive,
+		ManualEndpointAPath());
+	Reducer.Begin(
+		ManualPacketB,
+		ECorsairsBeginActionType::Move,
+		FCorsairsPendingMove{
+			ManualPacketB,
+			ManualEndpointA,
+			ManualEndpointB,
+		},
+		[]()
+		{
+			return true;
+		});
+
+	const FCorsairsReducerEffects Stale = Reducer.OnMove(
+		LocalWorldId,
+		ManualPacketA,
+		MoveBlock,
+		ManualEndpointBPath());
+	TestTrue(TEXT("old terminal is rejected as stale"),
+		Stale.bProtocolError);
+	TestFalse(TEXT("stale terminal emits no reconciliation"),
+		Stale.Movement.IsSet());
+	TestFalse(TEXT("stale terminal emits no queued endpoint"),
+		Stale.QueuedEndpoint.IsSet());
+	TestEqual(TEXT("stale terminal preserves confirmed A"),
+		Reducer.GetConfirmedPosition(),
+		FIntPoint(223825, 278475));
+	TestTrue(TEXT("stale terminal preserves pending B"),
+		Reducer.GetPendingMove().IsSet());
+	if (Reducer.GetPendingMove().IsSet())
+	{
+		TestEqual(TEXT("pending B packet is preserved"),
+			Reducer.GetPendingMove()->PacketId,
+			static_cast<int64>(11));
+		TestEqual(TEXT("pending B endpoint is preserved"),
+			Reducer.GetPendingMove()->RequestedEndpoint,
+			FIntPoint(224325, 278475));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsReducerRejectsMismatchedLocalPacketTest,
+	"Corsairs.Movement.Reducer.RejectsMismatchedLocalPacket",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsReducerRejectsMismatchedLocalPacketTest::RunTest(
+	const FString&)
+{
+	FCorsairsActionReducer Reducer;
+	Reducer.EnterWorld(LocalWorldId, ManualStart);
+	Reducer.Begin(
+		ManualPacketB,
+		ECorsairsBeginActionType::Move,
+		FCorsairsPendingMove{
+			ManualPacketB,
+			ManualStart,
+			ManualEndpointB,
+		},
+		[]()
+		{
+			return true;
+		});
+
+	const FCorsairsReducerEffects Effects = Reducer.OnMove(
+		LocalWorldId,
+		MismatchedPacket,
+		MoveOn,
+		ManualEndpointAPath());
+	TestTrue(TEXT("mismatched local packet is rejected"),
+		Effects.bProtocolError);
+	TestFalse(TEXT("mismatched packet emits no reconciliation"),
+		Effects.Movement.IsSet());
+	TestFalse(TEXT("mismatched packet emits no queued endpoint"),
+		Effects.QueuedEndpoint.IsSet());
+	TestEqual(TEXT("mismatched packet preserves confirmed start"),
+		Reducer.GetConfirmedPosition(),
+		FIntPoint(223325, 278475));
+	TestTrue(TEXT("mismatched packet preserves pending 11"),
+		Reducer.GetPendingMove().IsSet());
+	if (Reducer.GetPendingMove().IsSet())
+	{
+		TestEqual(TEXT("pending packet remains 11"),
+			Reducer.GetPendingMove()->PacketId,
+			static_cast<int64>(11));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsReducerSkillOpensServerDrivenWithoutPendingTest,
+	"Corsairs.Movement.Reducer.SkillOpensServerDrivenWithoutPending",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsReducerSkillOpensServerDrivenWithoutPendingTest::RunTest(
+	const FString&)
+{
+	FCorsairsActionReducer Reducer;
+	Reducer.EnterWorld(LocalWorldId, ManualStart);
+	Reducer.Begin(
+		SkillPacketId,
+		ECorsairsBeginActionType::Skill,
+		TOptional<FCorsairsPendingMove>(),
+		[]()
+		{
+			return true;
+		});
+
+	const FCorsairsReducerEffects ServerMove = Reducer.OnMove(
+		LocalWorldId,
+		SkillPacketId,
+		MoveOn,
+		ManualPathA());
+	TestFalse(TEXT("matching skill MOVE is accepted"),
+		ServerMove.bProtocolError);
+	TestTrue(TEXT("matching skill MOVE emits movement"),
+		ServerMove.Movement.IsSet());
+	if (ServerMove.Movement.IsSet())
+	{
+		TestTrue(TEXT("skill MOVE is server driven"),
+			ServerMove.Movement->bServerDriven);
+	}
+	TestTrue(TEXT("skill remains active"),
+		Reducer.GetActiveAction().IsSet());
+	if (Reducer.GetActiveAction().IsSet())
+	{
+		TestEqual(TEXT("skill opens server move phase"),
+			static_cast<uint8>(Reducer.GetActiveAction()->Phase),
+			static_cast<uint8>(ECorsairsActionPhase::ServerMove));
+	}
+
+	const FCorsairsReducerEffects OtherPacket = Reducer.OnMove(
+		LocalWorldId,
+		SkillPacketId + 1,
+		MoveBlock,
+		ManualEndpointBPath());
+	TestTrue(TEXT("other local packet is stale"),
+		OtherPacket.bProtocolError);
+	TestFalse(TEXT("stale skill packet emits no movement"),
+		OtherPacket.Movement.IsSet());
+	TestEqual(TEXT("stale skill packet preserves confirmed endpoint"),
+		Reducer.GetConfirmedPosition(),
+		FIntPoint(223825, 278475));
+	TestTrue(TEXT("stale skill packet preserves active skill"),
+		Reducer.GetActiveAction().IsSet());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsReducerMalformedWaypointsTest,
+	"Corsairs.Movement.Reducer.MalformedWaypoints",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsReducerMalformedWaypointsTest::RunTest(const FString&)
+{
+	FCorsairsActionReducer Reducer;
+	Reducer.EnterWorld(LocalWorldId, ManualStart);
+	Reducer.Begin(
+		ManualPacketA,
+		ECorsairsBeginActionType::Move,
+		FCorsairsPendingMove{
+			ManualPacketA,
+			ManualStart,
+			ManualEndpointA,
+		},
+		[]()
+		{
+			return true;
+		});
+	Reducer.QueueEndpoint(ManualEndpointB);
+
+	const TConstArrayView<uint8> InvalidBlobs[] = {
+		TConstArrayView<uint8>(),
+		MakeArrayView(SevenWaypointBytes),
+		MakeArrayView(NineWaypointBytes),
+	};
+	for (const TConstArrayView<uint8> InvalidBlob : InvalidBlobs)
+	{
+		const FCorsairsReducerEffects Effects = Reducer.OnMove(
+			LocalWorldId,
+			ManualPacketA,
+			MoveOn,
+			InvalidBlob);
+		TestTrue(TEXT("malformed waypoint blob is a protocol error"),
+			Effects.bProtocolError);
+		TestFalse(TEXT("malformed blob emits no movement"),
+			Effects.Movement.IsSet());
+		TestFalse(TEXT("malformed blob emits no queued endpoint"),
+			Effects.QueuedEndpoint.IsSet());
+		TestFalse(TEXT("malformed blob is not a duplicate"),
+			Effects.bDuplicate);
+		TestEqual(TEXT("malformed blob preserves confirmed position"),
+			Reducer.GetConfirmedPosition(),
+			FIntPoint(223325, 278475));
+		TestTrue(TEXT("malformed blob preserves active action"),
+			Reducer.GetActiveAction().IsSet());
+		if (Reducer.GetActiveAction().IsSet())
+		{
+			TestEqual(TEXT("malformed blob preserves active packet"),
+				Reducer.GetActiveAction()->PacketId,
+				static_cast<int64>(10));
+			TestEqual(TEXT("malformed blob preserves requested phase"),
+				static_cast<uint8>(Reducer.GetActiveAction()->Phase),
+				static_cast<uint8>(ECorsairsActionPhase::Requested));
+		}
+		TestTrue(TEXT("malformed blob preserves pending move"),
+			Reducer.GetPendingMove().IsSet());
+		if (Reducer.GetPendingMove().IsSet())
+		{
+			TestEqual(TEXT("malformed blob preserves pending start"),
+				Reducer.GetPendingMove()->Start,
+				FIntPoint(223325, 278475));
+			TestEqual(TEXT("malformed blob preserves pending endpoint"),
+				Reducer.GetPendingMove()->RequestedEndpoint,
+				FIntPoint(223825, 278475));
+		}
+		TestTrue(TEXT("malformed blob preserves queued endpoint"),
+			Reducer.GetQueuedEndpoint().IsSet());
+		if (Reducer.GetQueuedEndpoint().IsSet())
+		{
+			TestEqual(TEXT("malformed blob preserves literal queue"),
+				*Reducer.GetQueuedEndpoint(),
+				FIntPoint(224325, 278475));
+		}
+
+		FCorsairsActionReducer CompletedReducer;
+		CompletedReducer.EnterWorld(LocalWorldId, ManualStart);
+		CompletedReducer.Begin(
+			ManualPacketA,
+			ECorsairsBeginActionType::Move,
+			FCorsairsPendingMove{
+				ManualPacketA,
+				ManualStart,
+				ManualEndpointA,
+			},
+			[]()
+			{
+				return true;
+			});
+		CompletedReducer.OnMove(
+			LocalWorldId,
+			ManualPacketA,
+			MoveArrive,
+			ManualEndpointAPath());
+		const FCorsairsReducerEffects CompletedMalformed =
+			CompletedReducer.OnMove(
+				LocalWorldId,
+				ManualPacketA,
+				MoveArrive,
+				InvalidBlob);
+		TestTrue(TEXT("completed malformed packet is protocol error"),
+			CompletedMalformed.bProtocolError);
+		const FCorsairsReducerEffects Replay = CompletedReducer.OnMove(
+			LocalWorldId,
+			ManualPacketA,
+			MoveArrive,
+			ManualEndpointAPath());
+		TestTrue(TEXT("malformed packet preserves terminal dedup state"),
+			Replay.bDuplicate);
+		TestFalse(TEXT("preserved duplicate emits no movement"),
+			Replay.Movement.IsSet());
+	}
+
+	const FCorsairsReducerEffects Valid = Reducer.OnMove(
+		LocalWorldId,
+		ManualPacketA,
+		MoveOn,
+		ManualPathA());
+	TestFalse(TEXT("nonzero 16-byte waypoint blob is valid"),
+		Valid.bProtocolError);
+	TestTrue(TEXT("valid waypoint blob emits movement"),
+		Valid.Movement.IsSet());
+	if (Valid.Movement.IsSet())
+	{
+		TestEqual(TEXT("valid blob decodes two waypoints"),
+			Valid.Movement->Waypoints.Num(),
+			2);
+		TestEqual(TEXT("valid blob first waypoint"),
+			Valid.Movement->Waypoints[0],
+			FIntPoint(223575, 278475));
+		TestEqual(TEXT("valid blob final waypoint"),
+			Valid.Movement->Waypoints[1],
+			FIntPoint(223825, 278475));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsReducerFailedMoveTest,
+	"Corsairs.Movement.Reducer.FailedMove",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsReducerFailedMoveTest::RunTest(const FString&)
+{
+	FCorsairsActionReducer Reducer;
+	Reducer.EnterWorld(LocalWorldId, ManualStart);
+	int32 SendCount = 0;
+	Reducer.Begin(
+		ManualPacketA,
+		ECorsairsBeginActionType::Move,
+		FCorsairsPendingMove{
+			ManualPacketA,
+			ManualStart,
+			ManualEndpointA,
+		},
+		[&]()
+		{
+			++SendCount;
+			return true;
+		});
+	Reducer.QueueEndpoint(ManualEndpointB);
+
+	const FCorsairsReducerEffects Effects = Reducer.OnFailedAction(
+		LocalWorldId,
+		MoveAction,
+		FailedActionExisting);
+	TestFalse(TEXT("matching failed MOVE is accepted"),
+		Effects.bProtocolError);
+	TestTrue(TEXT("failed MOVE emits rejection"),
+		Effects.Movement.IsSet());
+	if (Effects.Movement.IsSet())
+	{
+		TestEqual(TEXT("failed MOVE packet"),
+			Effects.Movement->PacketId,
+			static_cast<int64>(10));
+		TestEqual(TEXT("failed MOVE type"),
+			static_cast<uint8>(Effects.Movement->Type),
+			static_cast<uint8>(ECorsairsMovementEventType::Rejected));
+		TestEqual(TEXT("failed MOVE reason"),
+			Effects.Movement->MoveState,
+			static_cast<uint8>(1));
+		TestEqual(TEXT("failed MOVE rolls back to prior confirmation"),
+			Effects.Movement->Endpoint,
+			FIntPoint(223325, 278475));
+		TestTrue(TEXT("failed MOVE is local"),
+			Effects.Movement->bLocal);
+		TestFalse(TEXT("failed manual MOVE is not server driven"),
+			Effects.Movement->bServerDriven);
+		TestTrue(TEXT("failed MOVE requires neutral"),
+			Effects.Movement->bRequireNeutral);
+	}
+	TestFalse(TEXT("failed MOVE never exposes queued resend"),
+		Effects.QueuedEndpoint.IsSet());
+	TestFalse(TEXT("failed MOVE clears active action"),
+		Reducer.GetActiveAction().IsSet());
+	TestFalse(TEXT("failed MOVE clears pending move"),
+		Reducer.GetPendingMove().IsSet());
+	TestFalse(TEXT("failed MOVE clears queue"),
+		Reducer.GetQueuedEndpoint().IsSet());
+	TestEqual(TEXT("failed MOVE preserves prior confirmation"),
+		Reducer.GetConfirmedPosition(),
+		FIntPoint(223325, 278475));
+	TestEqual(TEXT("failed MOVE never resends"), SendCount, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsReducerRemoteMoveTest,
+	"Corsairs.Movement.Reducer.RemoteMove",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsReducerRemoteMoveTest::RunTest(const FString&)
+{
+	FCorsairsActionReducer Reducer;
+	Reducer.EnterWorld(LocalWorldId, ManualStart);
+	Reducer.Begin(
+		ManualPacketA,
+		ECorsairsBeginActionType::Move,
+		FCorsairsPendingMove{
+			ManualPacketA,
+			ManualStart,
+			ManualEndpointA,
+		},
+		[]()
+		{
+			return true;
+		});
+	Reducer.QueueEndpoint(ManualEndpointB);
+
+	const FCorsairsReducerEffects RemoteOn = Reducer.OnMove(
+		RemoteWorldId,
+		RemotePacketId,
+		MoveOn,
+		RemotePath());
+	TestFalse(TEXT("remote ON ignores local reservation correlation"),
+		RemoteOn.bProtocolError);
+	TestTrue(TEXT("remote ON emits movement"),
+		RemoteOn.Movement.IsSet());
+	if (RemoteOn.Movement.IsSet())
+	{
+		TestFalse(TEXT("remote ON is not local"),
+			RemoteOn.Movement->bLocal);
+		TestTrue(TEXT("remote ON is server driven"),
+			RemoteOn.Movement->bServerDriven);
+		TestEqual(TEXT("remote ON preserves waypoint count"),
+			RemoteOn.Movement->Waypoints.Num(),
+			2);
+		TestEqual(TEXT("remote ON preserves first facing point"),
+			RemoteOn.Movement->Waypoints[0],
+			FIntPoint(1000, 2000));
+		TestEqual(TEXT("remote ON preserves terminal point"),
+			RemoteOn.Movement->Waypoints[1],
+			FIntPoint(1100, 2100));
+	}
+	TestEqual(TEXT("remote ON preserves local confirmation"),
+		Reducer.GetConfirmedPosition(),
+		FIntPoint(223325, 278475));
+	TestTrue(TEXT("remote ON preserves local pending"),
+		Reducer.GetPendingMove().IsSet());
+	TestTrue(TEXT("remote ON preserves local queue"),
+		Reducer.GetQueuedEndpoint().IsSet());
+
+	const FCorsairsReducerEffects RemoteTerminal = Reducer.OnMove(
+		RemoteWorldId,
+		RemotePacketId,
+		MoveArrive,
+		RemotePath());
+	TestFalse(TEXT("remote terminal is accepted"),
+		RemoteTerminal.bProtocolError);
+	TestTrue(TEXT("remote terminal emits movement"),
+		RemoteTerminal.Movement.IsSet());
+	if (RemoteTerminal.Movement.IsSet())
+	{
+		TestEqual(TEXT("remote terminal type"),
+			static_cast<uint8>(RemoteTerminal.Movement->Type),
+			static_cast<uint8>(ECorsairsMovementEventType::Terminal));
+		TestEqual(TEXT("remote terminal endpoint"),
+			RemoteTerminal.Movement->Endpoint,
+			FIntPoint(1100, 2100));
+		TestTrue(TEXT("remote terminal remains server driven"),
+			RemoteTerminal.Movement->bServerDriven);
+	}
+
+	const FCorsairsReducerEffects Duplicate = Reducer.OnMove(
+		RemoteWorldId,
+		RemotePacketId,
+		MoveArrive,
+		RemotePath());
+	TestTrue(TEXT("same remote terminal tuple is duplicate"),
+		Duplicate.bDuplicate);
+	TestFalse(TEXT("remote duplicate emits no movement"),
+		Duplicate.Movement.IsSet());
+
+	struct FDedupKeyCase
+	{
+		int64 WorldId;
+		int64 PacketId;
+		int64 State;
+		TConstArrayView<uint8> Waypoints;
+	};
+	const FDedupKeyCase KeyCases[] = {
+		{RemoteWorldId + 1, RemotePacketId, MoveArrive, RemotePath()},
+		{RemoteWorldId, RemotePacketId + 1, MoveArrive, RemotePath()},
+		{RemoteWorldId, RemotePacketId, MoveBlock, RemotePath()},
+		{RemoteWorldId, RemotePacketId, MoveArrive,
+			RemoteOtherEndpointPath()},
+	};
+	for (const FDedupKeyCase& KeyCase : KeyCases)
+	{
+		FCorsairsActionReducer KeyReducer;
+		KeyReducer.EnterWorld(LocalWorldId, ManualStart);
+		KeyReducer.OnMove(
+			RemoteWorldId,
+			RemotePacketId,
+			MoveArrive,
+			RemotePath());
+		const FCorsairsReducerEffects ChangedKey = KeyReducer.OnMove(
+			KeyCase.WorldId,
+			KeyCase.PacketId,
+			KeyCase.State,
+			KeyCase.Waypoints);
+		TestFalse(TEXT("changing a dedup tuple field is not duplicate"),
+			ChangedKey.bDuplicate);
+		TestFalse(TEXT("changed remote tuple remains valid"),
+			ChangedKey.bProtocolError);
+		TestTrue(TEXT("changed remote tuple emits movement"),
+			ChangedKey.Movement.IsSet());
+	}
 	return true;
 }
 

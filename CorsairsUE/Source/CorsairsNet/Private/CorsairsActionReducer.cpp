@@ -33,6 +33,40 @@ bool IsSkillInterrupt(const int64 MoveState)
 		MoveState == MoveCantMove;
 }
 
+bool IsSupportedMoveState(const int64 MoveState)
+{
+	return MoveState == MoveOn ||
+		MoveState == MoveArrive ||
+		MoveState == MoveBlock ||
+		MoveState == MoveCancel ||
+		MoveState == MoveInRange ||
+		MoveState == MoveNoTarget ||
+		MoveState == MoveCantMove;
+}
+
+bool IsMoveTerminal(const int64 MoveState)
+{
+	return MoveState != MoveOn && IsSupportedMoveState(MoveState);
+}
+
+bool IsNegativeMoveTerminal(const int64 MoveState)
+{
+	return MoveState == MoveBlock ||
+		MoveState == MoveCancel ||
+		MoveState == MoveNoTarget ||
+		MoveState == MoveCantMove;
+}
+
+bool IsMoveFailureReason(const int64 Reason)
+{
+	constexpr int64 ActionForbidden = 0;
+	constexpr int64 ExistingAction = 1;
+	constexpr int64 MovePath = 2;
+	return Reason == ActionForbidden ||
+		Reason == ExistingAction ||
+		Reason == MovePath;
+}
+
 bool DecodeWaypoints(
 	const TConstArrayView<uint8> WaypointBytes,
 	TArray<FIntPoint>& Waypoints)
@@ -78,6 +112,7 @@ void FCorsairsActionReducer::Reset()
 	_activeAction.Reset();
 	_pendingMove.Reset();
 	_queuedEndpoint.Reset();
+	_lastCompletedMove.Reset();
 }
 
 ECorsairsActionRequestResult FCorsairsActionReducer::Begin(
@@ -146,10 +181,7 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnMove(
 		return Effects;
 	}
 
-	if (WorldId != _localWorldId ||
-		!_activeAction.IsSet() ||
-		_activeAction->ActionType != ECorsairsBeginActionType::Skill ||
-		_activeAction->PacketId != PacketId)
+	if (!IsSupportedMoveState(MoveState))
 	{
 		Effects.bProtocolError = true;
 		return Effects;
@@ -157,8 +189,32 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnMove(
 
 	const bool bOn = MoveState == MoveOn;
 	const bool bInRange = MoveState == MoveInRange;
-	const bool bInterrupt = IsSkillInterrupt(MoveState);
-	if (!bOn && !bInRange && !bInterrupt)
+	const bool bTerminal = IsMoveTerminal(MoveState);
+	const FIntPoint Endpoint = Waypoints.Last();
+	if (bTerminal &&
+		_lastCompletedMove.IsSet() &&
+		_lastCompletedMove->WorldId == WorldId &&
+		_lastCompletedMove->PacketId == PacketId &&
+		_lastCompletedMove->MoveState == MoveState &&
+		_lastCompletedMove->Endpoint == Endpoint)
+	{
+		Effects.bDuplicate = true;
+		return Effects;
+	}
+
+	const bool bLocal = WorldId == _localWorldId;
+	const bool bManual = bLocal && _pendingMove.IsSet();
+	const bool bSkillDriven = bLocal && !bManual &&
+		_activeAction.IsSet() &&
+		_activeAction->ActionType == ECorsairsBeginActionType::Skill &&
+		_activeAction->PacketId == PacketId;
+	if (bLocal &&
+		((bManual &&
+			(!_activeAction.IsSet() ||
+				_activeAction->ActionType != ECorsairsBeginActionType::Move ||
+				_activeAction->PacketId != PacketId ||
+				_pendingMove->PacketId != PacketId)) ||
+			(!bManual && !bSkillDriven)))
 	{
 		Effects.bProtocolError = true;
 		return Effects;
@@ -169,28 +225,79 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnMove(
 	Movement.PacketId = PacketId;
 	Movement.Type = bOn
 		? ECorsairsMovementEventType::AcceptedPath
-		: bInRange
+		: bInRange || (MoveState == MoveArrive && !bSkillDriven)
 			? ECorsairsMovementEventType::Terminal
 			: ECorsairsMovementEventType::Rejected;
 	Movement.MoveState = static_cast<uint8>(MoveState);
 	Movement.Waypoints = MoveTemp(Waypoints);
-	Movement.Endpoint = Movement.Waypoints.Last();
-	Movement.bLocal = true;
-	Movement.bServerDriven = true;
-	Movement.bRequireNeutral = bInterrupt;
+	Movement.Endpoint = Endpoint;
+	Movement.bLocal = bLocal;
+	Movement.bServerDriven = !bManual;
+	Movement.bRequireNeutral = bSkillDriven
+		? IsSkillInterrupt(MoveState)
+		: IsNegativeMoveTerminal(MoveState);
 
-	_confirmedPosition = Movement.Endpoint;
-	if (bOn)
+	if (!bLocal)
 	{
-		_activeAction->Phase = ECorsairsActionPhase::ServerMove;
+		if (bTerminal)
+		{
+			_lastCompletedMove = FCorsairsCompletedMove{
+				WorldId,
+				PacketId,
+				MoveState,
+				Endpoint,
+			};
+		}
 	}
-	else if (bInRange)
+	else if (bManual)
 	{
-		_activeAction->Phase = ECorsairsActionPhase::Fight;
+		if (bOn)
+		{
+			_activeAction->Phase = ECorsairsActionPhase::ServerMove;
+		}
+		else
+		{
+			_confirmedPosition = Endpoint;
+			if (MoveState == MoveArrive)
+			{
+				Effects.QueuedEndpoint = _queuedEndpoint;
+			}
+			_activeAction.Reset();
+			_pendingMove.Reset();
+			_queuedEndpoint.Reset();
+			_lastCompletedMove = FCorsairsCompletedMove{
+				WorldId,
+				PacketId,
+				MoveState,
+				Endpoint,
+			};
+		}
 	}
 	else
 	{
-		_activeAction.Reset();
+		_confirmedPosition = Endpoint;
+		if (bOn)
+		{
+			_activeAction->Phase = ECorsairsActionPhase::ServerMove;
+		}
+		else if (bInRange)
+		{
+			_activeAction->Phase = ECorsairsActionPhase::Fight;
+		}
+		else
+		{
+			_activeAction.Reset();
+			_queuedEndpoint.Reset();
+		}
+		if (bTerminal)
+		{
+			_lastCompletedMove = FCorsairsCompletedMove{
+				WorldId,
+				PacketId,
+				MoveState,
+				Endpoint,
+			};
+		}
 	}
 
 	Effects.Movement = MoveTemp(Movement);
@@ -259,12 +366,37 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnItemNotification(
 FCorsairsReducerEffects FCorsairsActionReducer::OnFailedAction(
 	const int64 WorldId,
 	const int64 ActionType,
-	const int64 /*Reason*/)
+	const int64 Reason)
 {
 	FCorsairsReducerEffects Effects;
 	if (WorldId != _localWorldId || !_activeAction.IsSet())
 	{
 		Effects.bProtocolError = true;
+		return Effects;
+	}
+
+	const bool bManualMoveFailure =
+		_activeAction->ActionType == ECorsairsBeginActionType::Move &&
+		_pendingMove.IsSet() &&
+		_pendingMove->PacketId == _activeAction->PacketId &&
+		ActionType == MoveAction &&
+		IsMoveFailureReason(Reason);
+	if (bManualMoveFailure)
+	{
+		FCorsairsMovementEvent Movement;
+		Movement.WorldId = WorldId;
+		Movement.PacketId = _activeAction->PacketId;
+		Movement.Type = ECorsairsMovementEventType::Rejected;
+		Movement.MoveState = static_cast<uint8>(Reason);
+		Movement.Waypoints.Add(_confirmedPosition);
+		Movement.Endpoint = _confirmedPosition;
+		Movement.bLocal = true;
+		Movement.bServerDriven = false;
+		Movement.bRequireNeutral = true;
+		Effects.Movement = MoveTemp(Movement);
+		_activeAction.Reset();
+		_pendingMove.Reset();
+		_queuedEndpoint.Reset();
 		return Effects;
 	}
 
