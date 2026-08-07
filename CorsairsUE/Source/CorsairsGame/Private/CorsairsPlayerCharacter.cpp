@@ -135,11 +135,14 @@ bool ACorsairsPlayerCharacter::SetBodyMesh(const FString& AssetPath)
 		const double Factor = Wanted / ModelHeight;
 		GetMesh()->SetRelativeScale3D(FVector(Factor));
 
-		// Подошвы опускаются к низу капсулы. Считать смещение по повёрнутым
-		// границам не вышло — модель уходила из кадра ещё дальше, а разбор
-		// того, где у неё начало координат после двух поворотов, стоит
-		// дороже, чем даёт.
 		GetMesh()->SetRelativeLocation(FVector(0.0f, 0.0f, -CapsuleHalfHeight));
+
+		// Наводить камеру придётся по факту, а не расчётом: смещение зависит
+		// от начала координат модели, двух поворотов и масштаба, и вывести
+		// его формулой у меня не вышло — модель уезжала то дальше, то
+		// рассыпалась. Замер делается в первом же кадре, когда границы
+		// компонента уже посчитаны.
+		bCameraNeedsAiming = true;
 		UE_LOG(LogCorsairsCharacter, Log,
 			   TEXT("модель %s: высота %.0f см, масштаб %.2f"),
 			   *AssetPath, ModelHeight, Factor);
@@ -310,6 +313,21 @@ void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 	// Разовый снимок состояния через несколько секунд после старта: по нему
 	// видно, где персонаж и куда смотрит камера. Без этих чисел причина
 	// «видно только небо» неотличима от десятка других.
+	// Наведение камеры на модель: её центр не совпадает с капсулой, и без
+	// поправки персонаж стоит у края кадра. Замер возможен только после того,
+	// как границы компонента посчитаны, — то есть не раньше первого кадра.
+	if (bCameraNeedsAiming && GetMesh()->GetSkeletalMeshAsset() != nullptr)
+	{
+		GetMesh()->UpdateBounds();
+		const FVector Centre = GetMesh()->Bounds.Origin;
+		const FVector Base = GetActorLocation();
+		if (!Centre.IsNearlyZero())
+		{
+			CameraBoom->TargetOffset = FVector(Centre.X - Base.X, Centre.Y - Base.Y, 0.0);
+			bCameraNeedsAiming = false;
+		}
+	}
+
 	DiagnosticTimer += DeltaSeconds;
 	if (!bDiagnosticLogged && DiagnosticTimer > 4.0f)
 	{
@@ -336,6 +354,13 @@ void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 			   bMeshVisible ? TEXT("да") : TEXT("НЕТ"),
 			   MeshLocation.X, MeshLocation.Y, MeshLocation.Z, MeshScale.X,
 			   MeshBounds.BoxExtent.X, MeshBounds.BoxExtent.Y, MeshBounds.BoxExtent.Z);
+
+		UE_LOG(LogTemp, Warning,
+			   TEXT("  центр модели в мире (%.0f, %.0f, %.0f), цель камеры (%.0f, %.0f, %.0f)"),
+			   MeshBounds.Origin.X, MeshBounds.Origin.Y, MeshBounds.Origin.Z,
+			   CameraBoom->GetComponentLocation().X,
+			   CameraBoom->GetComponentLocation().Y,
+			   CameraBoom->GetComponentLocation().Z);
 	}
 
 	Super::Tick(DeltaSeconds);

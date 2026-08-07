@@ -113,6 +113,9 @@ private:
 	UPROPERTY()
 	TObjectPtr<class UCorsairsTerrainHeights> TerrainHeights;
 
+	/** Камеру нужно навести на модель — замером в первом кадре. */
+	bool bCameraNeedsAiming = false;
+
 	/** Разовая диагностика вида: копит время и срабатывает один раз. */
 	float DiagnosticTimer = 0.0f;
 	bool bDiagnosticLogged = false;
