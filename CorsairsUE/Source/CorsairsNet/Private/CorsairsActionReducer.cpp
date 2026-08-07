@@ -191,6 +191,22 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnMove(
 	const bool bInRange = MoveState == MoveInRange;
 	const bool bTerminal = IsMoveTerminal(MoveState);
 	const FIntPoint Endpoint = Waypoints.Last();
+	const bool bLocal = WorldId == _localWorldId;
+	const bool bManual = bLocal && _pendingMove.IsSet();
+	const bool bSkillDriven = bLocal && !bManual &&
+		_activeAction.IsSet() &&
+		_activeAction->ActionType == ECorsairsBeginActionType::Skill &&
+		_activeAction->PacketId == PacketId;
+	if (bManual &&
+		(!_activeAction.IsSet() ||
+			_activeAction->ActionType != ECorsairsBeginActionType::Move ||
+			_activeAction->PacketId != PacketId ||
+			_pendingMove->PacketId != PacketId))
+	{
+		Effects.bProtocolError = true;
+		return Effects;
+	}
+
 	if (bTerminal &&
 		_lastCompletedMove.IsSet() &&
 		_lastCompletedMove->WorldId == WorldId &&
@@ -202,19 +218,7 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnMove(
 		return Effects;
 	}
 
-	const bool bLocal = WorldId == _localWorldId;
-	const bool bManual = bLocal && _pendingMove.IsSet();
-	const bool bSkillDriven = bLocal && !bManual &&
-		_activeAction.IsSet() &&
-		_activeAction->ActionType == ECorsairsBeginActionType::Skill &&
-		_activeAction->PacketId == PacketId;
-	if (bLocal &&
-		((bManual &&
-			(!_activeAction.IsSet() ||
-				_activeAction->ActionType != ECorsairsBeginActionType::Move ||
-				_activeAction->PacketId != PacketId ||
-				_pendingMove->PacketId != PacketId)) ||
-			(!bManual && !bSkillDriven)))
+	if (bLocal && !bManual && !bSkillDriven)
 	{
 		Effects.bProtocolError = true;
 		return Effects;
@@ -400,19 +404,36 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnFailedAction(
 		return Effects;
 	}
 
+	const bool bSkillMoveFailure =
+		_activeAction->ActionType == ECorsairsBeginActionType::Skill &&
+		ActionType == MoveAction &&
+		(_activeAction->Phase == ECorsairsActionPhase::Requested ||
+			_activeAction->Phase == ECorsairsActionPhase::ServerMove);
 	const bool bSkillFailure =
 		_activeAction->ActionType == ECorsairsBeginActionType::Skill &&
-		(ActionType == SkillAction ||
-			(ActionType == MoveAction &&
-				(_activeAction->Phase == ECorsairsActionPhase::Requested ||
-					_activeAction->Phase ==
-						ECorsairsActionPhase::ServerMove)));
+		(ActionType == SkillAction || bSkillMoveFailure);
 	if (!bSkillFailure)
 	{
 		Effects.bProtocolError = true;
 		return Effects;
 	}
 
+	if (bSkillMoveFailure)
+	{
+		FCorsairsMovementEvent Movement;
+		Movement.WorldId = WorldId;
+		Movement.PacketId = _activeAction->PacketId;
+		Movement.Type = ECorsairsMovementEventType::Rejected;
+		Movement.MoveState = static_cast<uint8>(Reason);
+		Movement.Waypoints.Add(_confirmedPosition);
+		Movement.Endpoint = _confirmedPosition;
+		Movement.bLocal = true;
+		Movement.bServerDriven = true;
+		Movement.bRequireNeutral = true;
+		Effects.Movement = MoveTemp(Movement);
+		_pendingMove.Reset();
+		_queuedEndpoint.Reset();
+	}
 	_activeAction.Reset();
 	return Effects;
 }

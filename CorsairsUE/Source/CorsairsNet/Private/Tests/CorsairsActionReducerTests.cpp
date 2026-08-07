@@ -13,7 +13,12 @@ constexpr int64 MoveAction = 1;
 constexpr int64 MoveOn = 0;
 constexpr int64 MoveArrive = 1;
 constexpr int64 MoveBlock = 2;
+constexpr int64 MoveCancel = 4;
+constexpr int64 MoveNoTarget = 16;
+constexpr int64 MoveCantMove = 32;
+constexpr int64 FailedActionForbidden = 0;
 constexpr int64 FailedActionExisting = 1;
+constexpr int64 FailedActionMovePath = 2;
 
 constexpr int64 ManualPacketA = 10;
 constexpr int64 ManualPacketB = 11;
@@ -760,6 +765,9 @@ bool FCorsairsReducerDirectTerminalsTest::RunTest(const FString&)
 	const FTerminalCase Cases[] = {
 		{MoveArrive, ECorsairsMovementEventType::Terminal, false, true},
 		{MoveBlock, ECorsairsMovementEventType::Rejected, true, false},
+		{MoveCancel, ECorsairsMovementEventType::Rejected, true, false},
+		{MoveNoTarget, ECorsairsMovementEventType::Rejected, true, false},
+		{MoveCantMove, ECorsairsMovementEventType::Rejected, true, false},
 	};
 	for (const FTerminalCase& TerminalCase : Cases)
 	{
@@ -790,6 +798,9 @@ bool FCorsairsReducerDirectTerminalsTest::RunTest(const FString&)
 			Effects.Movement.IsSet());
 		if (Effects.Movement.IsSet())
 		{
+			TestEqual(TEXT("direct terminal preserves literal state"),
+				Effects.Movement->MoveState,
+				static_cast<uint8>(TerminalCase.State));
 			TestEqual(TEXT("direct terminal event type"),
 				static_cast<uint8>(Effects.Movement->Type),
 				static_cast<uint8>(TerminalCase.Type));
@@ -984,10 +995,12 @@ bool FCorsairsReducerStaleTerminalTest::RunTest(const FString&)
 	const FCorsairsReducerEffects Stale = Reducer.OnMove(
 		LocalWorldId,
 		ManualPacketA,
-		MoveBlock,
-		ManualEndpointBPath());
+		MoveArrive,
+		ManualEndpointAPath());
 	TestTrue(TEXT("old terminal is rejected as stale"),
 		Stale.bProtocolError);
+	TestFalse(TEXT("reserved packet makes exact replay stale, not duplicate"),
+		Stale.bDuplicate);
 	TestFalse(TEXT("stale terminal emits no reconciliation"),
 		Stale.Movement.IsSet());
 	TestFalse(TEXT("stale terminal emits no queued endpoint"),
@@ -1113,6 +1126,99 @@ bool FCorsairsReducerSkillOpensServerDrivenWithoutPendingTest::RunTest(
 		FIntPoint(223825, 278475));
 	TestTrue(TEXT("stale skill packet preserves active skill"),
 		Reducer.GetActiveAction().IsSet());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsReducerSkillFailedMoveTest,
+	"Corsairs.Movement.Reducer.SkillFailedMove",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsReducerSkillFailedMoveTest::RunTest(const FString&)
+{
+	struct FSkillFailureCase
+	{
+		bool bOpenServerMove;
+		FIntPoint ExpectedEndpoint;
+	};
+	const FSkillFailureCase Cases[] = {
+		{false, FIntPoint(223325, 278475)},
+		{true, FIntPoint(223825, 278475)},
+	};
+	for (const FSkillFailureCase& SkillFailureCase : Cases)
+	{
+		FCorsairsActionReducer Reducer;
+		Reducer.EnterWorld(LocalWorldId, ManualStart);
+		Reducer.Begin(
+			SkillPacketId,
+			ECorsairsBeginActionType::Skill,
+			TOptional<FCorsairsPendingMove>(),
+			[]()
+			{
+				return true;
+			});
+		if (SkillFailureCase.bOpenServerMove)
+		{
+			Reducer.OnMove(
+				LocalWorldId,
+				SkillPacketId,
+				MoveOn,
+				ManualPathA());
+		}
+
+		const FCorsairsReducerEffects Effects = Reducer.OnFailedAction(
+			LocalWorldId,
+			MoveAction,
+			FailedActionExisting);
+		TestFalse(TEXT("skill MOVE failure is accepted"),
+			Effects.bProtocolError);
+		TestTrue(TEXT("skill MOVE failure emits reconciliation"),
+			Effects.Movement.IsSet());
+		if (Effects.Movement.IsSet())
+		{
+			TestEqual(TEXT("skill failure world"),
+				Effects.Movement->WorldId,
+				static_cast<int64>(77));
+			TestEqual(TEXT("skill failure packet"),
+				Effects.Movement->PacketId,
+				static_cast<int64>(700));
+			TestEqual(TEXT("skill failure type"),
+				static_cast<uint8>(Effects.Movement->Type),
+				static_cast<uint8>(ECorsairsMovementEventType::Rejected));
+			TestEqual(TEXT("skill failure reason"),
+				Effects.Movement->MoveState,
+				static_cast<uint8>(1));
+			TestEqual(TEXT("skill failure waypoint count"),
+				Effects.Movement->Waypoints.Num(),
+				1);
+			if (Effects.Movement->Waypoints.Num() == 1)
+			{
+				TestEqual(TEXT("skill failure facing endpoint"),
+					Effects.Movement->Waypoints[0],
+					SkillFailureCase.ExpectedEndpoint);
+			}
+			TestEqual(TEXT("skill failure confirmed endpoint"),
+				Effects.Movement->Endpoint,
+				SkillFailureCase.ExpectedEndpoint);
+			TestTrue(TEXT("skill failure is local"),
+				Effects.Movement->bLocal);
+			TestTrue(TEXT("skill failure is server driven"),
+				Effects.Movement->bServerDriven);
+			TestTrue(TEXT("skill failure requires neutral"),
+				Effects.Movement->bRequireNeutral);
+		}
+		TestFalse(TEXT("skill failure exposes no queued endpoint"),
+			Effects.QueuedEndpoint.IsSet());
+		TestFalse(TEXT("skill failure clears active action"),
+			Reducer.GetActiveAction().IsSet());
+		TestFalse(TEXT("skill failure clears pending move"),
+			Reducer.GetPendingMove().IsSet());
+		TestFalse(TEXT("skill failure clears internal queue"),
+			Reducer.GetQueuedEndpoint().IsSet());
+		TestEqual(TEXT("skill failure preserves confirmation"),
+			Reducer.GetConfirmedPosition(),
+			SkillFailureCase.ExpectedEndpoint);
+	}
 	return true;
 }
 
@@ -1262,65 +1368,78 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FCorsairsReducerFailedMoveTest::RunTest(const FString&)
 {
-	FCorsairsActionReducer Reducer;
-	Reducer.EnterWorld(LocalWorldId, ManualStart);
-	int32 SendCount = 0;
-	Reducer.Begin(
-		ManualPacketA,
-		ECorsairsBeginActionType::Move,
-		FCorsairsPendingMove{
-			ManualPacketA,
-			ManualStart,
-			ManualEndpointA,
-		},
-		[&]()
-		{
-			++SendCount;
-			return true;
-		});
-	Reducer.QueueEndpoint(ManualEndpointB);
-
-	const FCorsairsReducerEffects Effects = Reducer.OnFailedAction(
-		LocalWorldId,
-		MoveAction,
-		FailedActionExisting);
-	TestFalse(TEXT("matching failed MOVE is accepted"),
-		Effects.bProtocolError);
-	TestTrue(TEXT("failed MOVE emits rejection"),
-		Effects.Movement.IsSet());
-	if (Effects.Movement.IsSet())
+	struct FFailureCase
 	{
-		TestEqual(TEXT("failed MOVE packet"),
-			Effects.Movement->PacketId,
-			static_cast<int64>(10));
-		TestEqual(TEXT("failed MOVE type"),
-			static_cast<uint8>(Effects.Movement->Type),
-			static_cast<uint8>(ECorsairsMovementEventType::Rejected));
-		TestEqual(TEXT("failed MOVE reason"),
-			Effects.Movement->MoveState,
-			static_cast<uint8>(1));
-		TestEqual(TEXT("failed MOVE rolls back to prior confirmation"),
-			Effects.Movement->Endpoint,
+		int64 Reason;
+		uint8 ExpectedMoveState;
+	};
+	const FFailureCase Cases[] = {
+		{FailedActionForbidden, 0},
+		{FailedActionExisting, 1},
+		{FailedActionMovePath, 2},
+	};
+	for (const FFailureCase& FailureCase : Cases)
+	{
+		FCorsairsActionReducer Reducer;
+		Reducer.EnterWorld(LocalWorldId, ManualStart);
+		int32 SendCount = 0;
+		Reducer.Begin(
+			ManualPacketA,
+			ECorsairsBeginActionType::Move,
+			FCorsairsPendingMove{
+				ManualPacketA,
+				ManualStart,
+				ManualEndpointA,
+			},
+			[&]()
+			{
+				++SendCount;
+				return true;
+			});
+		Reducer.QueueEndpoint(ManualEndpointB);
+
+		const FCorsairsReducerEffects Effects = Reducer.OnFailedAction(
+			LocalWorldId,
+			MoveAction,
+			FailureCase.Reason);
+		TestFalse(TEXT("matching failed MOVE is accepted"),
+			Effects.bProtocolError);
+		TestTrue(TEXT("failed MOVE emits rejection"),
+			Effects.Movement.IsSet());
+		if (Effects.Movement.IsSet())
+		{
+			TestEqual(TEXT("failed MOVE packet"),
+				Effects.Movement->PacketId,
+				static_cast<int64>(10));
+			TestEqual(TEXT("failed MOVE type"),
+				static_cast<uint8>(Effects.Movement->Type),
+				static_cast<uint8>(ECorsairsMovementEventType::Rejected));
+			TestEqual(TEXT("failed MOVE literal reason"),
+				Effects.Movement->MoveState,
+				FailureCase.ExpectedMoveState);
+			TestEqual(TEXT("failed MOVE rolls back to prior confirmation"),
+				Effects.Movement->Endpoint,
+				FIntPoint(223325, 278475));
+			TestTrue(TEXT("failed MOVE is local"),
+				Effects.Movement->bLocal);
+			TestFalse(TEXT("failed manual MOVE is not server driven"),
+				Effects.Movement->bServerDriven);
+			TestTrue(TEXT("failed MOVE requires neutral"),
+				Effects.Movement->bRequireNeutral);
+		}
+		TestFalse(TEXT("failed MOVE never exposes queued resend"),
+			Effects.QueuedEndpoint.IsSet());
+		TestFalse(TEXT("failed MOVE clears active action"),
+			Reducer.GetActiveAction().IsSet());
+		TestFalse(TEXT("failed MOVE clears pending move"),
+			Reducer.GetPendingMove().IsSet());
+		TestFalse(TEXT("failed MOVE clears queue"),
+			Reducer.GetQueuedEndpoint().IsSet());
+		TestEqual(TEXT("failed MOVE preserves prior confirmation"),
+			Reducer.GetConfirmedPosition(),
 			FIntPoint(223325, 278475));
-		TestTrue(TEXT("failed MOVE is local"),
-			Effects.Movement->bLocal);
-		TestFalse(TEXT("failed manual MOVE is not server driven"),
-			Effects.Movement->bServerDriven);
-		TestTrue(TEXT("failed MOVE requires neutral"),
-			Effects.Movement->bRequireNeutral);
+		TestEqual(TEXT("failed MOVE never resends"), SendCount, 1);
 	}
-	TestFalse(TEXT("failed MOVE never exposes queued resend"),
-		Effects.QueuedEndpoint.IsSet());
-	TestFalse(TEXT("failed MOVE clears active action"),
-		Reducer.GetActiveAction().IsSet());
-	TestFalse(TEXT("failed MOVE clears pending move"),
-		Reducer.GetPendingMove().IsSet());
-	TestFalse(TEXT("failed MOVE clears queue"),
-		Reducer.GetQueuedEndpoint().IsSet());
-	TestEqual(TEXT("failed MOVE preserves prior confirmation"),
-		Reducer.GetConfirmedPosition(),
-		FIntPoint(223325, 278475));
-	TestEqual(TEXT("failed MOVE never resends"), SendCount, 1);
 	return true;
 }
 
