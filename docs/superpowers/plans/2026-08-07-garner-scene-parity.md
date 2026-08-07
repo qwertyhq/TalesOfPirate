@@ -37,7 +37,7 @@
 
 ### Task 1: Give every source record a stable key and one type policy
 
-**Task brief:** Parse source records once, assign immutable byte-derived identity, and publish an all-or-nothing type partition. Input is `garner.obj`; output is ordered type-0/type-1 records plus the 1634-key reference set; unknown types or unstable keys are the task's hard failures.
+**Task brief:** Parse source records once, preserve the independently parsed source header, assign immutable byte-derived identity, and publish an all-or-nothing type partition. Input is `garner.obj`; output is its exact `SceneFileHeader`, ordered type-0/type-1 records, and the 1634-key reference set; unknown types, unstable keys, or partial header publication are hard failures.
 
 **Files:**
 
@@ -70,6 +70,7 @@ struct PlacedObject {
 };
 
 struct SceneSelection {
+    SceneFileHeader SourceHeader{};
     std::vector<PlacedObject> Models;
     std::vector<PlacedObject> DeferredEffects;
     std::vector<SceneSourceKey> ReferenceKeys;
@@ -100,9 +101,9 @@ SceneSelectionStatus BuildSceneSelection(
 
 - [ ] **Step 1: Add RED parser/type tests**
 
-Create a synthetic `.obj` with section 1 `ObjInfoPos=100`, non-default `SectionWidth/SectionHeight`, and two records sharing `modelId=1`, first type 0 and second type 1. Require keys `(1,0,100)` and `(1,1,120)`, one model, one deferred effect, and exact preservation of section dimensions. Model resolution is not part of this task; the catalog test in Task 5 proves that a type-1 record never reaches lookup.
+Create a synthetic `.obj` with section 1 `ObjInfoPos=100`, non-default `SectionCntX`, `SectionCntY`, `SectionWidth`, `SectionHeight`, `Version`, `FileSize`, and `SectionObjNum`, and two records sharing `modelId=1`, first type 0 and second type 1. Require keys `(1,0,100)` and `(1,1,120)`, one model, one deferred effect, exact per-record section dimensions, and field-for-field preservation of the independently parsed `SceneFileHeader` in `SceneSelection::SourceHeader`. Model resolution is not part of this task; the catalog test in Task 5 proves that a type-1 record never reaches lookup.
 
-Require type 2 to return `UNKNOWN_OBJECT_TYPE` and publish no output. Anchors at radii 7999, 8000, and 8001 cm have membership true, true, false.
+Require type 2 to return `UNKNOWN_OBJECT_TYPE` and publish no output, including no partially copied `SourceHeader`. Anchors at radii 7999, 8000, and 8001 cm have membership true, true, false. Mutating only one header field in the later Task 4 context must be detectable by comparison with this preserved header.
 
 - [ ] **Step 2: Verify RED**
 
@@ -127,7 +128,7 @@ placed.Source.ByteOffset =
     section.ObjInfoPos + slotIndex * sizeof(SceneObjInfo);
 ```
 
-Build selection in source order. Record source scale only as a diagnostic field; never use it in a transform.
+Build a temporary selection in source order, copy `scene.Header` into its `SourceHeader`, and publish the entire temporary only after every record has a known type and stable key. Record source scale only as a diagnostic field; never use it in a transform. Task 4 receives its context through a separate CLI data path and compares that context against this parser-owned header; it never reconstructs section metadata from the selected records.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
@@ -373,6 +374,14 @@ path/SHA and the 1634 contributing source keys. Missing/duplicate catalog
 rows, a type-1 contribution, absent model input, path escape, SHA drift, or
 reference count other than 1634 is fatal and publishes nothing.
 
+For task-by-task execution, `source_manifest_path` is the exact durable
+`artifacts/scene-parity/runs/<task4Run>/garner.objects.json` printed and
+recorded by Task 4 GREEN. Task 3 reads it in place and writes its downstream
+outputs into the same run directory. It may not regenerate the source
+manifest, substitute `artifacts/maps/garner.objects.json`, scan for the newest
+run, or copy the manifest to a new path. The full orchestrator uses the same
+rule with its already allocated `<run>` directory.
+
 - [ ] **Step 1: Add RED asymmetric, skinned-part-root, material, and compatibility tests**
 
 Use source:
@@ -475,20 +484,22 @@ cmake --build tools/AssetConverter/build \
 ctest --test-dir tools/AssetConverter/build -j1 --output-on-failure
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
   CorsairsUE.Scripts.tests.test_scene_reference_model_set -v
+task4RunDir="<exact TASK4_RUN_DIR recorded by Task 4 GREEN>"
+test -f "$task4RunDir/garner.objects.json"
 PYTHONDONTWRITEBYTECODE=1 python3 \
   CorsairsUE/Scripts/build_scene_reference_model_set.py \
-  --source-manifest artifacts/maps/garner.objects.json \
+  --source-manifest "$task4RunDir/garner.objects.json" \
   --database databases/gamedata.sqlite \
   --model-root Client/model/scene \
-  --output artifacts/models/reference-models.json
+  --output "$task4RunDir/reference-models.json"
 ./tools/AssetConverter/build/AssetConverter \
-  Client/model/scene artifacts/models/SceneParity \
+  Client/model/scene "$task4RunDir/models" \
   --textures Client/texture/scene \
   --profile scene-map \
-  --required-models artifacts/models/reference-models.json
+  --required-models "$task4RunDir/reference-models.json"
 ./tools/AssetConverter/build/AssetConverter scene-map-fixture \
   --contract tools/AssetConverter/tests/fixtures/scene-map/nonidentity-skinned.json \
-  --output artifacts/scene-parity/runs/<runId>/synthetic/nonidentity-skinned
+  --output "$task4RunDir/synthetic/nonidentity-skinned"
 ```
 
 Run the build, CTest, Python resolver test, real corpus conversion, and validation sequentially; never overlap them. Compilation remains `-j2`, CTest remains `-j1`, and this task may not raise the global thermal/concurrency caps.
@@ -524,7 +535,7 @@ git commit -m "feat(converter): mirror scene map assets"
 
 ### Task 4: Publish a source manifest with terrain and reference-set facts
 
-**Task brief:** Join stable scene records to terrain facts without resolving assets. Input is Task 1 selection plus Task 2 tile source; output is atomic schema-v2 source truth for every type-0/type-1 record; terrain errors, type errors, or baseline drift publish nothing.
+**Task brief:** Join stable scene records to terrain facts without resolving assets. Input is Task 1 selection, independently supplied source context, and Task 2 tile source; output is atomic schema-v2 source truth for every type-0/type-1 record. Terrain/type/context/count failures commit nothing and restore any prior destination; a persistent filesystem rollback failure preserves the exact prior bytes in a verified recovery backup.
 
 **Files:**
 
@@ -543,6 +554,7 @@ enum class SceneManifestStatus {
     INVALID_SOURCE_CONTEXT,
     TERRAIN_READ_FAILED,
     COUNT_MISMATCH,
+    RECOVERY_REQUIRED,
 };
 
 struct SceneManifestStats {
@@ -573,7 +585,7 @@ SceneManifestStatus WriteSceneSourceManifest(
     std::string& detail);
 ```
 
-`SceneManifestSourceContext` is explicit input, not state recovered by the writer. The `scene-manifest` CLI constructs it from the exact command-line inputs: it copies the already parsed `garner.obj` header, hashes those exact object bytes as `SourceObjectSha256`, and streams the exact `.map` bytes through SHA-256 as `SourceMapSha256` without `ReadWholeFile` or a full-map tile allocation. Task 1 does not hash files. Generic unit fixtures supply their own header, hashes, and expected counts; the real Garner command supplies literal expectations `50017` total records, `46991` scene models, `3026` deferred effects, `1634` reference objects, and islands `{0:3, 1:1625, 2:6}`.
+`SceneManifestSourceContext` is explicit input, not state recovered by the writer. The `scene-manifest` CLI constructs it from the exact command-line inputs through a data path separate from `BuildSceneSelection`: it retains the independently parsed object header as `ObjectHeader`, hashes those exact object bytes as `SourceObjectSha256`, and streams the exact `.map` bytes through SHA-256 as `SourceMapSha256` without `ReadWholeFile` or a full-map tile allocation. The writer requires every field of `context.ObjectHeader` to equal `selection.SourceHeader`; it never derives either header from per-record maxima. Tests mutate each header field on either side and require `INVALID_SOURCE_CONTEXT`. Task 1 does not hash files. Generic unit fixtures supply their own header, hashes, and expected counts; the real Garner command supplies literal expectations `50017` total records, `46991` scene models, `3026` deferred effects, `1634` reference objects, and islands `{0:3, 1:1625, 2:6}`.
 
 Add CLI:
 
@@ -581,7 +593,7 @@ Add CLI:
 ./tools/AssetConverter/build/AssetConverter scene-manifest \
   Client/map/garner.map \
   Client/map/garner.obj \
-  artifacts/maps/garner
+  artifacts/scene-parity/runs/<task4Run>/garner
 ```
 
 - [ ] **Step 1: Add RED JSON and count tests**
@@ -597,6 +609,13 @@ Require the top-level schema and every source record:
   "sectionCntY": 512,
   "sectionWidth": 8,
   "sectionHeight": 8,
+  "stats": {
+    "sourceRecordCount": 50017,
+    "sceneModelCount": 46991,
+    "deferredEffectCount": 3026,
+    "referenceObjectCount": 1634,
+    "referenceIslandCounts": {"0": 3, "1": 1625, "2": 6}
+  },
   "records": [
     {
       "sourceKey": {
@@ -606,6 +625,7 @@ Require the top-level schema and every source record:
       },
       "modelId": 1,
       "type": 0,
+      "disposition": "scene-model",
       "x": 223325,
       "y": 278475,
       "heightOff": 0,
@@ -636,7 +656,7 @@ referenceIslandCounts
 
 Generic fixtures pass expectations matching their synthetic partition. Real Garner must report and gate exact stats: `sourceRecordCount=50017`, `sceneModelCount=46991`, `deferredEffectCount=3026`, `referenceObjectCount=1634`, island1 1625, island2 6, and absent/default island0 3. A mismatch in any scalar count, island key, or island count returns `COUNT_MISMATCH` and publishes nothing.
 
-Require the context header dimensions to equal the parsed object dimensions and the terrain grid to cover those complete-section extents. Both hashes must be lowercase 64-character hexadecimal values. A missing/malformed hash, inconsistent header, duplicate source key, invalid partition member, terrain error, or mismatched expectation fails before publication. Two independent writes over the same exact inputs and expectations must produce byte-identical JSON and the same SHA-256. This stable source-manifest file is the input from which Task 3's resolver creates `reference-models.json`; Task 4 does not create that downstream file itself.
+Require `context.ObjectHeader` to equal the independently parser-owned `selection.SourceHeader` field-for-field and the terrain grid to cover those complete-section extents. Both hashes must be lowercase 64-character hexadecimal values. A missing/malformed hash, inconsistent header, duplicate source key, invalid partition member, terrain error, or mismatched expectation fails before publication. Two independent writes over the same exact inputs and expectations must produce byte-identical JSON and the same SHA-256. Task 4's GREEN publishes one of those identical files durably inside `artifacts/scene-parity/runs/<task4Run>/garner.objects.json` and records that exact absolute run directory in its task report. Task 3 reads that exact file in place; no `artifacts/maps` alias, regeneration, directory scan, newest-run lookup, or copied manifest is an accepted handoff.
 
 - [ ] **Step 2: Verify RED**
 
@@ -655,7 +675,9 @@ Expected failures because the context, schema-v2 fields, generic terrain error c
 
 The top-level document has the literal fields `schemaVersion: 2`, `sourceMapSha256`, `sourceObjectSha256`, `sectionCntX`, `sectionCntY`, `sectionWidth`, `sectionHeight`, `stats`, and ordered `records`. Generate and validate all records before opening a publication temp. After every terrain query, inspect `IMapTileSource::LastError()`; a nonempty sticky error is `TERRAIN_READ_FAILED`, even though the safe tile value may look like an absent section.
 
-Write a unique same-directory temp, flush and fsync its bytes, close it, reparse and validate the complete schema/stats/order/hashes from the temp bytes, then replace `<base>.objects.json` with the platform-equivalent atomic rename and fsync the parent directory. Inject failures after temp serialization, after temp fsync, and immediately before replace. With no prior destination, every failure leaves neither destination nor temp; with a valid prior destination, its exact bytes remain unchanged and the temp is removed. Unknown type, malformed source context, terrain read failure, any expected-count mismatch, serialization/reparse failure, or replace failure cannot publish a partial manifest.
+Write a unique same-directory temp, flush and fsync its bytes, close it, then reparse and validate the complete schema/stats/order/hashes from those temp bytes. If `<base>.objects.json` already exists, first copy its exact bytes and mode to a unique same-directory backup, flush/fsync the backup, and verify its SHA-256 against the destination. Atomically replace the destination with the temp, reparse and hash the published destination, then fsync the parent directory. Only after those steps succeed is the new publication committed. Backup cleanup is post-commit housekeeping: normal success removes it and fsyncs the directory again, while cleanup failure retains the verified backup and reports its path without downgrading the already durable publication.
+
+Inject failures after temp serialization, after temp fsync, immediately before replace, immediately after replace, and on the first post-replace parent-directory fsync. Every pre-commit failure rolls back: with a prior destination, atomically replace it from the same-directory backup, restore its mode, fsync the directory, and verify exact prior bytes/SHA; without one, remove the new destination if replace occurred, fsync, and verify absence. Remove all temp/backup files only after rollback verification. A one-shot injected fsync failure must allow the rollback fsync. If a real persistent filesystem error prevents verified rollback, return `RECOVERY_REQUIRED`, retain the verified old bytes/mode in the backup, and print its exact recovery path; never return an ordinary write/count/input error for that state. Thus every ordinary failure preserves previous destination bytes/existence, including failures after replace, while the exceptional recovery status still preserves the old bytes in an explicit durable backup. Unknown type, malformed source context, terrain read failure, any expected-count mismatch, serialization/reparse failure, or replace/fsync failure cannot expose a partial or unverified manifest as success.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
@@ -665,19 +687,28 @@ cmake --build tools/AssetConverter/build \
 ctest --test-dir tools/AssetConverter/build \
   -j1 --output-on-failure
 
-task4RunA="$(mktemp -d)"
-task4RunB="$(mktemp -d)"
+mkdir -p "$PWD/artifacts/scene-parity/runs"
+task4RunDir="$(mktemp -d "$PWD/artifacts/scene-parity/runs/task4.XXXXXXXX")"
+task4ProbeDir="$(mktemp -d)"
 ./tools/AssetConverter/build/AssetConverter scene-manifest \
-  Client/map/garner.map Client/map/garner.obj "$task4RunA/garner"
+  Client/map/garner.map Client/map/garner.obj "$task4RunDir/garner"
 ./tools/AssetConverter/build/AssetConverter scene-manifest \
-  Client/map/garner.map Client/map/garner.obj "$task4RunB/garner"
-cmp "$task4RunA/garner.objects.json" "$task4RunB/garner.objects.json"
+  Client/map/garner.map Client/map/garner.obj "$task4ProbeDir/garner"
+cmp "$task4RunDir/garner.objects.json" "$task4ProbeDir/garner.objects.json"
+
+mapSha="$(shasum -a 256 Client/map/garner.map | awk '{print $1}')"
+objectSha="$(shasum -a 256 Client/map/garner.obj | awk '{print $1}')"
+storedMapSha="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["sourceMapSha256"])' "$task4RunDir/garner.objects.json")"
+storedObjectSha="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["sourceObjectSha256"])' "$task4RunDir/garner.objects.json")"
+test "$storedMapSha" = "$mapSha"
+test "$storedObjectSha" = "$objectSha"
 shasum -a 256 \
-  "$task4RunA/garner.objects.json" \
-  "$task4RunB/garner.objects.json"
+  "$task4RunDir/garner.objects.json" \
+  "$task4ProbeDir/garner.objects.json"
+printf 'TASK4_RUN_DIR=%s\n' "$task4RunDir"
 ```
 
-Expected: build and CTest pass; both real commands exit zero; `cmp` succeeds; both printed SHA-256 values are identical; the manifest contains the exact real counts and hashes above. Execute every command in order under the global thermal limits. Do not overlap either converter run with compilation or CTest.
+Expected: build and CTest pass; both real commands exit zero; `cmp` succeeds; both manifest SHA-256 values are identical; both stored source hashes equal independent `shasum -a 256` results; the manifest contains the exact schema/counts above. Record the printed absolute `TASK4_RUN_DIR` in the Task 4 report and retain that run directory for Task 3. Execute every command in order under the global thermal limits. Do not overlap either converter run with compilation or CTest.
 
 ```bash
 git add \
