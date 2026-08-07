@@ -146,7 +146,7 @@ git commit -m "feat(converter): classify scene source records"
 
 ### Task 2: Sample the original triangular terrain surface
 
-**Task brief:** Provide the scene-only height/island/color sampler over the paged terrain reader. Input is a source anchor and streaming `.map`; output is one auditable terrain sample without full-map allocation; boundary, absent-section, and I/O behavior are explicit failures rather than clamping guesses.
+**Task brief:** Provide the scene-only height/island/color sampler over the paged terrain reader. Input is a source anchor and streaming `.map`; output is one auditable terrain sample without full-map allocation. Boundary and absent tiles use explicit zero-valued defaults, while I/O/format failure remains a sticky fatal adapter error visible through the generic interface to the later manifest publisher.
 
 **Dependencies:** Garner terrain Task 1.
 
@@ -175,6 +175,7 @@ public:
     virtual TerrainTileRead ReadTile(
         std::int32_t tileX,
         std::int32_t tileY) = 0;
+    virtual const std::string& LastError() const = 0;
 };
 
 class MapSectionTileSource final : public IMapTileSource {
@@ -185,7 +186,7 @@ public:
     TerrainTileRead ReadTile(
         std::int32_t tileX,
         std::int32_t tileY) override;
-    const std::string& LastError() const;
+    const std::string& LastError() const override;
 
 private:
     MapSectionReader& Reader;
@@ -217,7 +218,7 @@ TerrainAnchorSample SampleTerrainAnchor(
 
 For corner heights `0/100/200/0 cm`, require 75 cm at both `(25,25)` and `(75,75)`, and explicitly reject 56.25 cm bilinear output. Four raw heights −10 return sea-clamped zero. Negative coordinates and right/bottom positions lacking four source vertices return zero.
 
-Require floor tile `Color=0x7BEF`, `Island=2`, present true to preserve those values. An absent tile returns presence false, island 0, and default color. Surface 60 plus `heightOff=0` must later produce Z 60.
+Require floor tile `Color=0x7BEF`, `Island=2`, present true to preserve those values. An absent tile returns presence false, island 0, and default color. Surface 60 plus `heightOff=0` must later produce Z 60. Every in-memory fake implements `LastError()` and returns one stable empty string unless the fixture explicitly injects a sticky read failure; this makes the generic error channel testable without downcasting to `MapSectionTileSource`.
 
 - [ ] **Step 2: Verify RED**
 
@@ -232,7 +233,7 @@ Use source quad triangles:
 (0,1),(1,0),(1,1)
 ```
 
-Clamp only the final height below sea level to zero. Do not clamp coordinates to map bounds. `MapSectionTileSource::ReadTile` validates bounds, computes the owning section, loads it through the mutable streaming `MapSectionReader::ReadSection`, and keeps at most one cached section. Missing sections return `SectionPresent=false`; I/O or format failure records `LastError` and makes manifest publication fail. It cannot create a full-map tile array.
+Clamp only the final height below sea level to zero. Do not clamp coordinates to map bounds. `MapSectionTileSource::ReadTile` validates bounds, computes the owning section, loads it through the mutable streaming `MapSectionReader::ReadSection`, and keeps at most one cached section. Missing sections return `SectionPresent=false`; I/O or format failure records the first deterministic diagnostic in sticky `LastError()` and makes manifest publication fail. Successful or absent reads never clear that error. Consumers inspect it through `IMapTileSource`, not a concrete downcast. The adapter cannot create a full-map tile array.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
@@ -539,8 +540,9 @@ enum class SceneManifestStatus {
     OK,
     WRITE_FAILED,
     UNKNOWN_OBJECT_TYPE,
+    INVALID_SOURCE_CONTEXT,
     TERRAIN_READ_FAILED,
-    REFERENCE_COUNT_MISMATCH,
+    COUNT_MISMATCH,
 };
 
 struct SceneManifestStats {
@@ -551,13 +553,27 @@ struct SceneManifestStats {
     std::map<std::uint8_t, std::uint64_t> ReferenceIslandCounts;
 };
 
+struct SceneManifestSourceContext {
+    SceneFileHeader ObjectHeader{};
+    std::string SourceMapSha256;
+    std::string SourceObjectSha256;
+    std::uint64_t ExpectedSourceRecordCount{0};
+    std::uint64_t ExpectedSceneModelCount{0};
+    std::uint64_t ExpectedDeferredEffectCount{0};
+    std::uint64_t ExpectedReferenceObjectCount{0};
+    std::map<std::uint8_t, std::uint64_t> ExpectedReferenceIslandCounts;
+};
+
 SceneManifestStatus WriteSceneSourceManifest(
     const SceneSelection& selection,
     IMapTileSource& terrain,
+    const SceneManifestSourceContext& context,
     const std::filesystem::path& basePath,
     SceneManifestStats& stats,
     std::string& detail);
 ```
+
+`SceneManifestSourceContext` is explicit input, not state recovered by the writer. The `scene-manifest` CLI constructs it from the exact command-line inputs: it copies the already parsed `garner.obj` header, hashes those exact object bytes as `SourceObjectSha256`, and streams the exact `.map` bytes through SHA-256 as `SourceMapSha256` without `ReadWholeFile` or a full-map tile allocation. Task 1 does not hash files. Generic unit fixtures supply their own header, hashes, and expected counts; the real Garner command supplies literal expectations `50017` total records, `46991` scene models, `3026` deferred effects, `1634` reference objects, and islands `{0:3, 1:1625, 2:6}`.
 
 Add CLI:
 
@@ -576,6 +592,7 @@ Require the top-level schema and every source record:
 {
   "schemaVersion": 2,
   "sourceMapSha256": "<sha256>",
+  "sourceObjectSha256": "<sha256>",
   "sectionCntX": 512,
   "sectionCntY": 512,
   "sectionWidth": 8,
@@ -605,7 +622,7 @@ Require the top-level schema and every source record:
 }
 ```
 
-Type-0 records use `"disposition":"scene-model"` and may enter the reference set. Type-1 records use `"disposition":"deferred-effect"`, retain the same source key/position/type fields, always have `inReferenceSet=false`, and never carry or resolve a scene asset. Merge the two `SceneSelection` vectors back into stable source-key order when writing; source-record count and the 3026 Garner deferred effects must be auditable from this one manifest.
+Type-0 records use `"disposition":"scene-model"` and may enter the reference set. Type-1 records use `"disposition":"deferred-effect"`, retain the same source-key, position, terrain, and transform facts, always have `inReferenceSet=false`, and never carry or resolve a scene asset. Merge the two `SceneSelection` vectors back into stable source-key order when writing; source-record count and the 3026 Garner deferred effects must be auditable from this one manifest.
 
 Require stats fields:
 
@@ -617,17 +634,50 @@ referenceObjectCount
 referenceIslandCounts
 ```
 
-Real Garner must report referenceObjectCount 1634, island1 1625, island2 6, and absent/default island0 3.
+Generic fixtures pass expectations matching their synthetic partition. Real Garner must report and gate exact stats: `sourceRecordCount=50017`, `sceneModelCount=46991`, `deferredEffectCount=3026`, `referenceObjectCount=1634`, island1 1625, island2 6, and absent/default island0 3. A mismatch in any scalar count, island key, or island count returns `COUNT_MISMATCH` and publishes nothing.
+
+Require the context header dimensions to equal the parsed object dimensions and the terrain grid to cover those complete-section extents. Both hashes must be lowercase 64-character hexadecimal values. A missing/malformed hash, inconsistent header, duplicate source key, invalid partition member, terrain error, or mismatched expectation fails before publication. Two independent writes over the same exact inputs and expectations must produce byte-identical JSON and the same SHA-256. This stable source-manifest file is the input from which Task 3's resolver creates `reference-models.json`; Task 4 does not create that downstream file itself.
 
 - [ ] **Step 2: Verify RED**
 
-Expected failures because schema v2 fields and production command do not exist.
+```bash
+cmake -S tools/AssetConverter -B tools/AssetConverter/build \
+  -DCMAKE_BUILD_TYPE=Debug
+cmake --build tools/AssetConverter/build \
+  --target AssetConverterTests -j2
+ctest --test-dir tools/AssetConverter/build \
+  -j1 --output-on-failure
+```
+
+Expected failures because the context, schema-v2 fields, generic terrain error channel, atomic writer, and production command do not exist. Run these commands sequentially; do not overlap compilation or CTest and do not raise the global `-j2`/`-j1` limits.
 
 - [ ] **Step 3: Implement atomic manifest publication**
 
-The top-level document has the literal fields `schemaVersion: 2`, `sourceMapSha256`, `sectionCntX`, `sectionCntY`, `sectionWidth`, `sectionHeight`, `stats`, and ordered `records`. Generate and validate all records before renaming a temporary file into place. Unknown type, `MapSectionTileSource::LastError`, terrain read failure, or reference-count mismatch leaves no partial manifest.
+The top-level document has the literal fields `schemaVersion: 2`, `sourceMapSha256`, `sourceObjectSha256`, `sectionCntX`, `sectionCntY`, `sectionWidth`, `sectionHeight`, `stats`, and ordered `records`. Generate and validate all records before opening a publication temp. After every terrain query, inspect `IMapTileSource::LastError()`; a nonempty sticky error is `TERRAIN_READ_FAILED`, even though the safe tile value may look like an absent section.
+
+Write a unique same-directory temp, flush and fsync its bytes, close it, reparse and validate the complete schema/stats/order/hashes from the temp bytes, then replace `<base>.objects.json` with the platform-equivalent atomic rename and fsync the parent directory. Inject failures after temp serialization, after temp fsync, and immediately before replace. With no prior destination, every failure leaves neither destination nor temp; with a valid prior destination, its exact bytes remain unchanged and the temp is removed. Unknown type, malformed source context, terrain read failure, any expected-count mismatch, serialization/reparse failure, or replace failure cannot publish a partial manifest.
 
 - [ ] **Step 4: Verify GREEN and commit**
+
+```bash
+cmake --build tools/AssetConverter/build \
+  --target AssetConverter AssetConverterTests -j2
+ctest --test-dir tools/AssetConverter/build \
+  -j1 --output-on-failure
+
+task4RunA="$(mktemp -d)"
+task4RunB="$(mktemp -d)"
+./tools/AssetConverter/build/AssetConverter scene-manifest \
+  Client/map/garner.map Client/map/garner.obj "$task4RunA/garner"
+./tools/AssetConverter/build/AssetConverter scene-manifest \
+  Client/map/garner.map Client/map/garner.obj "$task4RunB/garner"
+cmp "$task4RunA/garner.objects.json" "$task4RunB/garner.objects.json"
+shasum -a 256 \
+  "$task4RunA/garner.objects.json" \
+  "$task4RunB/garner.objects.json"
+```
+
+Expected: build and CTest pass; both real commands exit zero; `cmp` succeeds; both printed SHA-256 values are identical; the manifest contains the exact real counts and hashes above. Execute every command in order under the global thermal limits. Do not overlap either converter run with compilation or CTest.
 
 ```bash
 git add \
