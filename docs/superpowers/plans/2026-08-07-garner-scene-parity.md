@@ -24,9 +24,9 @@
 - Scene assets use a dedicated mirrored `/Game/SceneParity` namespace. Do not mutate generic `/Game/All` assets shared with characters/equipment. Static assets may use HISM; valid skinned assets must use skeletal actors/components because HISM cannot contain a `USkeletalMesh`.
 - Before rebuilding the staging map, classify the complete legacy generated population left by `place_objects.py`/`place_all_maps.py`: untagged `Inst_*` HISM groups and exact legacy-transform `/Game/All` static/skeletal fallbacks. Delete only a complete, unambiguous generated match; preserve gameplay/unrelated actors; any partial or multiply attributable match is fatal before mutation. The final checker scans the whole world, not only tagged actors, and rejects every legacy-generated or ambiguous leftover.
 - Scene yaw is `UnwindDegrees(180 - sourceYawDegrees)`. Never divide yaw by 10.
-- Mirror positions, normals, winding, every resolved `.lmo` `MatModel`, dummy transforms, bind poses, inverse bind matrices, and animation tracks exactly once. SceneMap must support every skeletal asset used by the 1634-anchor reference set; silent fallback to a generic profile is forbidden.
-- Every skinned `.lmo` part has an explicit `part_root` carrying `G * MatModel * G`; its mesh node is identity and geometry, joints, inverse binds, and animation tracks never receive `MatModel` a second time. A non-identity skinned part that loses or double-applies this root is fatal.
-- Every source material has an explicit supported legacy mode (`opaque`, `masked`, `alpha`, or `additive`) from raw `opacity`, `transp_type`, and material render-state atoms. This metadata remains authoritative through glTF extras, the scene catalog, UE import, and runtime checking; unsupported or contradictory state is fatal, never guessed from texture alpha.
+- Mirror positions, normals, winding, every resolved `.lmo` `MatModel`, dummy transforms, bind poses, inverse bind matrices, and animation tracks exactly once. SceneMap must support every skeletal asset selected by the Task 4 schema-v2 source manifest; silent fallback to a generic profile is forbidden. The mandatory real reference-model input is the ordered distinct set from `records[type == 0 && inReferenceSet == true]`, resolved through the tracked `scene_objects` table. A literal model-ID list or an all-directory crawl is not proof of reference-set coverage.
+- Every skinned `.lmo` part has an explicit `part_root` carrying `G * MatModel * G`; its mesh node is identity and geometry, joints, inverse binds, and animation tracks never receive `MatModel` a second time. The real corpus baseline is 639 `.lmo`, 2021 parts, and 79 skinned parts; all 79 currently have identity resolved `MatModel`, so the required real non-identity-skinned census is exactly `[]` and may remain empty. Every real skinned part is nevertheless checked exactly once. A separate tracked synthetic skinned fixture with non-identity `MatModel` must fail on identity loss or double application and is never included in real `scene-assets.json`, the reference-model set, or any real-data census.
+- Every source material has one of five explicit supported legacy modes (`opaque`, `masked`, `alpha`, `additive`, or `subtractive`) from raw `opacity`, raw `transp_type`, its original-client effective transparency type, and material render-state atoms. Preserve both `rawTranspType` and `effectiveTranspType`: the original loader normalizes raw `2` to `MTLTEX_TRANSP_SUBTRACTIVE` (`5`) before rendering. Subtractive is the distinct `ZERO/INVSRCCOLOR` equation `dst * (1 - src)`, not alpha or additive. This metadata remains authoritative through glTF extras, the scene catalog, UE import, runtime export, and capture checking; unsupported or contradictory state is fatal, never guessed from texture alpha.
 - Static and skeletal SceneParity materials use separate parent families. HISM reads the common 33-float lighting payload from `PerInstanceCustomData`; every skeletal component stores the identical 33 floats in `CustomPrimitiveData`. Parent usage flags and runtime payload transport are checked independently.
 - Per-model lighting flags override island-area defaults. Bell Tower ID 22 is legacy-unlit; Bench ID 314 and Garden ID 323 use area lighting.
 - Three absent/island-0 objects may use inherited legacy lighting only when their projected bounds are outside the fixed reference viewport; otherwise capture is fatal.
@@ -253,6 +253,8 @@ git commit -m "feat(converter): sample legacy terrain surface"
 
 **Task brief:** Make SceneMap a complete, self-describing asset conversion rather than a vertex-only mirror. Input is each resolved `.lgo`/`.lmo` part and optional skin; output is a validated glTF pair with one explicit mirrored part root and authoritative legacy material metadata; unsupported skin/material state aborts the run before publication.
 
+**Dependencies:** Task 4 schema-v2 source manifest for the real reference-model gate. Parser/writer TDD may start earlier, but Task 3 cannot complete until its real required-model set has been derived from Task 4 rather than a literal list or directory contents.
+
 **Files:**
 
 - Modify: `tools/AssetConverter/include/Corsairs/Tools/AssetConverter/LgoParser.h`
@@ -266,6 +268,9 @@ git commit -m "feat(converter): sample legacy terrain surface"
 - Modify: `tools/AssetConverter/tests/TestGltfSkeletonWriter.cpp`
 - Modify: `tools/AssetConverter/tests/TestLgoParser.cpp`
 - Modify: `tools/AssetConverter/tests/TestLmoParser.cpp`
+- Create: `tools/AssetConverter/tests/fixtures/scene-map/nonidentity-skinned.json`
+- Create: `CorsairsUE/Scripts/build_scene_reference_model_set.py`
+- Create: `CorsairsUE/Scripts/tests/test_scene_reference_model_set.py`
 
 **Interfaces:**
 
@@ -288,11 +293,13 @@ enum class LegacyMaterialMode : std::uint8_t {
     Masked,
     Alpha,
     Additive,
+    Subtractive,
 };
 
 struct LgoMaterial {
     float Opacity{1.0f};
-    std::uint32_t TranspType{0};
+    std::uint32_t RawTranspType{0};
+    std::uint32_t EffectiveTranspType{0};
     Material Mtl{};
     std::string Textures[kMaxTextureStageNum];
     std::array<RenderStateAtom, kMtlRsNum> RenderStates{};
@@ -302,7 +309,8 @@ struct LgoMaterial {
 struct LegacyMaterialMetadata {
     LegacyMaterialMode Mode{LegacyMaterialMode::Opaque};
     float Opacity{1.0f};
-    std::uint32_t TranspType{0};
+    std::uint32_t RawTranspType{0};
+    std::uint32_t EffectiveTranspType{0};
     bool AlphaTestEnabled{false};
     std::uint32_t AlphaRef{0};
     std::uint32_t AlphaFunc{0};
@@ -324,6 +332,11 @@ LegacyMaterialStatus ResolveLegacyMaterial(
     LegacyMaterialMetadata& output,
     std::string& detail);
 
+LegacyMaterialStatus NormalizeLegacyTransparencyType(
+    std::uint32_t rawTranspType,
+    std::uint32_t& effectiveTranspType,
+    std::string& detail);
+
 void ConvertMatrixToGltf(
     const float* input,
     float* output,
@@ -339,6 +352,25 @@ GltfStatus WriteGltf(
     GltfCoordinateProfile profile =
         GltfCoordinateProfile::Generic);
 ```
+
+The tracked real-input resolver is:
+
+```python
+def build_reference_model_set(
+    source_manifest_path: str,
+    db_path: str,
+    model_root: str,
+) -> dict: ...
+```
+
+It accepts only source-manifest schema v2, selects the ordered distinct
+`modelId` values from records whose literal `type == 0` and
+`inReferenceSet is True`, resolves each ID through tracked
+`scene_objects.data_name`, and atomically publishes paths and SHA-256 values
+for the required `.lmo` inputs. The output also records the source-manifest
+path/SHA and the 1634 contributing source keys. Missing/duplicate catalog
+rows, a type-1 contribution, absent model input, path escape, SHA drift, or
+reference count other than 1634 is fatal and publishes nothing.
 
 - [ ] **Step 1: Add RED asymmetric, skinned-part-root, material, and compatibility tests**
 
@@ -374,6 +406,8 @@ joint locals/inverse binds/animation = coordinate-mirrored only
 
 The fixture asserts literal skinned bounds/root-bone world positions after one part-root application and a second set of deliberately double-baked values that must not appear. Require literal mirrored bind matrices, inverse bind matrices, joint-node transforms, and every animation sample. A malformed skin returns `INVALID_SKIN_DATA` and publishes neither `.gltf` nor `.bin`; a valid skin with non-identity `MatModel` must succeed.
 
+Store the synthetic source values and literal expectations in tracked `tools/AssetConverter/tests/fixtures/scene-map/nonidentity-skinned.json`. The converter test materializes its glTF into a test/run-only directory for Task 7's headless fixture import. The fixture manifest is published separately as `synthetic-nonidentity-skinned.json`; neither it nor its asset paths may appear in real `reference-models.json`, real `scene-assets.json`, the 639/2021/79 census, or Garner placement.
+
 Preserve the full fixed-size material `RsSet` in `LgoMaterial` instead of dropping it. Modern fixtures copy `RenderStateAtom[]`; v0/v1 fixtures convert `RenderStateSet2x8` exactly like `LgoLoader::LoadMtlTexInfoSingle`, including literal `ALPHAFUNC -> GREATER` and `ALPHAREF -> 129` upgrades and the invalid terminator. Add literal parser/resolver/glTF tests for:
 
 ```text
@@ -382,14 +416,29 @@ masked:   FILTER, opacity=1, ALPHATESTENABLE=1,
           ALPHAFUNC=GREATER, ALPHAREF=129
 alpha:    FILTER, opacity=0.5 and SRCBLEND=SRCALPHA,
           DESTBLEND=INVSRCALPHA
-additive: ADDITIVE, SRCBLEND=ONE, DESTBLEND=ONE
+additive: ADDITIVE, raw/effective transp_type=1/1,
+          SRCBLEND=ONE, DESTBLEND=ONE
+subtractive: raw transp_type=2, effective transp_type=5,
+             SRCBLEND=ZERO, DESTBLEND=INVSRCCOLOR
 ```
 
-The glTF material carries `extras.corsairsLegacyMaterial` with literal `schemaVersion`, `mode`, `opacity`, `transpType`, `alphaTestEnabled`, `alphaRef`, `alphaFunc`, `alphaBlendEnabled`, `srcBlend`, and `destBlend`. Core `alphaMode` is `OPAQUE`, `MASK` with `alphaCutoff=(alphaRef+1)/255`, or `BLEND`; additive also uses core `BLEND`, but its authoritative additive equation comes from extras. Conflicting duplicates, masked+blended state, unsupported alpha funcs/blend pairs, and `transp_type` outside the supported `FILTER`/`ADDITIVE` contract return `UNSUPPORTED_MATERIAL_MODE` and leave no output. No mode may be inferred from decoded texture pixels.
+The glTF material carries `extras.corsairsLegacyMaterial` with literal `schemaVersion`, `mode`, `opacity`, `rawTranspType`, `effectiveTranspType`, `alphaTestEnabled`, `alphaRef`, `alphaFunc`, `alphaBlendEnabled`, `srcBlend`, and `destBlend`. Core `alphaMode` is `OPAQUE`, `MASK` with `alphaCutoff=(alphaRef+1)/255`, or `BLEND`; additive uses core `BLEND`, while subtractive uses core `BLEND` only as a transport hint because its authoritative destination-dependent equation comes from extras. Conflicting duplicates, masked+blended state, unsupported alpha funcs/blend pairs, a raw/effective normalization mismatch, and an effective `transp_type` outside the supported `FILTER`/`ADDITIVE`/`SUBTRACTIVE` contract return `UNSUPPORTED_MATERIAL_MODE` and leave no output. No mode may be inferred from decoded texture pixels.
+
+Add a literal real-file resolver fixture for `Client/model/scene/by-bd001.lmo`, object `model1`: its used material has raw `transp_type=2`, explicit `SRCBLEND=ZERO`/`DESTBLEND=INVSRCCOLOR`, must normalize to effective type `5`, and must resolve to `subtractive`. The expected values are literals in the test, not produced by the normalization helper. Add a second literal equation fixture proving `(src,dst) -> dst * (1 - src)` channel-by-channel and rejecting alpha/additive output.
 
 - [ ] **Step 2: Verify RED**
 
-Expected failures because no profile exists and current winding/matrix conversion differs.
+```bash
+cmake -S tools/AssetConverter -B tools/AssetConverter/build \
+  -DCMAKE_BUILD_TYPE=Debug
+cmake --build tools/AssetConverter/build \
+  --target AssetConverterTests -j2
+ctest --test-dir tools/AssetConverter/build -j1 --output-on-failure
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+  CorsairsUE.Scripts.tests.test_scene_reference_model_set -v
+```
+
+Expected failures because the profile, skinned part-root/animation path, five-mode material resolver, full `RsSet`, and reference-model resolver do not exist. A zero-test run or a pass from a pre-existing output is not RED evidence.
 
 - [ ] **Step 3: Implement the complete mirror**
 
@@ -405,9 +454,9 @@ After generic source-to-glTF conversion, apply `G=diag(1,1,-1,1)`:
 
 Emit one `part_root` for every part, including skinned parts. `part_root` alone owns converted `MatModel`; the mesh node is identity, and skeleton roots/dummies are children of the same part root. Do not pre-multiply `MatModel` into positions, bind/inverse-bind matrices, joint locals, or animation samples. Add an invariant that rejects a non-identity skinned `MatModel` unless the serialized graph contains exactly one such root.
 
-Parser version adapters populate one canonical `RenderStates` array first; no later stage knows the disk version. `ResolveLegacyMaterial` then canonicalizes those atoms and rejects conflicting duplicate states. It follows original-client state precedence: `ADDITIVE` requires effective `ONE/ONE`; `FILTER` with an explicit blend requires exactly `SRCALPHA/INVSRCALPHA` and is `alpha`; `FILTER` with no explicit blend and opacity below one is also `alpha`; alpha-test-only `FILTER` with `GREATER` is `masked`; the remaining disabled-test/disabled-blend `FILTER` is `opaque`. Any other `transp_type`, blend pair, alpha function, or simultaneous alpha-test/blend is fatal. Store the resolved metadata both in each glTF material extras object and in `scene-assets.json`; consumers never recompute it.
+Parser version adapters populate one canonical `RenderStates` array first; no later stage knows the disk version. They preserve the disk value as `RawTranspType` and apply the original `LgoLoader` normalization exactly once: raw `1 -> 1`, raw `2 -> 5`, and every other raw value remains numerically unchanged before support validation. `ResolveLegacyMaterial` consumes `EffectiveTranspType`, canonicalizes the atoms, and rejects conflicting duplicate states. It follows original-client state precedence: `ADDITIVE(1)` requires effective `ONE/ONE`; `SUBTRACTIVE(5)` requires effective `ZERO/INVSRCCOLOR`; `FILTER(0)` with an explicit blend requires exactly `SRCALPHA/INVSRCALPHA` and is `alpha`; `FILTER` with no explicit blend and opacity below one is also `alpha`; alpha-test-only `FILTER` with `GREATER` is `masked`; the remaining disabled-test/disabled-blend `FILTER` is `opaque`. Any other effective `transp_type`, blend pair, alpha function, simultaneous alpha-test/blend, or raw/effective mismatch is fatal. Store the resolved metadata, including both transparency fields, in each glTF material extras object and in `scene-assets.json`; consumers never recompute it.
 
-Add CLI `--profile generic|scene-map`. SceneMap output path is separate from generic assets. Write one conversion attempt into a unique run directory, validate every `.gltf`/`.bin` pair, and publish `scene-assets.json` last by atomic temp-file rename. Each part record includes `partRootMatrix`, `assetKind`, material metadata, and exactly one animation record (`path/name/duration/loop`) or explicit `null` reference pose. Consumers use only files listed by that manifest; never attempt a multi-file overwrite in an existing directory. Embedded animation is not silently dropped: valid data is mirrored and exported; malformed or unsupported data fails the entire SceneMap conversion.
+Add CLI `--profile generic|scene-map` and `--required-models <reference-models.json>`. SceneMap output path is separate from generic assets. Write one conversion attempt into a unique run directory, validate every `.gltf`/`.bin` pair, and publish `scene-assets.json` last by atomic temp-file rename. Each part record includes `partRootMatrix`, `assetKind`, material metadata, and exactly one animation record (`path/name/duration/loop`) or explicit `null` reference pose. The manifest carries the required-model manifest path/SHA and proves every required real model/part was emitted. Consumers use only files listed by that manifest; never attempt a multi-file overwrite in an existing directory. Embedded animation is not silently dropped: valid data is mirrored and exported; malformed or unsupported data fails the entire SceneMap conversion.
 
 - [ ] **Step 4: Verify GREEN and real conversion**
 
@@ -415,15 +464,28 @@ Add CLI `--profile generic|scene-map`. SceneMap output path is separate from gen
 cmake --build tools/AssetConverter/build \
   --target AssetConverter AssetConverterTests -j2
 ctest --test-dir tools/AssetConverter/build -j1 --output-on-failure
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+  CorsairsUE.Scripts.tests.test_scene_reference_model_set -v
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  CorsairsUE/Scripts/build_scene_reference_model_set.py \
+  --source-manifest artifacts/maps/garner.objects.json \
+  --database databases/gamedata.sqlite \
+  --model-root Client/model/scene \
+  --output artifacts/models/reference-models.json
 ./tools/AssetConverter/build/AssetConverter \
   Client/model/scene artifacts/models/SceneParity \
   --textures Client/texture/scene \
-  --profile scene-map
+  --profile scene-map \
+  --required-models artifacts/models/reference-models.json
 ```
 
-The real conversion is a gate, not an example. Resolve every model used by the 1634 reference anchors and explicitly assert successful skeletal export for source model IDs `2,325,475,476,478,513`. No `INVALID_SKIN_DATA`, generic-profile fallback, or missing `.bin` is allowed.
+Run the build, CTest, Python resolver test, real corpus conversion, and validation sequentially; never overlap them. Compilation remains `-j2`, CTest remains `-j1`, and this task may not raise the global thermal/concurrency caps.
 
-The converter gate records all real `(modelId,partIndex)` values with skinned non-identity `MatModel`, requires the set to be non-empty, and checks their serialized `part_root` matrix against an independently computed `G*MatModel*G`. Task 7's `Corsairs.Import.SceneParity` headless gate consumes that record, exports actual skeletal bounds/root-bone transform for one recorded part, and compares it to the literal RED fixture values; identity loss and a second MatModel application both fail. The real reference material-mode census records exact counts for `opaque`, `masked`, `alpha`, and `additive`, requires every material to belong to one of them, and aborts on any unsupported mode before `scene-assets.json` is renamed. The four-mode support requirement itself is protected by the literal synthetic fixtures above; Garner need not contain every mode.
+The real conversion is a gate, not an example. Its mandatory required-model set comes only from Task 4's schema-v2 records and the tracked DB resolver above; a literal list (including a remembered skeletal-ID list) or success from scanning all files cannot close this gate. Resolve all 1634 reference anchors through that set, require each contributing model/part exactly once, and allow a wider all-corpus conversion only as additional coverage. No `INVALID_SKIN_DATA`, generic-profile fallback, missing `.bin`, stale required-model hash, or unlisted reference input is allowed.
+
+The all-corpus audit records literal baselines `lmoCount=639`, `partCount=2021`, `skinnedPartCount=79`, checks every one of the 79 real skinned parts exactly once, and requires the real `skinnedNonIdentityMatModel` census to equal `[]`. Empty is valid. For every real skinned part, its serialized graph must still contain exactly one `part_root`, an identity mesh node, mirrored skin/bind/animation data, and no baked `MatModel` in vertices or actor transform. The non-identity/double-bake gate is instead the separate tracked synthetic fixture from Step 1; Task 7 imports that fixture headlessly and checks its literal bounds/root-bone transforms. Its output and records are kept outside real `scene-assets.json`, `reference-models.json`, and real censuses.
+
+The real material census records exact counts for all five modes and requires every used material to belong to exactly one. "Used material" means one unique `(lmoPath, partIndex, sourceMaterialIndex)` referenced by at least one emitted mesh primitive/subset; an unused material-table slot is not counted, and repeated triangles do not multiply the count. The census separately requires 48 used raw-type-2 materials across exactly 16 distinct `.lmo` inputs, each preserved as `rawTranspType=2`, normalized to `effectiveTranspType=5`, and resolved as `subtractive`; `by-bd001/model1` is the literal named member. Unsupported modes abort before `scene-assets.json` is renamed. Garner reference placement need not contain every mode, so five-mode capability is protected by the literal synthetic fixtures and the full-corpus census rather than a nonzero per-reference-mode assumption.
 
 - [ ] **Step 5: Commit**
 
@@ -439,7 +501,10 @@ git add \
   tools/AssetConverter/tests/TestGltfWriter.cpp \
   tools/AssetConverter/tests/TestGltfSkeletonWriter.cpp \
   tools/AssetConverter/tests/TestLgoParser.cpp \
-  tools/AssetConverter/tests/TestLmoParser.cpp
+  tools/AssetConverter/tests/TestLmoParser.cpp \
+  tools/AssetConverter/tests/fixtures/scene-map/nonidentity-skinned.json \
+  CorsairsUE/Scripts/build_scene_reference_model_set.py \
+  CorsairsUE/Scripts/tests/test_scene_reference_model_set.py
 git commit -m "feat(converter): mirror scene map assets"
 ```
 
@@ -566,7 +631,7 @@ git commit -m "feat(converter): write scene parity manifest"
 
 ### Task 5: Build the scene catalog with original lighting flags
 
-**Task brief:** Resolve reference-relevant type-0 mesh parts plus every all-Garner placed type-3 light source, while keeping mesh placement reference-scoped. Inputs are the tracked DB, the complete source manifest, and Task 3 `scene-assets.json`; output is one deterministic dual-scope catalog; a missing required light-model row, missing reference part, SHA mismatch, generic asset, or unsupported material metadata is fatal.
+**Task brief:** Resolve reference-relevant type-0 mesh parts plus every all-Garner placed type-3 light source, while keeping mesh placement reference-scoped. Inputs are the tracked DB, the complete source manifest, Task 3 `reference-models.json`, and Task 3 `scene-assets.json`; output is one deterministic dual-scope catalog; a missing required light-model row, missing reference part, SHA mismatch, generic asset, or unsupported material metadata is fatal.
 
 **Files:**
 
@@ -609,11 +674,12 @@ def build_catalog(
     db_path: str,
     gltf_root: str,
     source_manifest_path: str,
+    reference_model_set_path: str,
     content_root: str = "/Game/SceneParity",
 ) -> dict: ...
 ```
 
-Its exact top-level keys are `schemaVersion`, `sourceMapSha256`, `models`, `pointSources`, `areas`, and `animatedLights`. The scopes are deliberately different:
+Its exact top-level keys are `schemaVersion`, `sourceMapSha256`, `referenceModelSetSha256`, `sceneAssetsSha256`, `materialModeCensus`, `models`, `pointSources`, `areas`, and `animatedLights`. `materialModeCensus` preserves the five exact real mode counts plus the raw-2 count and `.lmo` count from Task 3; later consumers compare it rather than recounting with a new resolver. The scopes are deliberately different:
 
 - `models` contains part/asset metadata only for distinct type-0 model IDs in the 1634-anchor reference set;
 - ordered `pointSources` contains one entry for **every** all-map type-0 source record whose `scene_objects.type == 3`, including records outside the 80 m reference set. It is joined in source-manifest order and contains `sourceKey`, `sourceOrder`, `modelId`, source-space `positionCm: [x,y,zCm]`, literal `type: 3`, `point_color`, `range`, normalized `attenuation0/1/2`, and `anim_ctrl_id`. It carries no `parts` and therefore cannot widen scene mesh placement.
@@ -641,7 +707,9 @@ data_name
 parts[]: assetPath + assetKind(static|skeletal) + partRootMatrix
          + animationAssetPath|null + animationDurationSeconds
          + materials[] { slot, sourceMaterialIndex, mode, opacity,
-                         alphaRef, alphaFunc, srcBlend, destBlend }
+                         rawTranspType, effectiveTranspType,
+                         alphaRef, alphaFunc, alphaBlendEnabled,
+                         srcBlend, destBlend }
 ```
 
 Static DB objects map their legacy linear attenuation to `(attenuation0,attenuation1,attenuation2)=(0,value,0)`. Animated-light keyframes retain all three original attenuation coefficients independently.
@@ -654,10 +722,10 @@ Literal DB gates:
 - source direction `(-1,-1,-1)` becomes normalized UE direction `(-1,+1,-1)/sqrt(3)`;
 - an unresolved model inside the reference set is fatal;
 - type-1 source records do not invoke model lookup even when their numeric ID equals a valid scene model;
-- reference skeletal IDs `2,325,475,476,478,513` resolve to SceneMap assets and no generic `/Game/All` path;
+- every skeletal model reached by the Task 4 `type=0 && inReferenceSet` join resolves to its required SceneMap assets and no generic `/Game/All` path; the test derives and freezes the expected ordered IDs from its source-manifest fixture rather than embedding a production literal list;
 - every skeletal part has either one deterministic SceneMap animation asset/duration or an explicit `null` meaning reference pose; static parts cannot carry animation metadata;
-- a skeletal part with non-identity `partRootMatrix` preserves the literal mirrored matrix from `scene-assets.json`, and catalog construction fails if it is replaced with identity or baked into the actor transform;
-- literal `opaque`, `masked`, `alpha`, and `additive` `corsairsLegacyMaterial` extras survive unchanged into catalog material slots; missing extras, an unknown mode, a duplicate slot, or disagreement between glTF extras and `scene-assets.json` is fatal;
+- every real skeletal part preserves its literal (currently identity) `partRootMatrix` from real `scene-assets.json`; an isolated synthetic catalog-unit fixture also proves a non-identity matrix is copied unchanged, but that fixture/path is forbidden from the published real catalog and is reserved for Task 7's separate headless import;
+- literal `opaque`, `masked`, `alpha`, `additive`, and `subtractive` `corsairsLegacyMaterial` extras survive unchanged into catalog material slots; subtractive retains literal raw/effective `2/5` and `ZERO/INVSRCCOLOR`. Missing extras, an unknown mode, a raw/effective mismatch, a duplicate slot, or disagreement between glTF extras, `scene-assets.json`, and the full-corpus five-mode census is fatal;
 - unused sentinel point fields on legacy-unlit ID 22 are preserved diagnostically and not validated as active point-light inputs.
 - an out-of-reference type-0 fixture for model 406 and another for model 407 both appear in ordered `pointSources`, while neither causes a `models`/parts entry; deleting either DB row, changing its type from 3, dropping either source, or reordering equal source keys is fatal;
 - the real catalog contains every all-map occurrence of type-3 IDs 400 through 408, and an independent source-manifest/SQL join produces the identical ordered `(sourceKey,modelId)` list. This is a placement-count gate, not merely a nine-ID membership check.
@@ -673,7 +741,7 @@ Expected import failure.
 
 - [ ] **Step 3: Implement deterministic catalog**
 
-Read tracked `databases/gamedata.sqlite`, validate source-manifest schema v2 and SHA, and make two deterministic passes. First, resolve part files only for the reference-set type-0 IDs from the atomically published SceneMap asset manifest. Second, read all DB `scene_objects` rows with `type=3`, validate the literal real set 400 through 408, and join those rows to every ordered all-map type-0 source record to publish `pointSources`; missing required rows/occurrences are fatal. Preserve source order for point placements and DB order for light keyframes, sort keyed JSON objects numerically, and fail on any unresolved reference-set model. Copy `partRootMatrix` and per-slot legacy material metadata; do not reopen texture pixels or derive blend mode from `opacity` here. Never use a type-1 record to query `scene_objects`, and never resolve mesh parts merely because a record is a point source.
+Read tracked `databases/gamedata.sqlite`, validate source-manifest schema v2 and SHA, require Task 3 `reference-models.json` to be the identical ordered distinct selection, validate the Task 3 `scene-assets.json` required-input hash, and make two deterministic passes. First, resolve part files only for the reference-set type-0 IDs from the atomically published SceneMap asset manifest. Second, read all DB `scene_objects` rows with `type=3`, validate the literal real set 400 through 408, and join those rows to every ordered all-map type-0 source record to publish `pointSources`; missing required rows/occurrences are fatal. Preserve source order for point placements and DB order for light keyframes, sort keyed JSON objects numerically, and fail on any unresolved reference-set model. Copy `partRootMatrix` and per-slot five-mode material metadata, including `rawTranspType` and `effectiveTranspType`; do not reopen texture pixels, repeat `2 -> 5` normalization, or derive blend mode from `opacity` here. Never use a type-1 record to query `scene_objects`, and never resolve mesh parts merely because a record is a point source.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
@@ -762,6 +830,8 @@ git commit -m "feat(ue): resolve legacy scene lighting"
 ### Task 7: Place mirrored scene assets deterministically in Unreal
 
 **Task brief:** Import only immutable SceneMap assets and materialize the placement manifest with a transport-correct lighting payload for both mesh kinds. Inputs are schema-v2 source/catalog/placement manifests; output is an unsaved, tagged parity population in the already loaded level; wrong asset kind, material parent/mode, payload length/transport, or transform is fatal.
+
+**Dependencies:** Task 3's real `scene-assets.json` and separate tracked synthetic nonidentity-skinned fixture output, plus Task 6 placement. The synthetic fixture is imported only under `/Game/SceneParityTests/<runId>` for automation and never participates in the real catalog, population, or censuses.
 
 **Files:**
 
@@ -866,7 +936,7 @@ skeletal:
     -> tagged skeletalActorLabel
 ```
 
-Require stable mapping across two runs, positive scale, and rejection of type 1 or generic `/Game/All` assets. A skeletal catalog part must never enter an HISM group; a static part must never spawn a skeletal actor. The six audited skeletal model IDs must produce tagged skeletal mappings. Actor placement applies only the anchor transform; the imported part owns `partRootMatrix`. A synthetic skinned non-identity part fails if Python adds the part root to actor location/rotation/scale or if the imported asset reports identity instead of the catalog matrix. Skeletal animation is deterministic: explicit `null` selects reference pose; otherwise select the catalog animation, set single-node mode, loop as exported, seek to `(120/30) mod duration`, and pause. Tests reject another clip, playing state, or a playback-time error above one source frame.
+Require stable mapping across two runs, positive scale, and rejection of type 1 or generic `/Game/All` assets. A skeletal catalog part must never enter an HISM group; a static part must never spawn a skeletal actor. Every real skinned part selected by the Task 4-derived reference-model set must produce one tagged skeletal mapping; no literal ID list substitutes for this join. Actor placement applies only the anchor transform; the imported part owns `partRootMatrix`. All real skinned parts are checked exactly once even though the current real nonidentity census is `[]`. Separately, import the tracked synthetic skinned non-identity fixture and fail if Python adds its part root to actor location/rotation/scale, if the imported asset reports identity, or if bounds/root-bone evidence matches the deliberately double-baked expectation. Skeletal animation is deterministic: explicit `null` selects reference pose; otherwise select the catalog animation, set single-node mode, loop as exported, seek to `(120/30) mod duration`, and pause. Tests reject another clip, playing state, or a playback-time error above one source frame.
 
 - [ ] **Step 3: Define and test the material payload**
 
@@ -896,7 +966,7 @@ Create the shared unlit SceneParity material graph with one exactly defined 33-f
 
 Static HISM instances set `num_custom_data_floats=33` and store index `i` as `PerInstanceCustomData(i)`. Each `USkeletalMeshComponent` stores the same index `i` through `SetCustomPrimitiveDataFloat(i, value)` and the skeletal parent reads `CustomPrimitiveData(i)`; dynamic-material scalar/vector parameters are forbidden as a second transport. Both paths consume the one `encode_lighting_payload` result. Pure tests encode/decode HISM and skeletal CPD value-for-value, including `0.0`, negative light offsets, and all attenuation slots, and reject any payload length other than 33.
 
-`setup_scene_parity_material.py` creates one texture-specific material instance per imported source material and consumes the catalog mode verbatim. Because blend mode and payload expression are compiled parent properties, it creates two explicit four-parent families from the same lighting equation:
+`setup_scene_parity_material.py` creates one texture-specific material instance per imported source material and consumes the catalog mode plus literal `rawTranspType`/`effectiveTranspType` verbatim. Because blend mode and payload expression are compiled parent properties, it creates two explicit five-parent families from the same lighting equation:
 
 ```text
 static/HISM (PerInstanceCustomData):
@@ -904,14 +974,16 @@ static/HISM (PerInstanceCustomData):
   M_SceneParity_Static_Masked
   M_SceneParity_Static_Alpha
   M_SceneParity_Static_Additive
+  M_SceneParity_Static_Subtractive
 skeletal (CustomPrimitiveData):
   M_SceneParity_Skeletal_Opaque
   M_SceneParity_Skeletal_Masked
   M_SceneParity_Skeletal_Alpha
   M_SceneParity_Skeletal_Additive
+  M_SceneParity_Skeletal_Subtractive
 ```
 
-Opaque uses `BLEND_Opaque`; masked uses `BLEND_Masked` and the catalog-derived cutoff; alpha uses `BLEND_Translucent`; additive uses `BLEND_Additive`. A material instance always chooses the parent matching both `assetKind` and legacy mode, retains `BaseColorTexture` and source opacity, and never guesses from texture alpha. Literal tests cover all eight `(assetKind,mode)` parent choices, alpha cutoff `130/255` for source `ALPHAREF=129`, and additive output/opacity wiring. Unknown modes and unsupported source blend metadata are fatal before any asset is saved. The shared lighting equation is:
+Opaque uses `BLEND_Opaque`; masked uses `BLEND_Masked` and the catalog-derived cutoff; alpha uses `BLEND_Translucent`; additive uses `BLEND_Additive`. Subtractive is a dedicated `BLEND_Modulate` parent whose Emissive/modulate factor is `1 - saturate(legacyLitRgb)`, so hardware composition is literally `dst * (1 - src)`; it is not routed through alpha/additive opacity wiring. Source `opacity` remains in metadata, but does not scale subtractive RGB because the original opacity stage changes alpha while `ZERO/INVSRCCOLOR` consumes source RGB. A material instance always chooses the parent matching both `assetKind` and legacy mode, retains `BaseColorTexture`, source opacity, and raw/effective types, and never guesses from texture alpha. Literal tests cover all ten `(assetKind,mode)` parent choices, alpha cutoff `130/255` for source `ALPHAREF=129`, additive output/opacity wiring, subtractive `2 -> 5` normalization, `ZERO/INVSRCCOLOR`, and its inverse-source-color modulate wiring. Unknown modes, raw/effective mismatches, and unsupported source blend metadata are fatal before any asset is saved. The shared lighting equation is:
 
 ```text
 legacy-unlit:
@@ -932,9 +1004,13 @@ masked only:
     OpacityMask = outputAlpha, clip = (alphaRef + 1) / 255
 alpha/additive:
     Opacity = outputAlpha
+subtractive:
+    src = saturate(output.rgb)
+    Emissive/modulate factor = 1 - src
+    framebuffer result = dst * (1 - src)
 ```
 
-`resolvedAmbient` already includes the legacy shade/tile-color rule and must not be multiplied a second time. Static parents declare only StaticMesh plus InstancedStaticMeshes; opaque/masked static parents may declare Nanite, while alpha/additive static components set `bDisallowNanite`. Skeletal parents declare SkeletalMesh and explicitly do not rely on InstancedStaticMeshes or Nanite usage. The checker rejects a parent from the other transport family, mismatched blend mode/cutoff, missing required usage, unexpected cross-kind usage, fallback/default material, or translucent/additive Nanite.
+`resolvedAmbient` already includes the legacy shade/tile-color rule and must not be multiplied a second time. Static parents declare only StaticMesh plus InstancedStaticMeshes; opaque/masked static parents may declare Nanite, while alpha/additive/subtractive static components set `bDisallowNanite`. Skeletal parents declare SkeletalMesh and explicitly do not rely on InstancedStaticMeshes or Nanite usage. The checker rejects a parent from the other transport family, mismatched raw/effective types, mode/blend/cutoff/wiring, missing required usage, unexpected cross-kind usage, fallback/default material, or alpha/additive/subtractive Nanite. Runtime export reports subtractive separately from alpha/additive and includes the effective parent, `BLEND_Modulate`, inverse-source-color wiring fingerprint, and Nanite prohibition; a generic "translucent" bucket cannot close the gate.
 
 - [ ] **Step 4: Verify RED**
 
@@ -942,7 +1018,7 @@ Build and run `Corsairs.Import.SceneParity`; current `/10` yaw, absolute height,
 
 - [ ] **Step 5: Implement headless placement**
 
-Load the existing `/Game/Maps/Garner` level; never create a blank transient replacement. This placement helper removes/rebuilds only actors already tagged `CorsairsSceneParity`; Task 8 separately owns classification and removal of pre-tag legacy output. Load only `/Game/SceneParity` meshes/materials. Create deterministic HISM groups for static parts, assign 33 per-instance custom floats, and spawn deterministic tagged `ASkeletalMeshActor` instances whose components receive exactly 33 CPD floats and the catalog's paused tick-120 animation/reference pose. Verify the imported part-root metadata before placement; both paths use only the anchor transform, positive actor scale, stable labels/component names, and the parent family dictated by `(assetKind,mode)`. Do not save the level within this script; Task 8 owns final validation and save.
+Load the existing `/Game/Maps/Garner` level; never create a blank transient replacement. This placement helper removes/rebuilds only actors already tagged `CorsairsSceneParity`; Task 8 separately owns classification and removal of pre-tag legacy output. Load real meshes/materials only from `/Game/SceneParity/<runId>`. Create deterministic HISM groups for static parts, assign 33 per-instance custom floats, and spawn deterministic tagged `ASkeletalMeshActor` instances whose components receive exactly 33 CPD floats and the catalog's paused tick-120 animation/reference pose. Verify the imported part-root metadata before placement; both paths use only the anchor transform, positive actor scale, stable labels/component names, and the parent family dictated by `(assetKind,mode)`. In the automation-only path, import the separate tracked synthetic fixture into `/Game/SceneParityTests/<runId>`, export its literal part-root/bounds/root-bone evidence, run the double-bake assertions, and destroy the test world without adding it to the real placement manifest. Do not save the level within this script; Task 8 owns final validation and save.
 
 - [ ] **Step 6: Verify GREEN and commit**
 
@@ -984,13 +1060,16 @@ git commit -m "feat(ue): place scene parity instances"
 - Create: `CorsairsUE/Scripts/configure_garner_scene_base.py`
 - Create: `CorsairsUE/Scripts/rebuild_garner_scene.py`
 - Create: `CorsairsUE/Scripts/atomic_publish_garner.py`
+- Create: `CorsairsUE/Scripts/capture_scene_parity_material_modes.py`
 - Create: `CorsairsUE/Scripts/tests/test_scene_parity_check.py`
 - Create: `CorsairsUE/Scripts/tests/test_legacy_scene_cleanup.py`
 - Create: `CorsairsUE/Scripts/tests/test_rebuild_garner_scene.py`
+- Create: `CorsairsUE/Scripts/tests/test_scene_parity_material_modes.py`
 - Create: `CorsairsUE/Source/CorsairsGame/Public/CorsairsParityCaptureSubsystem.h`
 - Create: `CorsairsUE/Source/CorsairsGame/Private/CorsairsParityCaptureSubsystem.cpp`
 - Create: `CorsairsUE/Source/CorsairsGame/Private/Tests/CorsairsParityCaptureTests.cpp`
 - Create: `CorsairsUE/Data/Capture/garner_reference_capture.json`
+- Create: `CorsairsUE/Data/Capture/scene_subtractive_capture.json`
 - Create: `scripts/build_garner_reference.py`
 - Create: `scripts/build-original-parity-client.ps1`
 - Create: `scripts/capture_garner_parity.py`
@@ -1037,12 +1116,13 @@ Require violations for:
 - a skeletal payload present only as dynamic-material parameters instead of component `CustomPrimitiveData`;
 - a static payload not present as exactly 33 HISM per-instance values;
 - any static/skeletal parent-family swap, catalog/runtime material-mode mismatch, masked-cutoff mismatch, or additive material reported as ordinary alpha;
+- any lost `rawTranspType`/`effectiveTranspType`, failure to normalize raw `2` to effective `5`, subtractive material reported as alpha/additive/generic translucent, non-`BLEND_Modulate` subtractive parent, missing inverse-source-color wiring fingerprint, or subtractive Nanite;
 - identity or double-applied `partRootMatrix` on the literal skinned non-identity fixture;
 - absent/island0 object whose projected bounds intersect the viewport.
 
 Require 1.00 cm, dot 0.999, and positive scale to pass.
 
-The checker input called `actual` is not the placement plan. `export_scene_parity_runtime.py` loads the staging/canonical level and enumerates **every actor in the loaded world**, including unloaded/hidden level actors where the non-World-Partition package API exposes them; it does not begin from the `CorsairsSceneParity` tag. For tagged parity actors it records static HISM mesh/material path, instance transform, exactly 33 per-instance floats, bounds and component/instance index; and skeletal mesh, animation asset/mode/loop/playback time/paused state, material path, raw component `CustomPrimitiveData[0..32]`, bounds, actor label, imported part-root matrix/root-bone evidence, and actor transform. It records effective parent path, blend mode/cutoff, all material usage flags, Nanite state, loaded map package, terrain actor count, GameMode class, protected actor GUIDs, removed legacy GUIDs, and every untagged `/Game/All` scene candidate. Tests prove that changing only an actual static or skeletal transform, either payload value/transport, mesh/animation path or playback state, part-root evidence, material parent/mode/usage flag, asset-kind mapping, or protected GUID fails even when the planned manifest remains correct.
+The checker input called `actual` is not the placement plan. `export_scene_parity_runtime.py` loads the staging/canonical level and enumerates **every actor in the loaded world**, including unloaded/hidden level actors where the non-World-Partition package API exposes them; it does not begin from the `CorsairsSceneParity` tag. For tagged parity actors it records static HISM mesh/material path, instance transform, exactly 33 per-instance floats, bounds and component/instance index; and skeletal mesh, animation asset/mode/loop/playback time/paused state, material path, raw component `CustomPrimitiveData[0..32]`, bounds, actor label, imported part-root matrix/root-bone evidence, and actor transform. It records effective parent path, legacy mode, `rawTranspType`, `effectiveTranspType`, blend mode/cutoff, subtractive wiring fingerprint, all material usage flags, Nanite state, loaded map package, terrain actor count, GameMode class, protected actor GUIDs, removed legacy GUIDs, and every untagged `/Game/All` scene candidate. Tests prove that changing only an actual static or skeletal transform, either payload value/transport, mesh/animation path or playback state, part-root evidence, material parent/mode/raw-effective types/wiring/usage flag, asset-kind mapping, or protected GUID fails even when the planned manifest remains correct.
 
 Add pure legacy-classifier fixtures based on the exact old tracked writers and schema-v1 math. `build_legacy_expectations` uses all source records (including the old type-1 bug), `CorsairsUE/Scripts/model_map.json`, old location `(x,-y,heightOff)`, and old yaw `yaw/10` to form asset/transform multisets. Classification is intentionally narrow:
 
@@ -1113,6 +1193,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
   CorsairsUE.Scripts.tests.test_scene_parity_check \
   CorsairsUE.Scripts.tests.test_legacy_scene_cleanup \
   CorsairsUE.Scripts.tests.test_rebuild_garner_scene \
+  CorsairsUE.Scripts.tests.test_scene_parity_material_modes \
   scripts.tests.test_capture_garner_parity -v
 
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
@@ -1124,7 +1205,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
   scripts.tests.test_capture_garner_parity.OriginalBuildContractTests.test_attestation_rejects_missing_or_stale_freetype_output -v
 ```
 
-Expected on the first RED run: the four test modules exist, but collection fails with `ModuleNotFoundError` for the still-missing production modules `CorsairsUE.Scripts.scene_parity_check`, `CorsairsUE.Scripts.legacy_scene_cleanup`, `CorsairsUE.Scripts.rebuild_garner_scene`, and `scripts.capture_garner_parity`. After adding import-only stubs, the named tests above must still fail because there is no terrain bootstrap/report-chain gate, no whole-world leftover rejection, no two-step FreeType-before-Game command validator, no FreeType input/output/toolchain attestation (including `ResourceCompile`/`ftver.rc`), no tick-120 logical-delta proof, and no exact-byte `system.ini` rollback. In the six-test focused command the initial stub failures must specifically expose the missing validation; once issue DTOs exist, the `.rc` mutations and the other mutations must produce the literal codes above. A zero-test run, an import skip, an environment-dependent skip, or a pass that merely finds a pre-existing `freetype.lib` is not an acceptable RED.
+Expected on the first RED run: the five test modules exist, but collection fails with `ModuleNotFoundError` for the still-missing production modules `CorsairsUE.Scripts.scene_parity_check`, `CorsairsUE.Scripts.legacy_scene_cleanup`, `CorsairsUE.Scripts.rebuild_garner_scene`, `CorsairsUE.Scripts.capture_scene_parity_material_modes`, and `scripts.capture_garner_parity`. After adding import-only stubs, the named tests above must still fail because there is no terrain bootstrap/report-chain gate, no whole-world leftover rejection, no subtractive parent/readback gate, no two-step FreeType-before-Game command validator, no FreeType input/output/toolchain attestation (including `ResourceCompile`/`ftver.rc`), no tick-120 logical-delta proof, and no exact-byte `system.ini` rollback. In the six-test focused command the initial stub failures must specifically expose the missing validation; once issue DTOs exist, the `.rc` mutations and the other mutations must produce the literal codes above. A zero-test run, an import skip, an environment-dependent skip, or a pass that merely finds a pre-existing `freetype.lib` is not an acceptable RED.
 
 - [ ] **Step 3: Implement actual-runtime integration gates**
 
@@ -1152,6 +1233,15 @@ legacy generated/ambiguous leftovers across whole world = 0
 all classified legacy generated GUIDs removed exactly once
 material fallback/usage/translucent-Nanite errors = 0
 material parent kind/mode/cutoff mismatches = 0
+material raw/effective transparency mismatches = 0
+subtractive parent/wiring/Nanite errors = 0
+full-corpus material census has exactly 48 used raw2 -> effective5
+  subtractive materials across exactly 16 LMO
+all 79 real skinned parts checked exactly once;
+  real nonidentity-skinned census = []
+tracked synthetic nonidentity-skinned headless gate = PASS,
+  with zero synthetic assets/records in real manifests and placement
+dedicated subtractive linear capture for both static and skeletal parents = PASS
 base bundle has the complete valid terrain-manifest/report SHA chain
 loaded map has exactly the checked reference terrain actor and >= 1 terrain actor
 loaded map GameMode = /Script/CorsairsGame.CorsairsGameMode
@@ -1192,12 +1282,26 @@ The Unreal commands are tracked and literal:
   -unattended -nop4 -NullRHI -NoSound \
   -run=pythonscript \
   -script="CorsairsUE/Scripts/rebuild_garner_scene.py --map /Game/Maps/Garner --base-bundle <run>/garner-base-bundle.json --run-manifest <run>/placement.json --report <run>/staging-report.json"
+```
 
+Before publication, run a separate graphical material capture; the fixed Garner screenshot is not a substitute for this mode-level gate. `scene_subtractive_capture.json` defines a linear RGBA16F offscreen target with tone mapping/exposure disabled, destination RGB `(0.8,0.5,0.25)`, and legacy-unlit source RGB `(0.25,0.4,0.8)`. `capture_scene_parity_material_modes.py` renders the same overlap once through the static subtractive parent and once through the skeletal subtractive parent and reads back the pre-tonemap pixels. Both must equal literal `(0.6,0.3,0.05)` within `1/1024`, i.e. `dst * (1 - src)`, and must differ from literal alpha/additive control renders. Its atomic report records parent paths, `rawTranspType=2`, `effectiveTranspType=5`, `BLEND_Modulate`, inverse-source-color wiring fingerprints, Nanite-disabled facts, linear input/output values, image hashes, and issues. Missing RHI/readback, default-material fallback, a generic translucent route, sRGB/tonemap contamination, or reuse of one parent for both asset kinds is fatal.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+  CorsairsUE.Scripts.tests.test_scene_parity_material_modes -v
+"/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac/UnrealEditor-Cmd" \
+  "$PWD/CorsairsUE/CorsairsUE.uproject" \
+  -unattended -nop4 -NoSound -RenderOffscreen \
+  -run=pythonscript \
+  -script="CorsairsUE/Scripts/capture_scene_parity_material_modes.py --contract CorsairsUE/Data/Capture/scene_subtractive_capture.json --report <run>/subtractive-material-capture.json"
 PYTHONDONTWRITEBYTECODE=1 python3 \
   CorsairsUE/Scripts/atomic_publish_garner.py \
   --project "$PWD/CorsairsUE/CorsairsUE.uproject" \
-  --report <run>/staging-report.json
+  --report <run>/staging-report.json \
+  --material-capture-report <run>/subtractive-material-capture.json
 ```
+
+This graphical process runs alone under the global thermal/process rules and must exit before staging publication or either client capture. The report and its images remain run-local generated evidence and are hash-linked by `run-manifest.json`.
 
 - [ ] **Step 6: Implement the tracked build orchestrator**
 
@@ -1249,13 +1353,21 @@ UE="/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac/UnrealEditor-Cmd"
 
 ./tools/AssetConverter/build/AssetConverter scene-manifest \
   Client/map/garner.map Client/map/garner.obj <run>/garner
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  CorsairsUE/Scripts/build_scene_reference_model_set.py \
+  --source-manifest <run>/garner.objects.json \
+  --database databases/gamedata.sqlite \
+  --model-root Client/model/scene \
+  --output <run>/reference-models.json
 ./tools/AssetConverter/build/AssetConverter \
   Client/model/scene <run>/models \
-  --textures Client/texture/scene --profile scene-map
+  --textures Client/texture/scene --profile scene-map \
+  --required-models <run>/reference-models.json
 PYTHONDONTWRITEBYTECODE=1 python3 \
   CorsairsUE/Scripts/build_scene_catalog.py \
   databases/gamedata.sqlite <run>/models \
   <run>/garner.objects.json \
+  <run>/reference-models.json \
   <run>/garner.scene-catalog.json \
   --content-root /Game/SceneParity/<runId>
 PYTHONDONTWRITEBYTECODE=1 python3 \
@@ -1277,7 +1389,7 @@ python3 scripts/build_garner_reference.py --bootstrap-if-missing
 
 After the clean block, the orchestrator validates every report and writes `<run>/garner-base-bundle.json` atomically. The bundle contains normalized paths and SHA-256 for the terrain manifest, level-build, seed import, GameMode configuration, both checked imports, and terrain-check reports; expected package/world/marker/reference-actor paths; `/Script/CorsairsGame.CorsairsGameMode`; immutable terrain asset hashes; and the pre-scene canonical map hash. Only then may it call `rebuild_garner_scene.py`. This makes the bootstrap's manifest/checker part of the staging authorization rather than a setup log.
 
-The orchestrator uses blocking, sequential subprocess calls: it does not launch the next build/editor command until the prior process tree has exited, and after every `UnrealEditor-Cmd` invocation it verifies the owned editor PID tree is gone. Its failure/interrupt handler closes and reaps only the active owned tree before returning nonzero. The orchestrator uses `artifacts/scene-parity/runs/<sourceSha>.<uniqueId>/`; every scene intermediate and every bootstrap report is run-relative, while the terrain plan's atomically published top manifest remains at its specified `artifacts/maps/garner.reference-albedo.json` path and is copied by hash into the base bundle. It publishes `run-manifest.json` last with SHA-256 for the complete base bundle/report chain, source map/object files, catalog, every `.gltf/.bin/texture`, placement manifest, Unreal runtime report, prior/canonical `.umap`, and protected/base signatures. It imports immutable assets under `/Game/SceneParity/<runId>`, performs the staged rebuild/publish, and reruns the scene operation against the prior successful run-manifest to prove actual HISM mapping idempotence without rebuilding or erasing the canonical base. Any mismatch returns nonzero and cannot publish a new canonical map.
+The orchestrator uses blocking, sequential subprocess calls: it does not launch the next build/editor command until the prior process tree has exited, and after every `UnrealEditor-Cmd` invocation it verifies the owned editor PID tree is gone. Its failure/interrupt handler closes and reaps only the active owned tree before returning nonzero. The orchestrator uses `artifacts/scene-parity/runs/<sourceSha>.<uniqueId>/`; every scene intermediate and every bootstrap report is run-relative, while the terrain plan's atomically published top manifest remains at its specified `artifacts/maps/garner.reference-albedo.json` path and is copied by hash into the base bundle. It publishes `run-manifest.json` last with SHA-256 for the complete base bundle/report chain, source map/object files, Task 4-derived `reference-models.json`, real `scene-assets.json`, the separate synthetic fixture report, the five-mode/full-corpus census, catalog, every real `.gltf/.bin/texture`, placement manifest, Unreal runtime report, subtractive material-capture report/images, prior/canonical `.umap`, and protected/base signatures. It explicitly proves that synthetic test paths occur in none of the real manifest/catalog/placement lists. It imports immutable real assets under `/Game/SceneParity/<runId>`, performs the staged rebuild/publish, and reruns the scene operation against the prior successful run-manifest to prove actual HISM mapping idempotence without rebuilding or erasing the canonical base. Any mismatch returns nonzero and cannot publish a new canonical map.
 
 - [ ] **Step 7: Add a deterministic dual-client capture**
 
@@ -1484,6 +1596,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
   CorsairsUE.Scripts.tests.test_rebuild_garner_scene \
   CorsairsUE.Scripts.tests.test_legacy_scene_cleanup \
+  CorsairsUE.Scripts.tests.test_scene_parity_material_modes \
   scripts.tests.test_capture_garner_parity -v
 "/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/Mac/Build.sh" \
   CorsairsUEEditor Mac Development \
@@ -1511,13 +1624,16 @@ git add \
   CorsairsUE/Scripts/configure_garner_scene_base.py \
   CorsairsUE/Scripts/rebuild_garner_scene.py \
   CorsairsUE/Scripts/atomic_publish_garner.py \
+  CorsairsUE/Scripts/capture_scene_parity_material_modes.py \
   CorsairsUE/Scripts/tests/test_scene_parity_check.py \
   CorsairsUE/Scripts/tests/test_legacy_scene_cleanup.py \
   CorsairsUE/Scripts/tests/test_rebuild_garner_scene.py \
+  CorsairsUE/Scripts/tests/test_scene_parity_material_modes.py \
   CorsairsUE/Source/CorsairsGame/Public/CorsairsParityCaptureSubsystem.h \
   CorsairsUE/Source/CorsairsGame/Private/CorsairsParityCaptureSubsystem.cpp \
   CorsairsUE/Source/CorsairsGame/Private/Tests/CorsairsParityCaptureTests.cpp \
   CorsairsUE/Data/Capture/garner_reference_capture.json \
+  CorsairsUE/Data/Capture/scene_subtractive_capture.json \
   CorsairsUE/Scripts/place_objects.py \
   CorsairsUE/Scripts/place_all_maps.py \
   CorsairsUE/Scripts/check_placement.py \
@@ -1540,11 +1656,11 @@ git commit -m "feat(ue): rebuild Garner scene deterministically"
 ```text
 Scene Task 1
 Terrain Task 1 -> Scene Task 2
-Scene Task 3
 Scene Tasks 1 + 2 -> Scene Task 4
+Scene Task 4 -> Scene Task 3 real reference-model gate
 Scene Tasks 3 + 4 -> Scene Task 5
 Scene Tasks 4 + 5 -> Scene Task 6
-Scene Tasks 3 + 6 -> Scene Task 7
+Scene Tasks 3 + 6 -> Scene Task 7 real import + separate synthetic fixture import
 Garner terrain plan Tasks 7 + 8 -> tracked terrain manifest/base builder/import/checker
 Scene Task 7 + tracked terrain base -> Scene Task 8
 ```
