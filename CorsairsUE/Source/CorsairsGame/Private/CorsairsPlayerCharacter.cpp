@@ -47,6 +47,14 @@ namespace
 	/** Наклон камеры. Мир показывается сверху под углом, как в оригинале.
 	 *  В Unreal отрицательный тангаж означает взгляд вниз. */
 	constexpr float CameraPitch = -45.0f;
+
+	/** Пределы наклона камеры. Оригинал не позволяет ни смотреть себе под
+	 *  ноги, ни задирать взгляд в небо. */
+	constexpr float CameraPitchMin = -70.0f;
+	constexpr float CameraPitchMax = -10.0f;
+
+	/** На сколько поднята точка крепления камеры над центром капсулы. */
+	constexpr float CameraBoomHeight = 120.0f;
 }
 
 ACorsairsPlayerCharacter::ACorsairsPlayerCharacter()
@@ -66,9 +74,13 @@ ACorsairsPlayerCharacter::ACorsairsPlayerCharacter()
 	CameraBoom->SetupAttachment(RootComponent);
 	CameraBoom->TargetArmLength = CameraDistance;
 	CameraBoom->bUsePawnControlRotation = true;
-	// Кронштейн подтягивает камеру, когда между ней и персонажем оказывается
-	// стена: в плотной городской застройке иначе постоянно виден интерьер.
-	CameraBoom->bDoCollisionTest = true;
+	// Подтягивание отключено намеренно. В плотной застройке кронштейн упирался
+	// в каждый второй дом и подтаскивал камеру вплотную к персонажу — вид
+	// падал к самой траве. Оригинал камеру не подтягивает вовсе.
+	CameraBoom->bDoCollisionTest = false;
+	// Точка крепления поднята к плечам: от центра капсулы камера смотрит
+	// слишком низко, и половину кадра занимает земля под ногами.
+	CameraBoom->SetRelativeLocation(FVector(0.0f, 0.0f, CameraBoomHeight));
 
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
@@ -176,6 +188,19 @@ void ACorsairsPlayerCharacter::BeginPlay()
 	{
 		const FRotator Current = OwningController->GetControlRotation();
 		OwningController->SetControlRotation(FRotator(CameraPitch, Current.Yaw, 0.0f));
+
+		// Наклон ограничивается: без предела первый же рывок мыши уводит
+		// камеру отвесно вниз или в зенит, и мир пропадает из кадра. Границы
+		// подобраны под обзор оригинала — он показывает мир сверху, но не
+		// с высоты птичьего полёта.
+		if (APlayerController* PlayerController = Cast<APlayerController>(OwningController))
+		{
+			if (PlayerController->PlayerCameraManager != nullptr)
+			{
+				PlayerController->PlayerCameraManager->ViewPitchMin = CameraPitchMin;
+				PlayerController->PlayerCameraManager->ViewPitchMax = CameraPitchMax;
+			}
+		}
 	}
 }
 
@@ -203,12 +228,28 @@ void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 	// Удержание на земле — каждый кадр: персонаж ходит, и высота под ним
 	// меняется. Половина капсулы добавляется, потому что её начало отсчёта в
 	// центре, а стоять надо подошвами.
+	//
+	// Перемещение только при заметном расхождении: телепорт каждый кадр даёт
+	// дрожание и смазывание картинки в движении, даже когда высота уже верна.
 	if (TerrainHeights != nullptr && TerrainHeights->IsLoaded())
 	{
+		// Без ввода персонаж обязан стоять. В режиме полёта, куда его
+		// переводит удержание на земле, остаточная скорость не гасится ничем,
+		// и он медленно уплывает — в застройку, за границу карты, куда
+		// угодно.
+		if (GetCharacterMovement()->GetCurrentAcceleration().IsNearlyZero())
+		{
+			GetCharacterMovement()->Velocity = FVector::ZeroVector;
+		}
+
 		FVector Location = GetActorLocation();
-		Location.Z = TerrainHeights->HeightAt(Location.X, Location.Y)
+		const double Wanted = TerrainHeights->HeightAt(Location.X, Location.Y)
 			+ GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-		SetActorLocation(Location, false, nullptr, ETeleportType::TeleportPhysics);
+		if (FMath::Abs(Location.Z - Wanted) > 1.0)
+		{
+			Location.Z = Wanted;
+			SetActorLocation(Location, false, nullptr, ETeleportType::TeleportPhysics);
+		}
 	}
 
 	// Разовый снимок состояния через несколько секунд после старта: по нему

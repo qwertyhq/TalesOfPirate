@@ -55,6 +55,13 @@ public:
 	void StartLogin();
 
 private:
+	/** Карта высот текущей карты — общая для своего персонажа и для всех, кого
+	 *  показывает сервер. Трассировка тут не годится: рельеф пришёл из glTF
+	 *  без физической формы, и луч проходит сквозь него, оставляя каждого на
+	 *  случайной высоте. */
+	UPROPERTY()
+	TObjectPtr<class UCorsairsTerrainHeights> TerrainHeights;
+
 	UFUNCTION()
 	void HandleStageChanged(ECorsairsLoginStage Stage, const FString& Message);
 

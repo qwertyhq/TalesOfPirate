@@ -1,5 +1,7 @@
 #include "CorsairsGameMode.h"
 
+#include "TerrainHeights.h"
+
 #include "CorsairsLoginHud.h"
 #include "CorsairsPlayerCharacter.h"
 
@@ -68,19 +70,6 @@ namespace
 		for (const FHitResult& Hit : Hits)
 		{
 			const AActor* HitActor = Hit.GetActor();
-			FString TagList;
-			if (HitActor != nullptr)
-			{
-				for (const FName& Tag : HitActor->Tags)
-				{
-					TagList += Tag.ToString() + TEXT(" ");
-				}
-			}
-			UE_LOG(LogCorsairsGameMode, Log,
-				   TEXT("  трассировка: %s (%s) на Z %.0f, теги [%s]"),
-				   HitActor != nullptr ? *HitActor->GetName() : TEXT("?"),
-				   HitActor != nullptr ? *HitActor->GetClass()->GetName() : TEXT("?"),
-				   Hit.Location.Z, *TagList);
 			if (HitActor != nullptr && HitActor->ActorHasTag(TerrainTag))
 			{
 				Location.Z = Hit.Location.Z + SpawnHeightMargin;
@@ -226,6 +215,14 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 			// Высота берётся из карты высот — той же, из которой построена
 			// видимая земля. Трассировка тут не годится: рельеф пришёл из
 			// glTF без физической формы, и луч проходит сквозь него.
+			// Карта высот загружается один раз на всех: и свой персонаж, и
+			// показанные сервером ставятся по ней.
+			if (TerrainHeights == nullptr)
+			{
+				TerrainHeights = NewObject<UCorsairsTerrainHeights>(this);
+			}
+			TerrainHeights->Load(Session->GetMapName());
+
 			const bool bGrounded = Character->UseTerrainHeights(Session->GetMapName());
 			if (!bGrounded)
 			{
@@ -281,9 +278,18 @@ void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 	FVector Location(static_cast<double>(Actor.Position.X),
 					 -static_cast<double>(Actor.Position.Y),
 					 SpawnHeightMargin);
-	// Тем же способом, что и своего персонажа: иначе NPC висят на нулевой
-	// высоте независимо от того, где под ними земля.
-	DropToGround(World, Location);
+
+	// Высота — из карты высот, той же, из которой построена видимая земля.
+	// Трассировка оставляла каждого на своей высоте: кого на крыше, кого в
+	// воздухе, и толпа стояла ступеньками.
+	if (TerrainHeights != nullptr && TerrainHeights->IsLoaded())
+	{
+		Location.Z = TerrainHeights->HeightAt(Location.X, Location.Y);
+	}
+	else
+	{
+		DropToGround(World, Location);
+	}
 	const FRotator Rotation(0.0, static_cast<double>(Actor.Angle) / 10.0, 0.0);
 
 	ACorsairsPlayerCharacter* Spawned = World->SpawnActor<ACorsairsPlayerCharacter>(
