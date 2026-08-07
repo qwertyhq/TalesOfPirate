@@ -327,6 +327,14 @@ void CFightAble::SkillTarEffect(SFireUnit* pSFireSrc) {
 		g_luaAPI.Call(pSFireSrc->pCSkillRecord->szEffect.c_str(), pSrcCha, this->IsCharacter(),
 					  (int)pSrcCha->m_SFightInit.pSSkillGrid->chLv);
 	lNowHP = (long)m_CChaAttr.GetAttr(ATTR_HP);
+	// Режим разработчика: урон отменяется после того, как эффект умения уже
+	// отработал. Правка здесь, а не в расчёте урона, потому что урон наносят
+	// произвольные Lua-эффекты, меняющие ATTR_HP напрямую, — единой точки
+	// вычисления, которую можно было бы обнулить, попросту нет.
+	if (lNowHP < lOldHP && IsCharacter() && IsCharacter()->IsDevInvincible()) {
+		setAttr(ATTR_HP, lOldHP);
+		lNowHP = lOldHP;
+	}
 	BeUseSkill(lOldHP, lNowHP, pSrcCha, pSFireSrc->pCSkillRecord->chHelpful);
 
 	//
@@ -2069,6 +2077,12 @@ void CFightAble::OnSkillState(DWORD dwCurTick) {
 				}
 			}
 
+			// Тот же откат урона, что и для прямых умений: состояния вроде яда
+			// точат здоровье собственным Lua-эффектом, мимо расчёта удара.
+			if ((long)m_CChaAttr.GetAttr(ATTR_HP) < lOldHP
+				&& IsCharacter() && IsCharacter()->IsDevInvincible()) {
+				setAttr(ATTR_HP, lOldHP);
+			}
 			BeUseSkill(lOldHP, (long)m_CChaAttr.GetAttr(ATTR_HP), pCCha, pSStateUnit->chEffType);
 			if (lOldHP > 0 && m_CChaAttr.GetAttr(ATTR_HP) <= 0) bIsDie = true;
 			else bIsDie = false;

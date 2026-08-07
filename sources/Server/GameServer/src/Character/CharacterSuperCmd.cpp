@@ -84,6 +84,50 @@ BOOL CCharacter::DoGMCommand(const char *pszCmd, const char *pszParam)
 	//-----------------------
 	// GM
 	//-----------------------
+	// Режим разработчика для прогона мира. Имя команды не выносится в
+	// конфигурацию, в отличие от боевых GM-команд: она нужна только на
+	// dev-стенде и не должна случайно оказаться доступной на бою.
+	if (strCmd == "dev")
+	{
+		std::string strMode = pszParam;
+		const std::size_t tSpace = strMode.find(' ');
+		std::string strArg;
+		if (tSpace != std::string::npos)
+		{
+			strArg = strMode.substr(tSpace + 1);
+			strMode = strMode.substr(0, tSpace);
+		}
+
+		if (strMode == "on")
+		{
+			SetDevMode(true);
+			SystemNotice("dev: неуязвимость, урон и скорость подняты");
+		}
+		else if (strMode == "off")
+		{
+			SetDevMode(false);
+			SystemNotice("dev: характеристики возвращены");
+		}
+		else if (strMode == "god")
+		{
+			SetDevMode(!IsDevInvincible());
+			SystemNotice(IsDevInvincible() ? "dev: неуязвимость включена"
+										   : "dev: неуязвимость выключена");
+		}
+		else if (strMode == "speed")
+		{
+			SetDevSpeed(Corsairs::Util::Str2Int(strArg));
+			SystemNotice("dev: скорость изменена");
+		}
+		else
+		{
+			SystemNotice("dev on | dev off | dev god | dev speed <N>");
+		}
+		ToLogService("common", "ChaID: {}, ChaName: {}, CMD: {}, Param: {}",
+					 GetPlayer()->GetID(), GetName(), pszCmd, pszParam);
+		return TRUE;
+	}
+
 	if (strCmd==g_Command.m_cMove) // move x,y,
 	{
 		int n = Corsairs::Util::ResolveTextLine(pszParam, strList, 10, ',');

@@ -303,6 +303,82 @@ bool CCharacter::IsGMCha2()
 	return false;
 }
 
+namespace {
+
+// Верхняя граница атрибута по данным игры. Жёсткое число вроде 99999 всё равно
+// обрезалось бы в CChaAttr::SetAttr, поэтому берём то, что модель допускает.
+// Незаполненный потолок отдаётся как -1 — тогда возвращаем запрошенное.
+std::int32_t DevCapped(const CChaAttr& attr, std::int32_t no, std::int32_t wanted)
+{
+	const std::int32_t maxVal = attr.GetAttrMaxVal(no);
+	if (maxVal <= 0) {
+		return wanted;
+	}
+	return (wanted > maxVal) ? maxVal : wanted;
+}
+
+} // namespace
+
+void CCharacter::SetDevSpeed(std::int32_t lSpeed)
+{
+	if (lSpeed < 1) {
+		lSpeed = 1;
+	}
+	m_CChaAttr.ResetChangeFlag();
+	SetBoatAttrChangeFlag(false);
+	setAttr(ATTR_BMSPD, DevCapped(m_CChaAttr, ATTR_BMSPD, lSpeed));
+	setAttr(ATTR_MSPD, DevCapped(m_CChaAttr, ATTR_MSPD, lSpeed));
+	SynAttr(enumATTRSYN_TASK);
+}
+
+void CCharacter::SetDevMode(bool bEnable)
+{
+	if (bEnable) {
+		// Исходные значения снимаются один раз: повторное `dev on` не должно
+		// запомнить уже задранные характеристики как «нормальные».
+		if (!_devSaved) {
+			_devOrigSpeed  = m_CChaAttr.GetAttr(ATTR_BMSPD);
+			_devOrigMinAtk = m_CChaAttr.GetAttr(ATTR_BMNATK);
+			_devOrigMaxAtk = m_CChaAttr.GetAttr(ATTR_BMXATK);
+			_devOrigDef    = m_CChaAttr.GetAttr(ATTR_BDEF);
+			_devSaved = true;
+		}
+		_devInvincible = true;
+
+		m_CChaAttr.ResetChangeFlag();
+		SetBoatAttrChangeFlag(false);
+		setAttr(ATTR_BMNATK, DevCapped(m_CChaAttr, ATTR_BMNATK, 99999));
+		setAttr(ATTR_BMXATK, DevCapped(m_CChaAttr, ATTR_BMXATK, 99999));
+		setAttr(ATTR_BDEF,   DevCapped(m_CChaAttr, ATTR_BDEF,   99999));
+		// Втрое быстрее обычного: потолок скорости в данных бывает огромным, и
+		// установка «по максимуму» превратила бы бег в телепортацию мимо
+		// подгрузки местности.
+		setAttr(ATTR_BMSPD, DevCapped(m_CChaAttr, ATTR_BMSPD, _devOrigSpeed * 3));
+		setAttr(ATTR_MSPD,  DevCapped(m_CChaAttr, ATTR_MSPD,  _devOrigSpeed * 3));
+	}
+	else {
+		_devInvincible = false;
+		if (!_devSaved) {
+			return;
+		}
+		m_CChaAttr.ResetChangeFlag();
+		SetBoatAttrChangeFlag(false);
+		setAttr(ATTR_BMNATK, _devOrigMinAtk);
+		setAttr(ATTR_BMXATK, _devOrigMaxAtk);
+		setAttr(ATTR_BDEF,   _devOrigDef);
+		setAttr(ATTR_BMSPD,  _devOrigSpeed);
+		setAttr(ATTR_MSPD,   _devOrigSpeed);
+		_devSaved = false;
+	}
+
+	// Пересчёт модифицированных характеристик из базовых — тем же путём, что
+	// у GM-команды `attr`; без него правка базовых значений не видна.
+	if (IsPlayerOwnCha()) {
+		g_luaAPI.Call("AttrRecheck", this);
+	}
+	SynAttr(enumATTRSYN_TASK);
+}
+
 bool CCharacter::IsPlayerFocusCha(void)
 {
 	return IsPlayerCha() && (m_pCPlayer->GetCtrlCha() == this);

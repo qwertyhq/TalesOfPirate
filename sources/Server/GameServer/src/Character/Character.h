@@ -117,9 +117,16 @@ public:
 	void	Initially();
 	void	Finally();
 
-	bool	IsPlayerCha(void); // 
+	bool	IsPlayerCha(void); //
 	bool	IsGMCha(); // GM0-10GM
 	bool	IsGMCha2(); // GM
+
+	// Режим разработчика — прогон мира без оглядки на баланс. Включается
+	// GM-командой `dev`, живёт только в памяти и в базу не сохраняется:
+	// перезаход возвращает персонажа к обычным характеристикам.
+	bool	IsDevInvincible() const { return _devInvincible; }
+	void	SetDevMode(bool bEnable);
+	void	SetDevSpeed(std::int32_t lSpeed);
 	bool	IsPlayerCtrlCha(void); // 
 	bool	IsPlayerMainCha(void); // 
 	bool	IsPlayerFocusCha(void); //  IsPlayerCtrlCha
@@ -823,6 +830,15 @@ private:
 
 	char			m_szMotto[defMOTTO_LEN];
 	std::uint16_t			m_usIcon;
+
+	// Режим разработчика. Исходные характеристики запоминаются при включении,
+	// чтобы `dev off` вернул персонажа как был, а не к жёстко заданным числам.
+	bool			_devInvincible{false};
+	bool			_devSaved{false};
+	std::int32_t	_devOrigSpeed{0};
+	std::int32_t	_devOrigMinAtk{0};
+	std::int32_t	_devOrigMaxAtk{0};
+	std::int32_t	_devOrigDef{0};
 
     bool m_expFlag;
     DWORD m_ExpScale;       //  
