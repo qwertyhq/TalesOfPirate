@@ -179,6 +179,7 @@ void UCorsairsSession::SendCreatePassword2()
 void UCorsairsSession::HandlePacket(RPacket& Packet)
 {
 	const uint16 Cmd = Packet.GetCmd();
+	ReceivedCommands.FindOrAdd(static_cast<int32>(Cmd)) += 1;
 
 	// Рукопожатие. При выключенном RSA-AES оно пустое, но приходит всегда, и
 	// именно оно означает готовность сервера принимать команды.
@@ -286,6 +287,40 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		SetStage(ECorsairsLoginStage::InWorld,
 				 FString::Printf(TEXT("карта %s, позиция (%d, %d)"),
 								 *MapName, SpawnPosition.X, SpawnPosition.Y));
+		return;
+	}
+
+	if (Cmd == CMD_MC_CHABEGINSEE)
+	{
+		// Сервер сам решает, кто попадает в поле зрения, и присылает это
+		// сообщение для игроков, NPC и монстров одинаково. Именно так мир и
+		// населяется: запекать NPC в уровень не нужно и неверно — они живут
+		// на сервере и могут двигаться, исчезать и появляться.
+		Corsairs::Net::Msg::McChaBeginSeeMessage Message;
+		Corsairs::Net::Msg::deserialize(Packet, Message);
+
+		FCorsairsWorldActor Actor;
+		Actor.WorldId = Message.base.worldId;
+		Actor.Name = ToFString(Message.base.name);
+		Actor.Position = FIntPoint(static_cast<int32>(Message.base.posX),
+								   static_cast<int32>(Message.base.posY));
+		Actor.Angle = static_cast<int32>(Message.base.angle);
+		// Тип модели лежит в сведениях о внешности, а не в commId: последний —
+		// идентификатор сообщества, и в нём приходят отрицательные значения.
+		Actor.TypeId = static_cast<int32>(Message.base.look.typeId);
+		Actor.CtrlType = static_cast<int32>(Message.base.ctrlType);
+
+		VisibleActors.Add(Actor);
+		OnActorSeen.Broadcast(Actor);
+		return;
+	}
+
+	if (Cmd == CMD_MC_CHAENDSEE)
+	{
+		const int64 WorldIdLeft = Packet.ReadInt64();
+		VisibleActors.RemoveAll([WorldIdLeft](const FCorsairsWorldActor& A)
+								{ return A.WorldId == WorldIdLeft; });
+		OnActorLeft.Broadcast(WorldIdLeft);
 		return;
 	}
 

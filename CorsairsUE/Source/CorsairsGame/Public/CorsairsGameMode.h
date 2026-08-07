@@ -58,6 +58,14 @@ private:
 	UFUNCTION()
 	void HandleStageChanged(ECorsairsLoginStage Stage, const FString& Message);
 
+	/** Персонаж попал в поле зрения — ставим его в мир. */
+	UFUNCTION()
+	void HandleActorSeen(const FCorsairsWorldActor& Actor);
+
+	/** Персонаж вышел из поля зрения — убираем. */
+	UFUNCTION()
+	void HandleActorLeft(int64 WorldId);
+
 	/** Путь к модели тела по типу персонажа. Пустая строка — соответствия
 	 *  нет, и тело останется невидимым. */
 	FString ResolveBodyMesh(int32 TypeId) const;
@@ -68,4 +76,12 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UCorsairsSession> Session;
+
+	/** Кого сервер держит в поле зрения, по идентификатору в мире.
+	 *
+	 *  Указатель нужен, чтобы убрать актёра, когда сервер сообщит об уходе:
+	 *  искать его перебором всех актёров уровня на карте с сотней тысяч
+	 *  объектов недопустимо. */
+	UPROPERTY()
+	TMap<int64, TObjectPtr<AActor>> WorldActors;
 };

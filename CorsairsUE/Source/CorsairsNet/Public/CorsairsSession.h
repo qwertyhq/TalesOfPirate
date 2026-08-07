@@ -29,6 +29,40 @@ struct FCorsairsCharacterSlot
 	int32 TypeId = 0;
 };
 
+/** Персонаж, попавший в поле зрения: другой игрок, NPC или монстр. */
+USTRUCT(BlueprintType)
+struct FCorsairsWorldActor
+{
+	GENERATED_BODY()
+
+	/** Идентификатор в мире. По нему приходят все дальнейшие сообщения. */
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int64 WorldId = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	FString Name;
+
+	/** Положение в координатах карты. */
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	FIntPoint Position = FIntPoint::ZeroValue;
+
+	/** Угол поворота в десятых долях градуса, как в протоколе. */
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int32 Angle = 0;
+
+	/** Тип модели. Разворачивается в тело через таблицу персонажей. */
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int32 TypeId = 0;
+
+	/** Управляющий тип: игрок, NPC, монстр. */
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int32 CtrlType = 0;
+};
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCorsairsActorSeen,
+											const FCorsairsWorldActor&, Actor);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCorsairsActorLeft, int64, WorldId);
+
 /** Стадия входа. Именно она определяет, что показывать на экране. */
 UENUM(BlueprintType)
 enum class ECorsairsLoginStage : uint8
@@ -95,6 +129,15 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
 	FCorsairsLoginStageChanged OnStageChanged;
 
+	/** Персонаж попал в поле зрения. Сервер шлёт это и для NPC, и для
+	 *  монстров, и для других игроков — на garner одних только NPC 452. */
+	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
+	FCorsairsActorSeen OnActorSeen;
+
+	/** Персонаж вышел из поля зрения. */
+	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
+	FCorsairsActorLeft OnActorLeft;
+
 	/** Отправляет серверу путь движения.
 	 *
 	 *  Путь — список точек в координатах карты (100 единиц на клетку). Сервер
@@ -117,6 +160,23 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
 	FString GetMapName() const { return MapName; }
+
+	/** Кого сервер держит в поле зрения прямо сейчас.
+	 *
+	 *  Список ведёт сама сессия, а не подписчик: делегат-свойство при
+	 *  обращении из Python отдаёт копию, и подписка на неё теряется. Хранить
+	 *  состояние здесь надёжнее и к тому же полезно — новому подписчику не
+	 *  нужно ждать следующего сообщения, чтобы узнать, кто вокруг. */
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	const TArray<FCorsairsWorldActor>& GetVisibleActors() const { return VisibleActors; }
+
+	/** Сколько каких команд пришло от сервера, по их номерам.
+	 *
+	 *  Нужно для разбора: «персонажей в поле зрения ноль» может означать и
+	 *  что рядом никого нет, и что команда не обрабатывается. Счётчик
+	 *  различает эти случаи. */
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	TMap<int32, int32> GetReceivedCommands() const { return ReceivedCommands; }
 
 	/** Второй пароль учётной записи. Задаётся заранее: экрана для его ввода
 	 *  пока нет, а без него сервер не пускает в мир. */
@@ -145,6 +205,9 @@ private:
 	/** Номер пакета действия. Сервер отслеживает порядок команд по нему и
 	 *  отбрасывает устаревшие. */
 	int64 ActionPacketId = 0;
+
+	TMap<int32, int32> ReceivedCommands;
+	TArray<FCorsairsWorldActor> VisibleActors;
 
 	FString PendingAccount;
 	FString PendingPasswordHash;

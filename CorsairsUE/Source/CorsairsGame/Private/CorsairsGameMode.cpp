@@ -41,6 +41,8 @@ void ACorsairsGameMode::BeginPlay()
 	// объекта ему нечего показывать даже до подключения.
 	Session = NewObject<UCorsairsSession>(this);
 	Session->OnStageChanged.AddDynamic(this, &ACorsairsGameMode::HandleStageChanged);
+	Session->OnActorSeen.AddDynamic(this, &ACorsairsGameMode::HandleActorSeen);
+	Session->OnActorLeft.AddDynamic(this, &ACorsairsGameMode::HandleActorLeft);
 
 	if (!bAutoLogin)
 	{
@@ -156,6 +158,62 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 
 	default:
 		break;
+	}
+}
+
+void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
+{
+	if (WorldActors.Contains(Actor.WorldId))
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (World == nullptr)
+	{
+		return;
+	}
+
+	// Координаты и поворот переводятся так же, как для объектов сцены: ось Y
+	// инвертируется, угол приходит в десятых долях градуса.
+	const FVector Location(static_cast<double>(Actor.Position.X),
+						   -static_cast<double>(Actor.Position.Y),
+						   SpawnHeightMargin);
+	const FRotator Rotation(0.0, static_cast<double>(Actor.Angle) / 10.0, 0.0);
+
+	ACorsairsPlayerCharacter* Spawned = World->SpawnActor<ACorsairsPlayerCharacter>(
+		ACorsairsPlayerCharacter::StaticClass(), Location, Rotation);
+	if (Spawned == nullptr)
+	{
+		return;
+	}
+
+	Spawned->SetActorLabel(Actor.Name.IsEmpty()
+							   ? FString::Printf(TEXT("Actor_%lld"), Actor.WorldId)
+							   : Actor.Name);
+
+	const FString MeshPath = ResolveBodyMesh(Actor.TypeId);
+	if (!MeshPath.IsEmpty() && Spawned->SetBodyMesh(MeshPath))
+	{
+		const FString AnimPath = ResolveField(Actor.TypeId, TEXT("animation"));
+		if (!AnimPath.IsEmpty())
+		{
+			Spawned->SetBodyAnimation(AnimPath);
+		}
+	}
+
+	WorldActors.Add(Actor.WorldId, Spawned);
+}
+
+void ACorsairsGameMode::HandleActorLeft(int64 WorldId)
+{
+	if (TObjectPtr<AActor>* Found = WorldActors.Find(WorldId))
+	{
+		if (*Found != nullptr)
+		{
+			(*Found)->Destroy();
+		}
+		WorldActors.Remove(WorldId);
 	}
 }
 

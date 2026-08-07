@@ -132,6 +132,25 @@ def main(report):
                 return
             time.sleep(POLL_INTERVAL)
 
+        # Сервер присылает то, что попало в поле зрения: NPC, монстров и
+        # других игроков. Именно так населяется мир — запекать их в уровень
+        # не нужно.
+        # Список ведёт сама сессия: делегат-свойство при обращении из Python
+        # отдаёт копию, и подписка на неё теряется.
+        for _ in range(120):
+            session.poll()
+            time.sleep(POLL_INTERVAL)
+        seen = session.get_visible_actors()
+        report.line(f"ПЕРСОНАЖЕЙ В ПОЛЕ ЗРЕНИЯ: {len(seen)}")
+        cmds = session.get_received_commands()
+        top = sorted(cmds.items(), key=lambda kv: -kv[1])[:8]
+        report.line(f"команд от сервера: {sum(cmds.values())} всего, "
+                    f"{len(cmds)} различных")
+        report.line(f"  частые (номер: сколько): {top}")
+        for a in seen[:6]:
+            report.line(f"  {a.name or '(без имени)'} — тип {a.type_id}, "
+                        f"позиция ({a.position.x}, {a.position.y})")
+
         report.line("УСПЕХ: клиент в мире, команда движения принята сервером")
     elif stage == unreal.CorsairsLoginStage.FAILED:
         report.error("ПРОВАЛ: вход в мир отклонён")
