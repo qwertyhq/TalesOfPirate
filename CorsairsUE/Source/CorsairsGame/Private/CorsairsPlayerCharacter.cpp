@@ -93,7 +93,7 @@ ACorsairsPlayerCharacter::ACorsairsPlayerCharacter()
 	// Unreal, а 90 по крену поднимает её из положения лёжа. Ось «вверх» у
 	// исходных моделей не совпадает с движковой, и в файле она не записана —
 	// это знание живёт в самом движке оригинала.
-	GetMesh()->SetRelativeRotation(FRotator(0.0f, -90.0f, -90.0f));
+	GetMesh()->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
 }
 
 bool ACorsairsPlayerCharacter::SetBodyMesh(const FString& AssetPath)
@@ -201,16 +201,17 @@ void ACorsairsPlayerCharacter::FinishBody()
 		}
 	}
 
-	// Подошвы опускаются к низу капсулы: начало координат модели у ног, но
-	// нижняя грань объёма может быть и не в нуле.
+	// Подошвы ставятся на низ капсулы по объединённому объёму. Границы одного
+	// компонента тут не годятся: основной меш — это голова, её низ на высоте
+	// плеч, и персонаж уходил в землю по грудь.
 	GetMesh()->SetRelativeLocation(
 		FVector(0.0, 0.0, -CapsuleHalfHeight - Combined.Min.Z * Factor));
 
-	// Камера наводится на середину фигуры: начало координат модели у ног и
-	// чуть смещено вбок, и без поправки персонаж стоит не по центру кадра.
-	const FVector Centre = Combined.GetCenter() * Factor;
+	// Камера наводится на середину фигуры. Рыскание поворачивает модель
+	// вокруг вертикали, поэтому смещение середины надо повернуть тем же
+	// поворотом, иначе поправка уйдёт не в ту сторону.
 	const FRotator MeshRotation = GetMesh()->GetRelativeRotation();
-	const FVector Aimed = MeshRotation.RotateVector(Centre);
+	const FVector Aimed = MeshRotation.RotateVector(Combined.GetCenter() * Factor);
 	CameraBoom->TargetOffset = FVector(Aimed.X, Aimed.Y, 0.0);
 
 	UE_LOG(LogCorsairsCharacter, Log,
@@ -373,6 +374,11 @@ void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 			   bMeshVisible ? TEXT("да") : TEXT("НЕТ"),
 			   MeshLocation.X, MeshLocation.Y, MeshLocation.Z, MeshScale.X,
 			   MeshBounds.BoxExtent.X, MeshBounds.BoxExtent.Y, MeshBounds.BoxExtent.Z);
+
+		UE_LOG(LogTemp, Warning,
+			   TEXT("  рыскание: контроллер %.1f, камера %.1f, актёр %.1f; поправка цели (%.0f, %.0f)"),
+			   Control.Yaw, CameraRotation.Yaw, GetActorRotation().Yaw,
+			   CameraBoom->TargetOffset.X, CameraBoom->TargetOffset.Y);
 
 		UE_LOG(LogTemp, Warning,
 			   TEXT("  центр модели в мире (%.0f, %.0f, %.0f), цель камеры (%.0f, %.0f, %.0f)"),
