@@ -106,6 +106,17 @@ bool ACorsairsPlayerCharacter::SetBodyMesh(const FString& AssetPath)
 		return false;
 	}
 
+	// Прежние части снимаются: иначе при смене внешности они остаются висеть
+	// поверх новой модели.
+	for (USkeletalMeshComponent* Part : BodyParts)
+	{
+		if (Part != nullptr)
+		{
+			Part->DestroyComponent();
+		}
+	}
+	BodyParts.Reset();
+
 	GetMesh()->SetSkeletalMesh(Mesh);
 
 	// Модели персонажей приходят в своём масштабе — исходный движок приводил
@@ -123,6 +134,40 @@ bool ACorsairsPlayerCharacter::SetBodyMesh(const FString& AssetPath)
 			   TEXT("модель %s: высота %.0f см, масштаб %.2f"),
 			   *AssetPath, ModelHeight, Factor);
 	}
+	return true;
+}
+
+bool ACorsairsPlayerCharacter::AddBodyPart(const FString& AssetPath)
+{
+	if (AssetPath.IsEmpty())
+	{
+		return false;
+	}
+
+	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *AssetPath);
+	if (Mesh == nullptr)
+	{
+		UE_LOG(LogCorsairsCharacter, Warning, TEXT("часть тела не загрузилась: %s"), *AssetPath);
+		return false;
+	}
+
+	USkeletalMeshComponent* Part = NewObject<USkeletalMeshComponent>(this);
+	if (Part == nullptr)
+	{
+		return false;
+	}
+
+	Part->SetupAttachment(GetMesh());
+	Part->RegisterComponent();
+	Part->SetSkeletalMesh(Mesh);
+
+	// Поза берётся у основной части: скелет у всех кусков один, и анимировать
+	// каждый отдельно значило бы получить рассыпающегося персонажа.
+	Part->SetLeaderPoseComponent(GetMesh());
+	Part->SetRelativeTransform(FTransform::Identity);
+
+	BodyParts.Add(Part);
+	UE_LOG(LogCorsairsCharacter, Log, TEXT("часть тела: %s"), *AssetPath);
 	return true;
 }
 

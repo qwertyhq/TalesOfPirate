@@ -53,6 +53,14 @@ protected:
 	virtual void BeginPlay() override;
 
 public:
+	/** Добавляет часть тела поверх основной модели.
+	 *
+	 *  Персонаж собирается из пяти моделей: тело, голова, руки, одежда.
+	 *  Дополнительные части — отдельные компоненты, разделяющие позу с
+	 *  основным: скелет у них общий, и двигаться они обязаны как одно целое. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	bool AddBodyPart(const FString& AssetPath);
+
 	/** Привязывает персонажа к карте высот указанной карты. */
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	bool UseTerrainHeights(const FString& MapName);
@@ -92,6 +100,11 @@ private:
 
 	/** Положение, о котором серверу уже сообщено, в координатах карты. */
 	FIntPoint ReportedPosition = FIntPoint::ZeroValue;
+
+	/** Дополнительные части тела. Хранятся, чтобы снимать их при смене
+	 *  внешности — иначе прежние остались бы висеть поверх новых. */
+	UPROPERTY()
+	TArray<TObjectPtr<class USkeletalMeshComponent>> BodyParts;
 
 	/** Карта высот текущей карты. Персонаж удерживается на ней вручную:
 	 *  рельеф пришёл из glTF без физических данных, и провалиться сквозь

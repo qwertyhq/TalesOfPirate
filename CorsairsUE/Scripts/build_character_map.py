@@ -28,6 +28,10 @@ ANIMATION_ROOT = "/Game/Animations"
 # Нулевой вариант скина — базовое тело без снаряжения.
 BASE_SKIN_VARIANT = "000000"
 
+# Сколько частей у персонажа. Значение зафиксировано форматом: пять слотов
+# внешности на модель (MPChaLoadInfo в оригинальном клиенте).
+PART_NUM = 5
+
 
 def main():
     if len(sys.argv) < 3:
@@ -37,18 +41,42 @@ def main():
     db_path, out_path = sys.argv[1], sys.argv[2]
 
     db = sqlite3.connect(db_path)
-    rows = list(db.execute("SELECT id, name, model FROM characters"))
+    rows = list(db.execute(
+        "SELECT id, name, model, suit_id, skin_info FROM characters"))
     db.close()
 
     mapping = {}
-    for cha_id, name, model in rows:
+    for cha_id, name, model, suit_id, skin_info in rows:
         if model is None:
             continue
         bone = f"{int(model):04d}"
-        asset_name = f"{bone}{BASE_SKIN_VARIANT}"
+
+        # Персонаж собирается из пяти частей, а не из одной модели. Номер
+        # файла каждой — `модель * 1000000 + костюм * 10000 + номер части`;
+        # формула взята из CharacterModel.cpp оригинального клиента. Часть
+        # существует, если ненулевой соответствующий элемент skin_info.
+        #
+        # Без этого у человеческих персонажей загружалась только первая часть
+        # — голова, — и в кадре висело лицо без тела.
+        parts = []
+        skins = [int(v) for v in str(skin_info or "").split(",") if v.strip().lstrip("-").isdigit()]
+        for index in range(PART_NUM):
+            if index < len(skins) and skins[index] == 0:
+                continue
+            file_id = int(model) * 1000000 + int(suit_id or 0) * 10000 + index
+            asset = f"{file_id:010d}"
+            parts.append(f"{CONTENT_ROOT}/{asset}/SkeletalMeshes/{asset}")
+
+        if not parts:
+            asset = f"{bone}{BASE_SKIN_VARIANT}"
+            parts.append(f"{CONTENT_ROOT}/{asset}/SkeletalMeshes/{asset}")
+
         mapping[str(cha_id)] = {
             "name": name,
-            "mesh": f"{CONTENT_ROOT}/{asset_name}/SkeletalMeshes/{asset_name}",
+            # Первая часть — основная: к ней крепятся остальные, и её скелет
+            # задаёт позу всей сборке.
+            "mesh": parts[0],
+            "parts": parts,
             # Скелет и дорожка приходят из одного .lab, поэтому анимация
             # адресуется тем же четырёхзначным номером.
             "animation": f"{ANIMATION_ROOT}/{bone}/SkeletalMeshes/{bone}_Anim",

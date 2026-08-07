@@ -77,6 +77,10 @@ private:
 	 *  нет, и тело останется невидимым. */
 	FString ResolveBodyMesh(int32 TypeId) const;
 
+	/** Пути ко всем частям тела: персонаж собирается из пяти кусков, а не из
+	 *  одной модели. Первая часть основная, остальные крепятся к её позе. */
+	TArray<FString> ResolveBodyParts(int32 TypeId) const;
+
 	/** Значение поля из таблицы персонажей по типу. Пустая строка — записи
 	 *  или поля нет. */
 	FString ResolveField(int32 TypeId, const TCHAR* Field) const;

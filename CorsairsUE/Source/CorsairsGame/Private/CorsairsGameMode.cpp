@@ -185,7 +185,8 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 				break;
 			}
 
-			const FString MeshPath = ResolveBodyMesh(Slot.TypeId);
+			const TArray<FString> Parts = ResolveBodyParts(Slot.TypeId);
+			const FString MeshPath = Parts.Num() > 0 ? Parts[0] : ResolveBodyMesh(Slot.TypeId);
 			if (MeshPath.IsEmpty())
 			{
 				UE_LOG(LogCorsairsGameMode, Warning,
@@ -194,6 +195,14 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 			else if (Character->SetBodyMesh(MeshPath))
 			{
 				UE_LOG(LogCorsairsGameMode, Log, TEXT("тело: %s"), *MeshPath);
+
+				// Остальные части крепятся к позе основной: голова, руки и
+				// одежда лежат отдельными моделями, и без них в кадре висит
+				// одно лицо.
+				for (int32 Index = 1; Index < Parts.Num(); ++Index)
+				{
+					Character->AddBodyPart(Parts[Index]);
+				}
 
 				// Анимация ставится после тела: проверка совместимости
 				// скелетов опирается на уже назначенный меш.
@@ -303,9 +312,15 @@ void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 							   ? FString::Printf(TEXT("Actor_%lld"), Actor.WorldId)
 							   : Actor.Name);
 
-	const FString MeshPath = ResolveBodyMesh(Actor.TypeId);
+	const TArray<FString> Parts = ResolveBodyParts(Actor.TypeId);
+	const FString MeshPath = Parts.Num() > 0 ? Parts[0] : ResolveBodyMesh(Actor.TypeId);
 	if (!MeshPath.IsEmpty() && Spawned->SetBodyMesh(MeshPath))
 	{
+		for (int32 Index = 1; Index < Parts.Num(); ++Index)
+		{
+			Spawned->AddBodyPart(Parts[Index]);
+		}
+
 		const FString AnimPath = ResolveField(Actor.TypeId, TEXT("animation"));
 		if (!AnimPath.IsEmpty())
 		{
@@ -331,6 +346,51 @@ void ACorsairsGameMode::HandleActorLeft(int64 WorldId)
 FString ACorsairsGameMode::ResolveBodyMesh(int32 TypeId) const
 {
 	return ResolveField(TypeId, TEXT("mesh"));
+}
+
+TArray<FString> ACorsairsGameMode::ResolveBodyParts(int32 TypeId) const
+{
+	TArray<FString> Parts;
+
+	const FString Path = FPaths::ProjectDir() / CharacterMapRelativePath;
+	FString Text;
+	if (!FFileHelper::LoadFileToString(Text, *Path))
+	{
+		return Parts;
+	}
+
+	TSharedPtr<FJsonObject> Root;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Text);
+	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+	{
+		return Parts;
+	}
+
+	const TSharedPtr<FJsonObject>* Characters = nullptr;
+	if (!Root->TryGetObjectField(TEXT("characters"), Characters) || Characters == nullptr)
+	{
+		return Parts;
+	}
+
+	const TSharedPtr<FJsonObject>* Entry = nullptr;
+	if (!(*Characters)->TryGetObjectField(FString::FromInt(TypeId), Entry) || Entry == nullptr)
+	{
+		return Parts;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+	if ((*Entry)->TryGetArrayField(TEXT("parts"), Values) && Values != nullptr)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *Values)
+		{
+			FString PartPath;
+			if (Value.IsValid() && Value->TryGetString(PartPath) && !PartPath.IsEmpty())
+			{
+				Parts.Add(PartPath);
+			}
+		}
+	}
+	return Parts;
 }
 
 FString ACorsairsGameMode::ResolveField(int32 TypeId, const TCHAR* Field) const
