@@ -374,8 +374,13 @@ Builder удаляет/пересоздаёт только ignored/generated pac
 world. Marker-only world не является playable или visual acceptance.
 Importer затем выполняется дважды; второй проход не создаёт, не обновляет,
 не удаляет и не сохраняет ни одного объекта/package, а его пять финальных
-package hashes byte-for-byte совпадают с первым проходом. Независимый checker
-читает сохранённые packages и reports с диска и ничего не мутирует.
+package-family records byte-for-byte совпадают с первым проходом. Каждый из
+пяти records содержит exact package path, полный sorted file set и SHA-256/size
+для required `.uasset`/`.umap` primary плюс всех существующих same-stem
+`.uexp/.ubulk/.uptnl`, а family digest связывает весь canonical JSON file set.
+Добавленный, удалённый или изменённый только sidecar нарушает idempotence.
+Независимый checker заново перечисляет ровно эти suffixes, читает сохранённые
+packages и reports с диска и ничего не мутирует.
 
 Texture/package readback обязан подтвердить весь sampling contract:
 
@@ -409,9 +414,19 @@ Data/Heights/garner.block.raw
 Data/Heights/garner.terrain.json
 ```
 
+UBT destination is literal `$(ProjectDir)/<path>` with `StagedFileType.UFS`;
+audit requires stage `CorsairsUE/<path>`, UnrealPak member
+`../../../CorsairsUE/<path>`, and runtime `FPaths::ProjectDir()/Data/...` to
+name the same bytes for all three records.
+
 Task 7 installer выполняется до Game build и cook. Package audit повторно
-хеширует все три staged/archive файла, требует Garner map/assets и запрещает
-любой runtime binary/module descriptor `CorsairsImport`. Development-only
+хеширует все три runtime inputs. При `-pak` он из UAT outputs создаёт и хеширует
+strict sorted stage/container и archive inventory, сохраняет container list,
+извлекает три exact UFS paths matching
+engine `UnrealPak` в transaction-private evidence и сравнивает source/extracted
+hashes; loose archive files не предполагаются. Audit требует Garner map/assets
+и запрещает любой runtime binary/module descriptor `CorsairsImport`.
+Development-only
 `Corsairs.Terrain.ReferenceRuntime.CookedWorld` запускается из packaged Game
 под `-NullRHI`, через runtime `LoadObject<UWorld>` загружает exact
 `/Game/Maps/Garner.Garner`, проверяет world/GameMode/actor/material bindings и
@@ -433,21 +448,72 @@ Task 7 manifest + installer twice -> Editor build
 foreground wait. Все тяжёлые команды идут под `nice -n 10`, CMake/UE
 parallelism ограничен двумя actions, перед каждым запуском проверяются
 конкурирующие UE/client/build processes и `pmset -g therm`. Thermal warning
-останавливает цепочку до запуска. После каждого шага и при любом
+останавливает цепочку до запуска. Healthy thermal output обязан подтвердить
+все три literal `No thermal/performance/CPU power ... recorded` состояния;
+warning, missing line, неизвестный diagnostic или nonzero probe exit запускает
+ноль heavy children. После каждого шага и при любом
 success/failure/timeout/interrupt orchestrator завершает и `wait`-ит только
 собственную process tree; broad process-name kill запрещён.
 
-До первой мутации orchestrator сохраняет exact bytes/existence/mode/hash
-предыдущих top manifest, двух runtime-файлов, terrain-base bundle и пяти
-managed package families со всеми `.uasset/.umap/.uexp/.ubulk/.uptnl`
-sidecars. 0600 journal, same-volume recovery directory, file/parent fsync и
-startup recovery обеспечивают полный rollback. Неуспешный rollback сохраняет
-recovery evidence и возвращает `RECOVERY_REQUIRED`; частичный success
-запрещён. Только после всех gates атомарно публикуется
+До первой мутации orchestrator под persistent no-unlink `flock` сохраняет exact
+bytes/existence/mode/hash предыдущих top manifest, двух runtime-файлов,
+terrain-base bundle и пяти managed package families со всеми
+`.uasset/.umap/.uexp/.ubulk/.uptnl` sidecars. Exact 0600 journal имеет строгие
+monotonic phases `SNAPSHOT -> TASK7_PUBLISHED -> RUNTIME_INSTALLED ->
+UNREAL_RUNNING -> EDITOR_VERIFIED -> PACKAGE_VERIFIED -> BUNDLE_PREPARED ->
+BUNDLE_REPLACED -> COMMITTED`, active PID/PGID/start-token/executable/argv hash,
+same-volume recovery directory, атомарные file/parent fsync updates и
+fail-closed startup recovery до нового запуска. Любой pre-`COMMITTED` crash,
+включая окно после bundle replace/parent fsync, восстанавливает и проверяет
+старый snapshot, durable recovery-only `ROLLED_BACK` разрешает idempotent
+cleanup после уже проверенного restore; `COMMITTED` crash только валидирует
+новый bundle и очищает recovery. Foreign path/process identity, malformed journal или failed restore
+возвращает `RECOVERY_REQUIRED` с literal `--recover-only` командой и сохраняет
+evidence; частичный success запрещён.
+
+Новый transaction разрешён только когда physical repo root совпадает с
+`git rev-parse --show-toplevel`, HEAD является записанным 40-hex `sourceHead`,
+а `git status --porcelain=v1 --untracked-files=all` пуст; ignored generated
+paths Git не выводит, ими владеет snapshot. Recovery требует тот же HEAD и
+чистый checkout либо fail-closed сообщает required commit до target mutation;
+тот же gate повторяется перед `COMMITTED`, поэтому tracked mutation не может
+дать успешный bundle.
+
+Это outer transaction над двумя самостоятельными Task 7 owners. До любого
+outer restore top manifest/runtime pair orchestrator сначала доказывает, что
+recorded child process отсутствует, затем в порядке publisher -> installer
+проверяет четыре exact control paths каждого owner (`lock`, `lock.retired`,
+canonical journal, `journal.retired`). Если хотя бы один существует, только
+exact original owner command запускается через тот же durable ActiveProcess
+handshake: outer code не читает и не удаляет inner journal. Owner обязан
+закончить собственный startup recovery, вернуть success, удалить все четыре
+control paths и подтвердить целостный current manifest/pair. Full retry
+publisher может оставить новый unreferenced run, после чего installer recovery
+использует current manifest; лишь затем outer rollback восстанавливает свой
+snapshot. Busy/foreign/malformed inner state, failed retry или invalid target
+останавливает outer restore с `RECOVERY_REQUIRED` и сохранёнными backups.
+Recovery-only nested publisher также проходит process/thermal gates, потому
+что его единственный owner retry является полной production command. Fault
+matrix покрывает crash во всех inner publisher/installer phases и окно между
+успехом retry и очисткой outer `ActiveProcess`.
+
+Каждый run пишет level/import/check/automation/cook/runtime reports в unique
+`artifacts/maps/reports/runs/<transaction-id>`, package output в unique
+`artifacts/maps/package-run/<transaction-id>`, а Editor/Game receipts и каждый
+project-owned receipt `BuildProduct` копирует и rehash-ит в immutable run
+evidence. Bundle никогда не ссылается на перезаписываемые shared reports,
+receipts или binaries, поэтому восстановленный предыдущий bundle сохраняет
+валидную transitive hash chain. Только после всех gates атомарно публикуется
 `artifacts/maps/reports/garner-terrain-base.json` с нормализованными путями и
 повторно вычисленными SHA-256 для Task 7 manifest/seven files, runtime pair,
-reports, пяти packages, Editor/Game build identities, cook/package,
-executable и packaged runtime report.
+literal schema-v1 level/import/check reports, полных пяти package families,
+run-private Editor/Game build evidence, cook/package, executable и packaged
+runtime report. Stage/archive inventory, UnrealPak member list, cook-package и
+единственный canonical runtime-observation event также имеют literal schema-v1;
+runtime event связывает transaction ID и hashes/sizes трёх UFS inputs. Строгие
+DTO запрещают unknown/duplicate keys, неточные
+key/type/path shapes, unsorted/duplicate arrays и PASS с nonempty issues;
+mutation matrices изменяют каждый literal field и каждый family sidecar.
 
 `garner-terrain-base.json` является immutable input для scene parity Task 8,
 но не заменяет его более строгий `garner-base-bundle.json`. Только scene Task

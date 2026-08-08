@@ -2476,14 +2476,27 @@ def assert_legacy_target_allowed(
 ) -> None: ...
 
 
-def validate_level_build_report(data: dict) -> list[ValidationIssue]: ...
-def validate_import_report(data: dict) -> list[ValidationIssue]: ...
+def validate_level_build_report(
+    data: dict,
+    repo_root: Path,
+) -> list[ValidationIssue]: ...
+def validate_import_report(
+    data: dict,
+    repo_root: Path,
+) -> list[ValidationIssue]: ...
 def validate_idempotent_import_reports(
     first: dict,
     second: dict,
 ) -> list[ValidationIssue]: ...
-def validate_check_report(data: dict) -> list[ValidationIssue]: ...
-def validate_base_bundle(data: dict, bundle_path: Path) -> list[ValidationIssue]: ...
+def validate_check_report(
+    data: dict,
+    repo_root: Path,
+) -> list[ValidationIssue]: ...
+def validate_base_bundle(
+    data: dict,
+    bundle_path: Path,
+    repo_root: Path,
+) -> list[ValidationIssue]: ...
 ```
 
 `asset_paths` and `reference_actor_object_path` use these exact bodies:
@@ -2613,6 +2626,11 @@ build is not made permanently dependent on ignored generated files; the
 packaging/runtime gate itself fails if any input is missing, has the wrong
 hash, is omitted from staged output, or cannot be read through the same
 `FPaths::ProjectDir()/Data/...` path used by runtime code.
+`RuntimeDependencies` uses `$(ProjectDir)/<project-relative-path>` with
+`StagedFileType.UFS`. The normalized stage destination is
+`CorsairsUE/<project-relative-path>` and the corresponding UnrealPak member is
+`../../../CorsairsUE/<project-relative-path>`; each of the three exact mappings
+is asserted independently.
 The staged/archive audit also requires no `CorsairsImport` runtime binary or
 module descriptor; its presence is an Editor-module leak even if cook exits
 zero.
@@ -2621,9 +2639,237 @@ zero.
 
 All entry points accept exactly the positional arguments from the canonical
 plan, write `<report>.tmp`, flush/fsync, `os.replace`, fsync the parent, then
-self-validate. They write an issue-bearing failure report and raise
+self-validate. The temp is created exclusively as a same-directory physical
+0600 regular file and both temp/final leaves must be inside the current
+transaction evidence root. They write an issue-bearing failure report and raise
 `RuntimeError` on any issue. Exit code or the Unreal line `Python script
 executed successfully` is never accepted without a valid report.
+
+All report/bundle validators are strict DTO parsers, not best-effort readers. Unknown
+keys, duplicate JSON keys, booleans in integer fields, non-finite numbers,
+absolute or non-normalized filesystem paths, an uppercase/non-64-character SHA-256,
+and an unsorted or duplicate list are fatal. `status="PASS"` requires
+`issues=[]`; `status="FAIL"` requires at least one issue. An issue has exactly
+this shape:
+
+The only path-grammar exception is `ContainerMember.path`, whose literal
+`../../../<normalized-mount-suffix>` form is defined below; it is never passed
+to a host filesystem API or resolved as a repository path.
+
+```text
+Issue := {
+  "code": nonempty string,
+  "field": JSON-pointer-like absolute string,
+  "detail": nonempty string
+}
+
+FileEvidence := {
+  "path": normalized repository-relative POSIX path,
+  "sha256": 64 lowercase hex characters,
+  "sizeBytes": nonnegative integer
+}
+
+ReportEvidence := FileEvidence
+
+ObjectChange := {
+  "objectPath": absolute Unreal object path,
+  "className": exact absolute native `/Script/...` class path,
+  "reason": nonempty stable reason code
+}
+```
+
+Every evidenced or snapshotted present file must be a physical regular file
+with `nlink==1`; hard links are rejected just like symlinks and special files.
+Zero bytes are allowed only for a framework-generated automation-report member;
+manifests, DTO reports, receipts, build products, package primaries/sidecars,
+containers, executable, and all three runtime inputs must have `sizeBytes>0`.
+
+The five physical package families are exact. The first four have a required
+`.uasset` primary; Garner has a required `.umap` primary. Each may additionally
+have only same-stem `.uexp`, `.ubulk`, and `.uptnl` files. A file with any other
+same-stem suffix, a symlink/special file, an omitted on-disk sidecar, or a
+reported nonexistent sidecar is fatal:
+
+```text
+PackageFileEvidence := FileEvidence
+
+PackageFamilyEvidence := {
+  "family": one of "mesh", "texture", "material", "instance", "map",
+  "package": exact `/Game/...` package path for that family,
+  "files": nonempty list[PackageFileEvidence] sorted by path,
+  "familySha256": 64 lowercase hex characters
+}
+```
+
+`familySha256` is SHA-256 of UTF-8
+`json.dumps(files, sort_keys=True, separators=(",", ":"),
+ensure_ascii=False)` using the literal `files` array above. The list named
+`finalPackageHashes` contains exactly five `PackageFamilyEvidence` records in
+literal family order `mesh, texture, material, instance, map`; despite its
+historical name it binds every physical file, not only five primaries. Every
+producer enumerates the four allowed suffixes for each exact stem directly;
+recursive discovery and parent-directory globs are forbidden.
+
+The reusable `ReferenceState` DTO has exactly this shape and exact enum/string
+values from the material contract above:
+
+```text
+ReferenceState := {
+  "mesh": {
+    "objectPath": "/Game/Terrain/Reference/Garner/SM_Garner_17_21",
+    "sourceGltfSha256": 64 lowercase hex characters,
+    "sourceBinSha256": 64 lowercase hex characters,
+    "naniteEnabled": true,
+    "materialSlot0":
+      "/Game/Terrain/Reference/Garner/MI_Garner_17_21"
+  },
+  "texture": {
+    "objectPath": "/Game/Terrain/Reference/Garner/T_Garner_17_21",
+    "sourceWidth": 4096,
+    "sourceHeight": 4096,
+    "sourceFormat": "RGBA8",
+    "sourceSha256": 64 lowercase hex characters,
+    "srgb": true,
+    "compression": "TC_DEFAULT",
+    "filter": "TF_BILINEAR",
+    "addressX": "TA_CLAMP",
+    "addressY": "TA_CLAMP",
+    "mipGenSettings": "TMGS_FROM_TEXTURE_GROUP",
+    "lodGroup": "TEXTUREGROUP_WORLD",
+    "lodBias": 0,
+    "neverStream": false
+  },
+  "material": {
+    "objectPath": "/Game/Terrain/Reference/M_TerrainReference",
+    "blendMode": "BLEND_MASKED",
+    "shadingModel": "MSM_UNLIT",
+    "parameterName": "BaseColorTexture",
+    "samplerType": "SAMPLERTYPE_COLOR",
+    "samplerSource": "SSM_FROM_TEXTURE_ASSET",
+    "rgbOutput": "MP_EMISSIVE_COLOR",
+    "alphaOutput": "MP_OPACITY_MASK",
+    "usageFlags": ["MATUSAGE_NANITE", "MATUSAGE_STATIC_MESH"]
+  },
+  "instance": {
+    "objectPath":
+      "/Game/Terrain/Reference/Garner/MI_Garner_17_21",
+    "parent": "/Game/Terrain/Reference/M_TerrainReference",
+    "baseColorTexture":
+      "/Game/Terrain/Reference/Garner/T_Garner_17_21"
+  },
+  "actor": {
+    "objectPath":
+      "/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrain_Garner_17_21",
+    "className": "/Script/Engine.StaticMeshActor",
+    "label": "ReferenceTerrain_Garner_17_21",
+    "tag": "CorsairsReferenceTerrain",
+    "locationCm": [217600.0, -268800.0, 0.0],
+    "staticMesh": "/Game/Terrain/Reference/Garner/SM_Garner_17_21",
+    "boundsMinCm": two finite numbers within 1 cm of
+      [217600.0, -281600.0],
+    "boundsMaxCm": two finite numbers within 1 cm of
+      [230400.0, -268800.0],
+    "componentMaterialSlot0":
+      "/Game/Terrain/Reference/Garner/MI_Garner_17_21"
+  }
+}
+```
+
+The level-build success report contains exactly:
+
+```text
+{
+  "schemaVersion": 1,
+  "reportType": "garner-reference-terrain-level-build",
+  "status": "PASS",
+  "transactionId": 32 lowercase hex,
+  "sourceHead": 40 lowercase hex,
+  "manifest": FileEvidence,
+  "mapPackage": "/Game/Maps/Garner",
+  "worldObject": "/Game/Maps/Garner.Garner",
+  "mapPackageHash": PackageFamilyEvidence for the map family immediately
+    after the builder save/reload,
+  "markerObject":
+    "/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrainBuildRoot",
+  "gameModeClass": "/Script/CorsairsGame.CorsairsGameMode",
+  "replacedExistingMap": boolean,
+  "issues": []
+}
+```
+
+The import success report contains exactly:
+
+```text
+{
+  "schemaVersion": 1,
+  "reportType": "garner-reference-terrain-import",
+  "status": "PASS",
+  "transactionId": 32 lowercase hex,
+  "sourceHead": 40 lowercase hex,
+  "manifest": FileEvidence,
+  "mapPackage": "/Game/Maps/Garner",
+  "worldObject": "/Game/Maps/Garner.Garner",
+  "markerObject": exact marker object path,
+  "gameModeClass": "/Script/CorsairsGame.CorsairsGameMode",
+  "beforeMapPackageHash": PackageFamilyEvidence observed before this pass,
+  "referenceState": ReferenceState,
+  "created": sorted unique list[ObjectChange],
+  "updated": sorted unique list[ObjectChange],
+  "deleted": sorted unique list[ObjectChange],
+  "savedPackages": sorted unique list of absolute `/Game/...` package paths,
+  "finalPackageHashes": five PackageFamilyEvidence records,
+  "issues": []
+}
+```
+
+Object-change lists sort by `(objectPath, className, reason)`. The check success
+report contains exactly:
+
+```text
+{
+  "schemaVersion": 1,
+  "reportType": "garner-reference-terrain-check",
+  "status": "PASS",
+  "transactionId": 32 lowercase hex,
+  "sourceHead": 40 lowercase hex,
+  "manifest": FileEvidence,
+  "levelBuildReport": ReportEvidence,
+  "importPass1Report": ReportEvidence,
+  "importPass2Report": ReportEvidence,
+  "mapPackage": "/Game/Maps/Garner",
+  "worldObject": "/Game/Maps/Garner.Garner",
+  "markerObject": exact marker object path,
+  "gameModeClass": "/Script/CorsairsGame.CorsairsGameMode",
+  "referenceState": ReferenceState,
+  "finalPackageHashes": five PackageFamilyEvidence records,
+  "overlappingLegacyActors": sorted unique list of absolute object paths,
+  "visibleLegacyOverlaps": [],
+  "grassOverrides": [],
+  "materialFallbackCount": 0,
+  "materialUsageErrorCount": 0,
+  "translucentNaniteCount": 0,
+  "issues": []
+}
+```
+
+Failure reports retain every exact success key and set `status="FAIL"`. A field
+that could not be observed may be literal `null` only in a failure report and
+only when at least one `Issue.field` equals that field's exact JSON pointer;
+already observed fields keep their success type, and `issues` is nonempty. No
+missing-key or truncated alternate schema is accepted. A success validator
+rejects all nulls. `repo_root` must be a physical directory. Every structural
+report validator reopens the manifest and report `FileEvidence` references only
+below that explicit root. A producer also rehashes package-family evidence when
+it writes it; a later validator treats `mapPackageHash` and
+`beforeMapPackageHash` as historical observations and instead checks their
+hash-chain relations. Final package evidence is independently reopened by the
+checker/base validator. `bundle_path` must
+resolve to `repo_root/artifacts/maps/reports/garner-terrain-base.json` or the
+same-directory publication temp passed for pre-publish validation.
+Every Task 8 report, inventory, build wrapper, package wrapper, journal, and
+base bundle must carry the same transaction ID and source HEAD; a cross-run or
+cross-commit evidence link is fatal even when bytes and an outer hash were
+updated consistently.
 
 `build_reference_terrain_level.py`:
 
@@ -2638,7 +2884,8 @@ executed successfully` is never accepted without a valid report.
 - saves/reloads and verifies package `/Game/Maps/Garner`, world object
   `/Game/Maps/Garner.Garner`, marker path and exact GameMode;
 - atomically reports manifest path/hash, map/package/world/marker/GameMode,
-  normalized map filename/hash, replacement flag, and `issues=[]`.
+  the complete saved map-family file set/hash, replacement flag, and
+  `issues=[]`.
 
 The builder's marker-only world is explicitly not playable and not visual
 acceptance. It contains no fabricated scene, legacy terrain, PlayerStart, or
@@ -2647,8 +2894,9 @@ hidden ignored prerequisite.
 `import_reference_terrain.py` validates before mutation, then:
 
 1. Loads the exact map/world/marker/GameMode and refuses any mismatch.
-2. Snapshots the five canonical package hashes: mesh, texture, base material,
-   material instance, and Garner map.
+2. Snapshots all physical files in the five canonical package families: mesh,
+   texture, base material, material instance, and Garner map. Primaries and
+   every existing `.uexp`/`.ubulk`/`.uptnl` sidecar participate.
 3. Imports only manifest-resolved glTF+bin+PNG whose hashes already passed.
    Any unexpected generated material/texture sidecar is deleted and reported.
    The mesh stores the manifest glTF and bin hashes as metadata; the texture
@@ -2667,19 +2915,21 @@ hidden ignored prerequisite.
    restores any tagged actor that no longer overlaps.
 8. Saves only dirty packages and computes hashes after successful saves.
 
-Each import report uses the canonical schema: manifest/map/canonical object
-identity, sorted object-level `created`/`updated`/`deleted`, sorted
-`savedPackages`, five sorted `finalPackageHashes`, and `issues`. Pass 2 must
-have all four mutation/save lists empty and byte-identical final hashes to
-pass 1.
+Each import report uses the literal schema above. Pass 2 must have all four
+mutation/save lists empty and byte-identical `ReferenceState`, physical file
+sets, sizes, per-file hashes, and five family digests from pass 1. Adding,
+removing, or changing only a sidecar is therefore a mutation and is fatal.
+Pass 1 `beforeMapPackageHash` must equal the level-build `mapPackageHash`; pass
+2 `beforeMapPackageHash` must equal pass 1's final map-family record.
 
 `check_reference_terrain.py` is read-only. It validates and hashes the
 manifest, level-build report, both import reports and idempotence relation;
 loads the exact world; independently inspects the actual marker, GameMode,
 assets, texture sampling, material graph/usages, mesh/Nanite/material slots,
-one actor/transform/bounds, all legacy overlaps/tags/visibility, and five
-package hashes. It never creates, mutates, dirties, deletes, or saves a
-package. Success requires actual package hashes exactly equal pass 2 and
+one actor/transform/bounds, all legacy overlaps/tags/visibility, and every
+physical file in all five package families. It never creates, mutates, dirties,
+deletes, or saves a package. Success requires actual family file lists, sizes,
+hashes, and family digests exactly equal pass 2 and
 zero issues/visible overlaps/grass overrides. Its observations also require
 literal counts `materialFallbackCount=0`, `materialUsageErrorCount=0`, and
 `translucentNaniteCount=0`; a WorldGrid/default/white fallback or a material
@@ -2689,26 +2939,207 @@ that merely compiles without both required usages is fatal.
 
 `scripts/build_garner_reference_terrain.py` is the sole clean-checkout Task 8
 orchestrator. Pure tests inject the command runner, file operations and
-failpoints. Before the first generated-Content mutation it:
+failpoints. Its transaction paths are literal and all remain ignored:
 
-1. Acquires an exclusive ignored transaction lock and refuses any pre-existing
-   `UnrealEditor`, `UnrealEditor-Cmd`, packaged client, `Game.exe`,
-   CrossOver/Wine, or active Task 8 transaction; it never kills a pre-existing
-   process.
-2. Before rerunning Task 7 or installing anything, snapshots the exact previous
-   bytes/existence/mode/hash of the current top terrain manifest, the two
-   installed runtime files, the prior terrain-base bundle, and the five
-   managed package families, including `.uasset`, `.umap`, `.uexp`, `.ubulk`,
-   and `.uptnl` sidecars. A newly created Task 7 run directory may remain
-   unreferenced after failure, but no prior top pointer or installed file may
-   change.
-3. Saves a 0600 journal plus same-volume recovery directory, fsyncs files and
-   parent directories, and records the pre-run directory listing so a failed
-   import cannot leak newly generated sidecars.
-4. Runs and validates the Task 7 manifest+installer chain, then starts every
-   later subprocess in a dedicated process group, records PID/PGID,
-   waits in foreground, and on timeout/failure/interruption terminates/reaps
-   only that owned group before rollback.
+```text
+artifacts/maps/reports/.garner-terrain-task8.lock
+artifacts/maps/reports/.garner-terrain-task8.transaction.json
+artifacts/maps/reports/.garner-terrain-task8.recovery/<transaction-id>/
+artifacts/maps/reports/runs/<transaction-id>/
+artifacts/maps/package-run/<transaction-id>/
+```
+
+`transaction-id` is exactly 32 lowercase hexadecimal characters generated from
+16 random bytes; all transaction recovery/evidence/package directories are
+created with exclusive, no-follow semantics, mode 0700, and a collision is
+retried. The output root and every recovery/run
+parent are physical directories. The lock is a persistent 0600 physical
+regular file containing exactly
+`{"schemaVersion":1,"lockName":"garner-terrain-task8"}\n`. The orchestrator
+opens it with no-follow/create semantics, verifies descriptor/path identity and
+`nlink==1`, takes nonblocking exclusive `flock`, and keeps that descriptor until
+its final filesystem action. While holding the first lock, a newly created or
+incompletely written marker (possible only before any durable journal) is
+truncated and rewritten through the locked descriptor, flushed, fsynced,
+reopened/read back through the path, and its parent is fsynced. A mismatched
+marker with an existing journal/recovery transaction is fail-closed. The lock path is never
+unlinked, so there is no old-inode/new-path race. A busy lock means another
+Task 8 transaction and is a non-mutating failure; stale text is not treated as
+ownership evidence.
+
+After taking the lock, every normal invocation performs startup recovery before
+process/thermal checks or any new transaction. `--recover-only` performs only
+that recovery and exits. The exact manual command printed with
+`RECOVERY_REQUIRED` is:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 \
+  scripts/build_garner_reference_terrain.py \
+  --repo-root "$PWD" \
+  --manifest artifacts/maps/garner.reference-albedo.json \
+  --map /Game/Maps/Garner \
+  --output artifacts/maps/reports \
+  --recover-only
+```
+
+The journal is strict JSON with no unknown/duplicate keys and exactly this
+shape:
+
+```text
+Snapshot := {
+  "path": normalized repository-relative POSIX path,
+  "priorType": one of "absent", "regular",
+  "priorMode": integer in [0, 4095] or 0 when absent,
+  "priorSha256": 64 lowercase hex or "" when absent,
+  "priorSizeBytes": nonnegative integer or exactly 0 when absent,
+  "backupPath": normalized path below this transaction recovery root or ""
+}
+
+ActiveProcess := null or {
+  "step": one exact `completedStep` name below or the recovery-only
+    "nested-publisher-recovery" or "nested-installer-recovery",
+  "pid": positive integer,
+  "pgid": positive integer,
+  "startToken": nonempty OS process-start identity,
+  "executable": normalized absolute physical path,
+  "argvSha256": SHA-256 of NUL-delimited exact argv bytes
+}
+
+{
+  "schemaVersion": 1,
+  "transactionId": 32 lowercase hex,
+  "sourceHead": 40 lowercase hex equal to the clean checkout HEAD,
+  "phase": one of "SNAPSHOT", "TASK7_PUBLISHED", "RUNTIME_INSTALLED",
+    "UNREAL_RUNNING", "EDITOR_VERIFIED", "PACKAGE_VERIFIED",
+    "BUNDLE_PREPARED", "BUNDLE_REPLACED", "COMMITTED", "ROLLED_BACK",
+  "completedStep": one of "snapshot", "terrain-reference", "installer-1",
+    "installer-2", "editor-build", "level-build", "import-1", "import-2",
+    "checker", "editor-automation", "game-build", "cook-package",
+    "runtime-smoke", "base-validated", "base-published",
+  "evidenceRoot":
+    "artifacts/maps/reports/runs/<same-transaction-id>",
+  "packageRunRoot":
+    "artifacts/maps/package-run/<same-transaction-id>",
+  "recoveryRoot":
+    "artifacts/maps/reports/.garner-terrain-task8.recovery/<same-id>",
+  "snapshots": sorted unique list[Snapshot],
+  "managedFamilyListings": {
+    "mesh": sorted exact pre-run suffix paths,
+    "texture": sorted exact pre-run suffix paths,
+    "material": sorted exact pre-run suffix paths,
+    "instance": sorted exact pre-run suffix paths,
+    "map": sorted exact pre-run suffix paths
+  },
+  "activeProcess": ActiveProcess,
+  "intendedBundleSha256": 64 lowercase hex or "",
+  "issues": []
+}
+```
+
+Before creating a new transaction, the orchestrator resolves
+`git rev-parse --show-toplevel` to the same physical `repo_root`, requires a
+40-lowercase-hex `git rev-parse HEAD`, and requires empty output from
+`git status --porcelain=v1 --untracked-files=all`; ignored generated paths stay
+excluded by Git and are handled only by this transaction. The resulting
+`sourceHead` is written in the first journal and every top-level Task 8 report,
+inventory, evidence wrapper, package wrapper, and base bundle. Startup
+recovery performs the same read-only identity check and requires the current
+HEAD to equal the journal `sourceHead`; a dirty/different checkout is
+`RECOVERY_REQUIRED` before target mutation and reports the required commit.
+
+The journal is rewritten through a unique 0600 same-directory physical temp,
+file flush+fsync, strict readback, `os.replace`, and parent fsync. Snapshot
+backups are 0600 physical regular files on the same volume; each is flushed,
+fsynced, reopened, rehashed, and its recovery directory is fsynced before the
+first `SNAPSHOT` journal becomes durable. Snapshot paths include the exact
+previous bytes/existence/mode/hash of the current top terrain manifest, the two
+installed runtime files, the prior terrain-base bundle, and all allowed files
+in the five managed package families. Pre-run exact family listings make every
+new sidecar removable without using a parent directory as a destructive target.
+For an absent snapshot, mode/size are zero and hash/backup are empty; for a
+regular snapshot, hash/backup are nonempty and backup size/hash equal the prior
+record exactly.
+
+Rollback never consumes a backup. For each prior regular file it creates an
+exclusive physical restore temp in the target's own directory, copies the
+backup, applies the recorded mode to the temp, flushes+fsyncs+reopens+rehashes
+it, `os.replace`s the exact target, then fsyncs the target parent. For each
+prior-absent file or newly introduced allowed sidecar it unlinks only a verified
+physical regular leaf and fsyncs that parent; already absent is idempotent.
+Any directory, symlink, special file, hard link, escape, unexpected same-stem
+suffix, or failed parent fsync stops recovery with the journal/backups intact.
+After the ordered restore, it re-enumerates every family and rechecks all prior
+bytes, hashes, sizes, modes, and absences before writing `ROLLED_BACK`.
+
+All other mutable evidence is transaction-private rather than overwritten.
+Level/import/check reports, both automation-report trees, synthesized
+cook/package/runtime reports, copied Editor/Game target receipts, and copies of
+every project-owned regular `BuildProduct` named by those receipts live only
+under `reports/runs/<transaction-id>`. Cook/stage/archive output lives only
+under `package-run/<transaction-id>`. The bundle never names mutable receipt,
+binary, or fixed report paths under `CorsairsUE/Binaries` or the shared reports
+root; it names the verified run-private copies. Consequently restoring a prior
+bundle cannot leave it pointing at reports, receipts, or binaries overwritten
+by a failed later run. Failed run-private evidence and a newly created Task 7
+run may remain unreferenced, but no prior bundle input changes.
+
+Task 8 is an outer transaction around two independently journaled Task 7
+owners. It never restores the top manifest or runtime pair across an unresolved
+inner publisher/installer transaction. The exact inner control paths are:
+
+```text
+artifacts/maps/.garner.reference-albedo.publish.lock
+artifacts/maps/.garner.reference-albedo.publish.lock.retired
+artifacts/maps/.garner.reference-albedo.publish.json
+artifacts/maps/.garner.reference-albedo.publish.json.retired
+CorsairsUE/Data/Heights/.garner-runtime-install.lock
+CorsairsUE/Data/Heights/.garner-runtime-install.lock.retired
+CorsairsUE/Data/Heights/.garner-runtime-install.transaction.json
+CorsairsUE/Data/Heights/.garner-runtime-install.transaction.json.retired
+```
+
+After the outer snapshot is durable, every Task 7 publisher/installer child is
+started through the recorded process handshake below. On ordinary failure or
+startup recovery, the outer orchestrator first proves the recorded child gone,
+then resolves inner owners in publisher-before-installer order. Absence of all
+four exact control paths for an owner means that owner has no recoverable
+transaction. If any control path is present, Task 8 invokes that owner's exact
+original command as `nested-publisher-recovery` or
+`nested-installer-recovery`; it never parses, deletes, or edits an inner
+journal itself. The owner must acquire its own lock, run its own startup
+recovery, return success, leave all four control paths absent, and expose a
+strictly valid current top manifest or installed pair. Because the Task 7
+publisher has no recovery-only CLI, its documented full retry may publish an
+unreferenced fresh run; that is recovery work, and the outer snapshot is still
+restored afterward. Installer recovery then uses the current valid top
+manifest before the outer pair is restored.
+
+An inner retry uses the same durable `ActiveProcess` handshake and process
+identity rules as production. Since the publisher retry may be heavyweight,
+even `--recover-only` refuses to launch it unless the exact pre-existing-
+process and healthy three-line `pmset` gates pass; failure leaves every outer
+snapshot and journal intact as `RECOVERY_REQUIRED`. A busy/malformed/foreign
+inner lock or journal, nonzero retry, remaining exact control path, or invalid
+post-retry target likewise stops before any outer restore. After both owners
+are proven clean, Task 8 may restore its own snapshot. It does not start a new
+Task 8 transaction in `--recover-only` mode and never treats an inner retry's
+fresh manifest/runtime result as the outer committed result.
+
+Before the first mutation the orchestrator also refuses any pre-existing
+`UnrealEditor`, `UnrealEditor-Cmd`, packaged client, `Game.exe`, CrossOver/Wine,
+`Build.sh`, `RunUAT`, or active CMake/UBT build; it never kills such a process.
+It then runs and validates Task 7 and every later subprocess in a dedicated
+process group. A tiny launcher routine inside this same tracked orchestrator
+forks, creates the child session, and blocks on an inherited pipe before
+`execve`; no unlisted helper file or generated script participates. The parent
+records its PID/PGID/start token and intended exact executable plus
+NUL-delimited argv hash as `ActiveProcess`,
+durably writes the journal, then
+sends the one-byte exec release. EOF before release makes the launcher exit, and
+successful `execve` preserves PID/PGID/start token. The parent waits in the
+foreground, clears `ActiveProcess` durably after wait, and on
+timeout/failure/interruption terminates and reaps only that owned group before
+rollback.
 
 The five package families are resolved narrowly from these stems; no parent
 directory is ever used as a destructive target:
@@ -2732,12 +3163,87 @@ Task 7 manifest+installer -> Editor build
 ```
 
 If any command, report, hash, save, automation, cook, or runtime gate fails,
-the orchestrator first reaps its owned process tree, then restores all old
+the orchestrator first reaps its owned process tree, resolves and verifies both
+inner Task 7 owners by the protocol above, then restores all old
 top-manifest/runtime-data/base-bundle/package-family bytes and modes or removes
 files that were previously absent, removes every newly introduced managed-root
 sidecar, verifies exact hashes/absence, and leaves the journal/recovery
 material in place if verification fails. Success deletes recovery material
 only after all reports and final files hash correctly.
+
+Phase transitions are durable and monotonic. `SNAPSHOT` precedes the Task 7
+command; `TASK7_PUBLISHED` follows independent top-manifest rehash;
+`RUNTIME_INSTALLED` follows installer 1 result `OK` or `NOOP`, mandatory
+installer 2 result `NOOP`, and runtime-pair
+rehash; `UNREAL_RUNNING` covers each Editor/build/cook/runtime child with the
+exact completed step; `EDITOR_VERIFIED` follows checker+Editor automation;
+`PACKAGE_VERIFIED` follows Game build, package audit, and packaged runtime
+smoke; `BUNDLE_PREPARED` records the validated temp hash before replace;
+`BUNDLE_REPLACED` follows bundle replace plus reports-directory fsync; and
+`COMMITTED` is written only after reopening and validating the published bundle
+and every transitive input and after repeating the exact clean-checkout HEAD/
+status gate. `ROLLED_BACK` is recovery-only and is written only
+after the complete prior snapshot and family listings have been restored and
+revalidated; production never transitions to it.
+
+Startup recovery under the lock is deterministic:
+
+- no journal means no active transaction. If a current terrain-base bundle
+  exists, its strict syntax plus exact transaction ID/run-evidence/package-run
+  roots and their immutable hashes are validated for ownership classification;
+  those exact roots are not orphans even if a later external Task 7 run made a
+  fixed top/package-family input stale. This classification is not current
+  bundle acceptance and never authorizes deletion. Every other unreferenced
+  recovery/evidence/package path is retained and reported, never guessed or
+  recursively deleted;
+- a malformed journal, foreign path, missing/mismatched backup, unproven live
+  process identity, symlink/special file, or hash/mode mismatch returns
+  `RECOVERY_REQUIRED` without mutation and prints the literal command above;
+- an exactly recorded live group is allowed to finish only while its original
+  orchestrator still owns the busy lock. After a stale-lock acquisition, a
+  still-live exact PID/PGID/start-token/executable/argv is terminated and verified
+  gone as recorded Task 8 ownership. An absent PID, or the same PID with a
+  different start token, proves the recorded child is gone and recovery
+  proceeds without signaling the absent/reused process; an unreadable or only
+  partially matching identity is never killed and is `RECOVERY_REQUIRED`;
+- after the recorded child is gone, any nonterminal outer phase resolves the
+  exact Task 7 publisher and installer control paths in that order before
+  restoring a top manifest or runtime target. Inner recovery is never skipped
+  merely because the outer phase has advanced past `TASK7_PUBLISHED` or
+  `RUNTIME_INSTALLED`; a failed inner recovery retains the outer journal and
+  backups and returns `RECOVERY_REQUIRED`;
+- every nonterminal production phase before `COMMITTED`, including
+  `BUNDLE_REPLACED`, restores the
+  snapshot, exact modes and family listings, verifies them, then durably writes
+  `ROLLED_BACK`. `ROLLED_BACK` cleanup is idempotent and no longer needs backup
+  bytes: it removes recovery material, verifies absence, then unlinks the
+  journal and fsyncs the reports parent;
+- `COMMITTED` revalidates the intended published bundle and transitive evidence,
+  idempotently removes recovery material, verifies absence, then unlinks the
+  journal and fsyncs the reports parent. A mismatch is `RECOVERY_REQUIRED`; it
+  never silently rolls back an already committed run. A crash during cleanup
+  leaves either `ROLLED_BACK` or `COMMITTED`, so the next invocation can resume
+  without requiring an already deleted backup.
+
+The orchestrator exposes both ordinary failure and simulated-crash actions at
+each of these exact seams: during lock-marker truncate/write/fsync and after
+lock-marker readback; after every snapshot file
+fsync; after recovery-directory fsync; after `SNAPSHOT`; after Task 7; after
+installer 1 and installer 2; before and after each nested-owner control-path
+scan, preflight, retry launch, retry wait, control-path absence check, and
+post-retry target validation; after each Editor/build/automation/cook/runtime
+step; after each package-family save/listing; after bundle-temp fsync/readback;
+immediately before and after bundle `os.replace`; after reports-parent fsync;
+after `BUNDLE_REPLACED`; after published-bundle validation; after `COMMITTED`;
+after `ROLLED_BACK`; and during each restore or cleanup replace/remove/fsync. A crash action performs no
+in-process cleanup; the next fresh invocation must exercise startup recovery.
+The crash matrix kills the child at every Task 7 publisher phase and every
+installer phase reachable through the injected runners, then proves that a
+fresh outer process either completes owner recovery before byte-exact outer
+rollback or returns `RECOVERY_REQUIRED` without touching an owner-controlled
+target. It also covers a crash after an inner retry succeeds but before
+`ActiveProcess` is cleared; the next run observes the child gone and the four
+control paths absent, then completes the same outer rollback.
 
 Only after the complete owned chain passes does it atomically publish
 `artifacts/maps/reports/garner-terrain-base.json`. That bundle contains
@@ -2752,20 +3258,211 @@ import pass 1 report
 import pass 2 report
 terrain checker report
 Editor automation report
-five final package files
-Mac Editor and Game build identities
+all files and five digests of the five final package families
+run-private Mac Editor and Game receipts and project build products
 cook/package report and packaged executable
-packaged runtime smoke report
+packaged runtime automation and strict observation report
 ```
 
 Publication uses a unique regular temp file in the same directory, flush,
-file fsync, `os.replace`, and parent-directory fsync. A failed validation or
-replace leaves the previous bundle byte-identical.
+file fsync, strict readback, `os.replace`, and parent-directory fsync. The prior
+bundle is already in the durable snapshot. Any failure before `COMMITTED`
+restores and revalidates its exact bytes; no post-replace fsync failure can
+masquerade as a preserved old bundle.
+
+The remaining literal bundle DTOs are:
+
+```text
+EvidenceSet := {
+  "transactionId": 32 lowercase hex,
+  "sourceHead": 40 lowercase hex,
+  "root": normalized repository-relative physical directory,
+  "files": sorted nonempty list[FileEvidence]
+}
+
+BuildEvidence := {
+  "transactionId": 32 lowercase hex,
+  "target": one of "CorsairsUEEditor", "CorsairsUE",
+  "platform": "Mac",
+  "configuration": "Development",
+  "sourceHead": 40 lowercase hex characters,
+  "receipt": run-private FileEvidence,
+  "products": sorted nonempty list of run-private FileEvidence
+}
+
+PackagedRuntimeFile := {
+  "projectRelativePath": one of "Data/character_map.json",
+    "Data/Heights/garner.block.raw", "Data/Heights/garner.terrain.json",
+  "containerPath": normalized path of the listed `.pak` below this
+    transaction stage/archive root,
+  "containerMemberPath": exact normalized UFS member path,
+  "extractedEvidence": run-private FileEvidence,
+  "sourceSha256": 64 lowercase hex characters,
+  "sourceSizeBytes": positive integer,
+  "runtimeReportedSha256": the same 64 lowercase hex,
+  "runtimeReportedSizeBytes": the same positive integer
+}
+
+PackageEvidence := {
+  "transactionId": 32 lowercase hex,
+  "sourceHead": 40 lowercase hex,
+  "targetReceipt": run-private FileEvidence,
+  "stageManifest": run-private FileEvidence for the canonical synthesized
+    stage/container inventory,
+  "archiveManifest": run-private FileEvidence for the canonical synthesized
+    archive inventory,
+  "containers": sorted nonempty list[FileEvidence],
+  "containerLists": sorted nonempty list[FileEvidence],
+  "packagedExecutable": FileEvidence below this transaction archive root,
+  "runtimeFiles": exactly three PackagedRuntimeFile records in the literal
+    project-relative order above
+}
+
+InventoryReport := {
+  "schemaVersion": 1,
+  "reportType": one of "garner-terrain-stage-inventory",
+    "garner-terrain-archive-inventory",
+  "transactionId": 32 lowercase hex,
+  "sourceHead": 40 lowercase hex,
+  "root": normalized repository-relative physical directory below this
+    transaction package-run root,
+  "files": sorted nonempty list[FileEvidence] for every physical regular file
+    below that exact root, sorted by path,
+  "issues": []
+}
+
+ContainerMember := {
+  "path": UnrealPak member beginning exactly `../../../`, followed by a
+    nonempty normalized mount-relative suffix with no further `.` or `..`,
+  "sizeBytes": nonnegative integer
+}
+
+ContainerListReport := {
+  "schemaVersion": 1,
+  "reportType": "garner-terrain-container-list",
+  "transactionId": 32 lowercase hex,
+  "sourceHead": 40 lowercase hex,
+  "container": FileEvidence,
+  "members": sorted nonempty list[ContainerMember] by path,
+  "issues": []
+}
+
+CookRuntimeFile := {
+  "projectRelativePath": one of the three literal UFS inputs,
+  "containerPath": exact `FileEvidence.path` of one listed container,
+  "containerMemberPath": exact mapped UFS member path,
+  "extractedEvidence": run-private FileEvidence,
+  "sourceSha256": 64 lowercase hex,
+  "sourceSizeBytes": positive integer
+}
+
+CookPackageReport := {
+  "schemaVersion": 1,
+  "reportType": "garner-terrain-cook-package",
+  "status": "PASS",
+  "transactionId": 32 lowercase hex,
+  "sourceHead": 40 lowercase hex,
+  "targetReceipt": run-private FileEvidence,
+  "stageManifest": run-private FileEvidence for an InventoryReport,
+  "archiveManifest": run-private FileEvidence for an InventoryReport,
+  "containers": sorted nonempty list[FileEvidence],
+  "containerLists": sorted nonempty list[FileEvidence], each naming a
+    ContainerListReport,
+  "packagedExecutable": FileEvidence below this transaction archive root,
+  "runtimeFiles": exactly three CookRuntimeFile records in literal UFS order,
+  "corsairsImportLeaks": [],
+  "issues": []
+}
+
+RuntimeInputObservation := {
+  "projectRelativePath": one of the three literal UFS inputs,
+  "sha256": 64 lowercase hex,
+  "sizeBytes": positive integer
+}
+
+RuntimeObservation := {
+  "schemaVersion": 1,
+  "reportType": "garner-terrain-packaged-runtime",
+  "status": "PASS",
+  "transactionId": 32 lowercase hex,
+  "sourceHead": 40 lowercase hex,
+  "mapPackage": "/Game/Maps/Garner",
+  "worldObject": "/Game/Maps/Garner.Garner",
+  "gameModeClass": "/Script/CorsairsGame.CorsairsGameMode",
+  "actorObject": exact reference actor object path,
+  "runtimeInputs": exactly three RuntimeInputObservation records in literal
+    UFS order,
+  "issues": []
+}
+
+{
+  "schemaVersion": 1,
+  "reportType": "garner-terrain-base",
+  "status": "PASS",
+  "transactionId": 32 lowercase hex,
+  "sourceHead": 40 lowercase hex,
+  "terrainManifest": {
+    "top": FileEvidence for artifacts/maps/garner.reference-albedo.json,
+    "runId": exact one-run ID from the top manifest,
+    "runFiles": seven FileEvidence records in canonical leaf order
+  },
+  "runtimeInputs": three FileEvidence records in order character-map, block,
+    terrain-metadata,
+  "reports": {
+    "levelBuild": run-private ReportEvidence,
+    "importPass1": run-private ReportEvidence,
+    "importPass2": run-private ReportEvidence,
+    "terrainCheck": run-private ReportEvidence,
+    "editorAutomation": EvidenceSet,
+    "cookPackage": run-private ReportEvidence for CookPackageReport,
+    "runtimeAutomation": EvidenceSet,
+    "runtimeObservation": run-private ReportEvidence for RuntimeObservation
+  },
+  "finalPackageHashes": five PackageFamilyEvidence records,
+  "builds": {
+    "editor": BuildEvidence for CorsairsUEEditor,
+    "game": BuildEvidence for CorsairsUE
+  },
+  "package": PackageEvidence,
+  "issues": []
+}
+```
+
+Every report/build evidence path except the fixed top/runtime/package-family
+sources is below the matching transaction run/package root. Receipt `Launch`
+is a pre-stage source identity, not an archive path. The orchestrator uses the
+receipt target/product identity plus UAT outputs to synthesize strict sorted
+stage/container and archive inventory JSON, then uses those inventories to map to
+the one exact archived `.app/Contents/MacOS/<launch-leaf>`; recursive executable
+discovery or accepting the example path is forbidden. With `-pak`, UFS files
+need not be loose: the audit records the exact container list, extracts the
+three named paths with the matching engine `UnrealPak` into the run-private
+evidence root, and hashes those copies. The packaged runtime test independently
+reads the same three virtual paths and must report the same hashes.
+The orchestrator strictly parses each synthesized inventory/container-list/
+cook report before linking it. The packaged C++ test emits exactly one
+canonical `CORSAIRS_TERRAIN_RUNTIME_JSON=` automation event containing the
+literal `RuntimeObservation` object; the orchestrator rejects zero, duplicate,
+noncanonical, truncated, or mismatched events and atomically writes the parsed
+object as the run-private runtime-observation report. Engine-generated
+automation trees are retained and hashed as `EvidenceSet` inputs, but are not
+misrepresented as Task 8-owned JSON DTOs.
 
 `validate_base_bundle` reopens every listed file, recomputes every hash,
-requires all manifest/report identities to agree, and requires the checker's
-actual hashes to equal import pass 2. The bundle is the only terrain-base
-input accepted by scene parity Task 8; loose report discovery is forbidden.
+recomputes every package-family digest, requires exact transaction-root
+containment, requires all manifest/report identities to agree, and requires the
+checker's complete physical family evidence to equal import pass 2 and current
+disk at publication. It strictly reparses the two inventory reports, every
+container-list report, `CookPackageReport`, and `RuntimeObservation`; duplicated
+package fields must be byte-for-byte equal after canonical parsing. It also
+verifies the three source/staged/extracted/runtime hash identities and absence
+of `CorsairsImport` from receipts, stage/archive manifests, containers, and
+runtime module descriptors. Package/build target receipts must be the same
+evidence record, every container has exactly one matching container-list
+report, and every runtime file names one listed container/member/extraction.
+The bundle is the only
+terrain-base input accepted by scene parity Task 8; loose report discovery is
+forbidden.
 
 ## RED tests
 
@@ -2781,15 +3478,32 @@ test_overlap_is_strict_on_all_edges
 test_legacy_entry_points_reject_reference_namespace
 test_validate_import_report_mutation_matrix
 test_second_import_is_zero_mutation_with_identical_hashes
+test_package_family_hashes_include_every_sidecar
+test_sidecar_add_remove_or_byte_change_breaks_idempotence
 test_idempotence_report_mutation_matrix
 test_texture_sampling_contract_is_complete
 test_module_graph_has_no_editor_runtime_cycle
 test_clean_checkout_orders_installer_before_game_build_and_cook
+test_dirty_or_wrong_head_checkout_fails_before_mutation
 test_base_bundle_rehashes_every_input
+test_inventory_cook_and_runtime_report_mutation_matrices
+test_base_bundle_rejects_mutable_report_receipt_or_binary_path
+test_prior_bundle_inputs_remain_valid_after_later_run_failure
 test_base_bundle_publish_failure_preserves_previous_bytes
 test_failure_after_each_unreal_step_restores_package_bytes
+test_crash_after_each_transaction_seam_recovers_on_fresh_invocation
+test_crash_after_bundle_replace_restores_previous_bundle_and_inputs
+test_committed_crash_keeps_new_bundle_and_only_cleans_recovery
+test_malformed_or_mismatched_recovery_fails_closed_with_exact_command
+test_outer_recovery_resolves_publisher_before_snapshot_restore
+test_outer_recovery_resolves_installer_before_snapshot_restore
+test_failed_inner_recovery_preserves_outer_snapshot
+test_crash_after_inner_retry_before_active_process_clear_recovers
 test_timeout_reaps_only_owned_process_group_before_restore
 test_success_removes_recovery_journal
+test_preexisting_process_is_refused_and_never_killed
+test_thermal_warning_or_pmset_failure_launches_no_heavy_command
+test_all_heavy_commands_are_sequential_nice_and_capped_at_two
 test_capture_is_delegated_to_scene_task8_not_faked
 ```
 
@@ -2799,11 +3513,27 @@ run/symlink escape, missing/tampered file, all metrics and budgets, mask
 content, texture-ID ordering, and recomputed total bytes. Every case asserts
 the exact `code` and JSON-pointer-like `field`.
 
-The level/import/check/base matrices delete or mistype every field, mutate
-every canonical path/hash, reject unsorted/duplicate records and nonempty
-issues, and prove that pass 2 cannot save equal bytes and still call itself
-zero-mutation. Rollback tests inject a failure after builder, each import,
-checker, automation, build, cook, and runtime smoke.
+The level/import/check/base matrices start from literal complete fixtures for
+the DTOs above, delete or mistype every key and nested field, add every unknown
+key, mutate every canonical path/hash/size/family digest, reject unsorted or
+duplicate records and invalid PASS/FAIL issue relations, and assert the exact
+`code` plus JSON-pointer-like `field`. They prove that pass 2 cannot save equal
+primary bytes while adding/removing/changing a sidecar and still call itself
+zero-mutation. The base matrix also mutates every field in linked inventory,
+container-list, cook-package, and runtime-observation DTOs (updating the outer
+file hash when necessary) and still requires the nested strict parser to fail.
+
+Rollback tests inject both an ordinary failure and a no-cleanup simulated crash
+at every named seam, start a fresh orchestrator for crash recovery, and compare
+the complete prior snapshot plus prior bundle's full transitive validation.
+They cover absent/present old top/runtime/bundle/package files, all allowed
+sidecar suffixes, modes, failure during restore, malformed/foreign journal
+paths, PID reuse/start-token mismatch, a live unrelated process, and both
+pre- and post-`COMMITTED` outcomes. Process/thermal tests use injected process
+tables and literal healthy/warning/nonzero `pmset -g therm` results; every
+warning or probe failure launches zero heavy commands, every pre-existing
+process remains alive, and the recorded command list proves one-at-a-time
+ordering, `nice -n 10`, `-j2`/`-MaxParallelActions=2`, and serial `ctest -j1`.
 
 Run the smallest RED commands serially:
 
@@ -2855,9 +3585,21 @@ capture gate.
 
 ## GREEN commands
 
+The final production GREEN run is executed only from the frozen source commit
+created in **Source-freeze commit** below; that section is an execution
+prerequisite despite appearing after the command listing for readability.
+Dirty-tree RED/unit development may precede the freeze, but none of its
+generated evidence is final acceptance.
+
 Run one heavy command at a time. Before each heavyweight step the orchestrator
 must prove no competing owned/pre-existing UE/client/build process and check
 `pmset -g therm`; a warning aborts before launch rather than heating the Mac.
+The thermal probe must exit zero and, after trimming whitespace, contain all
+three literal healthy lines `No thermal warning level has been recorded`,
+`No performance warning level has been recorded`, and
+`No CPU power status has been recorded`. Any recorded warning/status, missing
+healthy line, unrecognized nonempty diagnostic, or nonzero exit is fail-closed
+and launches no heavyweight child.
 
 ```bash
 nice -n 10 cmake -S tools/AssetConverter \
@@ -2880,9 +3622,14 @@ PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 \
 ```
 
 Inside that tracked orchestrator, build the Editor before the four Editor
-commands:
+commands. In the literal examples below `TXN_ID` and `SOURCE_HEAD` are the
+already journaled 32-lowercase-hex transaction ID and clean 40-lowercase-hex
+commit; no command writes to a shared fixed report leaf. Each Python entry
+point receives those two final positional identity arguments, rejects a report
+path outside `reports/runs/$TXN_ID`, and writes them unchanged into its DTO:
 
 ```bash
+TXN_REPORT_ROOT="$PWD/artifacts/maps/reports/runs/$TXN_ID"
 nice -n 10 "/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/Mac/Build.sh" \
   CorsairsUEEditor Mac Development \
   "$PWD/CorsairsUE/CorsairsUE.uproject" \
@@ -2890,16 +3637,16 @@ nice -n 10 "/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/Mac/Build.sh
 
 UE="/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac/UnrealEditor-Cmd"
 nice -n 10 "$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" -run=pythonscript \
-  -script="$PWD/CorsairsUE/Scripts/build_reference_terrain_level.py $PWD/artifacts/maps/garner.reference-albedo.json /Game/Maps/Garner $PWD/artifacts/maps/reports/reference-terrain-level-build.json" \
+  -script="$PWD/CorsairsUE/Scripts/build_reference_terrain_level.py $PWD/artifacts/maps/garner.reference-albedo.json /Game/Maps/Garner $TXN_REPORT_ROOT/reference-terrain-level-build.json $TXN_ID $SOURCE_HEAD" \
   -unattended -nop4 -NullRHI -NoSound
 nice -n 10 "$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" -run=pythonscript \
-  -script="$PWD/CorsairsUE/Scripts/import_reference_terrain.py $PWD/artifacts/maps/garner.reference-albedo.json /Game/Maps/Garner $PWD/artifacts/maps/reports/reference-terrain-import-pass1.json" \
+  -script="$PWD/CorsairsUE/Scripts/import_reference_terrain.py $PWD/artifacts/maps/garner.reference-albedo.json /Game/Maps/Garner $TXN_REPORT_ROOT/reference-terrain-import-pass1.json $TXN_ID $SOURCE_HEAD" \
   -unattended -nop4 -NullRHI -NoSound
 nice -n 10 "$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" -run=pythonscript \
-  -script="$PWD/CorsairsUE/Scripts/import_reference_terrain.py $PWD/artifacts/maps/garner.reference-albedo.json /Game/Maps/Garner $PWD/artifacts/maps/reports/reference-terrain-import-pass2.json" \
+  -script="$PWD/CorsairsUE/Scripts/import_reference_terrain.py $PWD/artifacts/maps/garner.reference-albedo.json /Game/Maps/Garner $TXN_REPORT_ROOT/reference-terrain-import-pass2.json $TXN_ID $SOURCE_HEAD" \
   -unattended -nop4 -NullRHI -NoSound
 nice -n 10 "$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" -run=pythonscript \
-  -script="$PWD/CorsairsUE/Scripts/check_reference_terrain.py $PWD/artifacts/maps/garner.reference-albedo.json /Game/Maps/Garner $PWD/artifacts/maps/reports/reference-terrain-level-build.json $PWD/artifacts/maps/reports/reference-terrain-import-pass1.json $PWD/artifacts/maps/reports/reference-terrain-import-pass2.json $PWD/artifacts/maps/reports/reference-terrain-check.json" \
+  -script="$PWD/CorsairsUE/Scripts/check_reference_terrain.py $PWD/artifacts/maps/garner.reference-albedo.json /Game/Maps/Garner $TXN_REPORT_ROOT/reference-terrain-level-build.json $TXN_REPORT_ROOT/reference-terrain-import-pass1.json $TXN_REPORT_ROOT/reference-terrain-import-pass2.json $TXN_REPORT_ROOT/reference-terrain-check.json $TXN_ID $SOURCE_HEAD" \
   -unattended -nop4 -NullRHI -NoSound
 ```
 
@@ -2912,7 +3659,7 @@ nice -n 10 "$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" \
   -unattended -nop4 -NullRHI -NoSound \
   -ExecCmds="Automation RunTests Corsairs.Terrain.ReferenceAssets" \
   -TestExit="Automation Test Queue Empty" \
-  -ReportOutputPath="$PWD/artifacts/maps/reports/reference-terrain-editor-automation"
+  -ReportExportPath="$TXN_REPORT_ROOT/reference-terrain-editor-automation"
 
 nice -n 10 "/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/Mac/Build.sh" \
   CorsairsUE Mac Development \
@@ -2926,26 +3673,30 @@ nice -n 10 "/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/RunUAT.sh" \
   -platform=Mac -clientconfig=Development \
   -skipbuild -cook -stage -pak -archive \
   -map=/Game/Maps/Garner \
-  -CookOutputDir="$PWD/artifacts/maps/package-run/cooked" \
-  -stagingdirectory="$PWD/artifacts/maps/package-run/stage" \
-  -archivedirectory="$PWD/artifacts/maps/package-run/archive" \
+  -CookOutputDir="$PWD/artifacts/maps/package-run/$TXN_ID/cooked" \
+  -stagingdirectory="$PWD/artifacts/maps/package-run/$TXN_ID/stage" \
+  -archivedirectory="$PWD/artifacts/maps/package-run/$TXN_ID/archive" \
   -MaxParallelActions=2
 
 nice -n 10 \
-  "$PWD/artifacts/maps/package-run/archive/Mac/CorsairsUE.app/Contents/MacOS/CorsairsUE" \
+  "$PWD/artifacts/maps/package-run/$TXN_ID/archive/Mac/CorsairsUE.app/Contents/MacOS/CorsairsUE" \
   -unattended -NullRHI -NoSound -stdout -FullStdOutLogOutput \
+  -CorsairsTerrainTransaction="$TXN_ID" \
+  -CorsairsTerrainSourceHead="$SOURCE_HEAD" \
   -ExecCmds="Automation RunTests Corsairs.Terrain.ReferenceRuntime" \
   -TestExit="Automation Test Queue Empty" \
-  -ReportOutputPath="$PWD/artifacts/maps/reports/reference-terrain-runtime"
+  -ReportExportPath="$TXN_REPORT_ROOT/reference-terrain-runtime"
 ```
 
 The real orchestrator allocates a unique `package-run/<transaction-id>` rather
-than reusing the literal example directory above. It resolves the actual
-archived executable path from the UAT receipt instead of silently accepting
-the example path when UAT emits a different layout. It hashes the receipt,
+than any shared directory. It treats the target receipt's `Launch` as the
+pre-stage build product, copies the receipt and every project-owned named build
+product to the transaction evidence root, and uses the UAT stage/archive
+manifests for the exact archive mapping. It hashes those copies, the mapped
 executable, every automation-report file, package container/list, runtime
-report, and staged runtime data. Cook success without the explicit Garner
-map/assets/data in the package is failure.
+report, and all extracted packaged runtime data. Cook success without the
+explicit Garner map/assets/data in the container and packaged runtime is
+failure.
 
 After every heavy command and at final exit:
 
@@ -2987,10 +3738,11 @@ therefore an immutable input to, not a replacement for, the scene run's
 `garner-base-bundle.json`; the two bundle names and report roles must not be
 collapsed.
 
-## Commit
+## Source-freeze commit (execute before final production GREEN)
 
-After fresh GREEN evidence, run `git diff --check`, inspect the exact staged
-path list, and commit only tracked Task 8 sources. Generated Content,
+After implementation and the smallest RED/GREEN suites, but before executing
+the final production GREEN block above, run `git diff --check`, inspect the
+exact staged path list, and commit only tracked Task 8 sources. Generated Content,
 artifacts/package/reports/base bundle, installed runtime data, DBs, pycache,
 and recovery journals remain ignored.
 
@@ -3013,6 +3765,15 @@ git add \
   scripts/tests/test_build_garner_reference_terrain.py
 git commit -m "feat(ue): import and attest Garner reference terrain"
 ```
+
+Run the entire final GREEN block from that clean immutable HEAD. If any failure
+requires a tracked source edit, all evidence from the prior candidate is
+invalid: make a new reviewed source commit and rerun the complete block from
+the new clean HEAD. On success, require empty
+`git status --porcelain=v1 --untracked-files=all`, require the published bundle
+and every Task 8 report to carry that exact HEAD, and make no post-evidence
+tracked commit or amend. Thus the handed-off Task 8 commit is exactly the source
+commit whose clean checkout produced the acceptance bundle.
 
 ## Dependency order
 
