@@ -294,9 +294,7 @@ CORSAIRS_TEST(Png_RejectsMismatchedPixelBuffer) {
     REQUIRE(!AC::WritePng(TempDir() / "broken.png", image));
 }
 
-CORSAIRS_TEST(Png_WritesImageLargerThanOneDeflateBlock) {
-    // Один сохранённый блок deflate вмещает 65535 байт. Изображение ниже даёт
-    // больше, и путь с несколькими блоками иначе остался бы непроверенным.
+CORSAIRS_TEST(Png_CompatibilityAdapterCompressesAndRoundTripsLargeImage) {
     AC::DecodedImage image;
     image.Width = 200;
     image.Height = 200;
@@ -308,7 +306,14 @@ CORSAIRS_TEST(Png_WritesImageLargerThanOneDeflateBlock) {
 
     const auto bytes = AC::ReadWholeFile(path);
     REQUIRE(bytes.has_value());
-    REQUIRE(bytes->size() > 65535u);
+    REQUIRE(bytes->size() < image.Pixels.size() + image.Height);
+
+    std::string detail;
+    const auto decoded = AC::DecodeImageFile(path, detail);
+    REQUIRE(decoded.has_value());
+    REQUIRE_EQ(decoded->Width, image.Width);
+    REQUIRE_EQ(decoded->Height, image.Height);
+    REQUIRE(decoded->Pixels == image.Pixels);
 }
 
 } // namespace

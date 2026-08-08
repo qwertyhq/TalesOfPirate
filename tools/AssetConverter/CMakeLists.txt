@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 project(CorsairsAssetConverter LANGUAGES C CXX)
 
 find_package(Threads REQUIRED)
+find_package(ZLIB REQUIRED)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -44,6 +45,8 @@ add_library(AssetConverterLib STATIC
     src/ConversionReport.cpp
     src/DdsDecoder.cpp
     src/PngWriter.cpp
+    src/StreamingPngWriter.cpp
+    src/Sha256.cpp
     src/TerrainMeshWriter.cpp
     src/TerrainLayers.cpp
     src/TerrainCatalog.cpp
@@ -59,6 +62,7 @@ target_include_directories(AssetConverterLib PRIVATE
 )
 target_link_libraries(AssetConverterLib PRIVATE
     Threads::Threads
+    ZLIB::ZLIB
     ${CMAKE_DL_LIBS}
 )
 corsairs_set_target_options(AssetConverterLib)
@@ -78,6 +82,7 @@ add_executable(AssetConverterTests
     tests/TestGltfWriter.cpp
     tests/TestConversionReport.cpp
     tests/TestImageCodec.cpp
+    tests/TestStreamingPngWriter.cpp
     tests/TestLabParser.cpp
     tests/TestGltfSkeletonWriter.cpp
     tests/TestLmoParser.cpp
