@@ -235,6 +235,7 @@ def production_commands(
             "-utf8output", "-platform=Mac", "-clientconfig=Development",
             "-skipbuild", "-cook", "-stage", "-pak", "-archive",
             "-map=/Game/Maps/Garner",
+            "-AdditionalCookerOptions=-SkipZenStore",
             f"-CookOutputDir={package_root / 'cooked'}",
             f"-stagingdirectory={package_root / 'stage'}",
             f"-archivedirectory={package_root / 'archive'}",

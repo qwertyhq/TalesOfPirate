@@ -107,6 +107,21 @@ class OrchestratorContractTests(unittest.TestCase):
             resolved.argv[3],
             str(self.repo.root / executable["path"]))
 
+    def test_cook_package_forwards_supported_skip_zen_switch(self):
+        command = next(
+            item for item in build.production_commands(self.repo.root, TXN, HEAD)
+            if item.name == "cook-package")
+        self.assertEqual(command.argv[4], "BuildCookRun")
+        forwarding = tuple(
+            item for item in command.argv
+            if item.startswith("-AdditionalCookerOptions="))
+        self.assertEqual(
+            forwarding, ("-AdditionalCookerOptions=-SkipZenStore",))
+        emitted_cook_switches = tuple(
+            item.split("=", 1)[1] for item in forwarding)
+        self.assertEqual(emitted_cook_switches, ("-SkipZenStore",))
+        self.assertNotIn("-ZenStore", emitted_cook_switches)
+
     def test_clean_checkout_orders_installer_before_game_build_and_cook(self):
         seen = []
 
