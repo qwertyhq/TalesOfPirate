@@ -53,6 +53,7 @@ add_library(AssetConverterLib STATIC
     src/TerrainTextureCache.cpp
     src/TerrainTextureSampling.cpp
     src/TerrainPageBaker.cpp
+    src/TerrainPageMeshWriter.cpp
     src/ProcessMetrics.cpp
     src/StbImageDecoder.cpp
     ${CORSAIRS_REPO_ROOT}/sources/Libraries/sqlite3/sqlite3.c
@@ -99,6 +100,7 @@ add_executable(AssetConverterTests
     tests/TestTerrainCatalog.cpp
     tests/TestTerrainTextureSampling.cpp
     tests/TestTerrainPageBaker.cpp
+    tests/TestTerrainPageMeshWriter.cpp
 )
 target_link_libraries(AssetConverterTests PRIVATE AssetConverterLib)
 target_include_directories(AssetConverterTests PRIVATE tests)
