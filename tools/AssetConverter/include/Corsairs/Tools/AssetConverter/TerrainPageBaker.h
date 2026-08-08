@@ -28,9 +28,9 @@ struct TerrainBakeOptions {
     std::size_t MaxRssBytes{128u * 1024u * 1024u};
     std::size_t MaxPngBytes{96u * 1024u * 1024u};
     std::size_t MaxRgbaRowBytes{16u * 1024u};
-    // Empty in production. Tests may inject only the completed-file removal primitive.
+    // Test-only completed-file remover; empty in production. Its return is advisory.
     std::function<bool(const std::filesystem::path&, std::string&)>
-        RemoveCompletedOutput;
+        TestOnlyRemoveCompletedOutput;
 };
 
 struct TerrainBakeResult {

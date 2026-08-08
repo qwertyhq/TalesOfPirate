@@ -572,6 +572,9 @@ struct TerrainBakeOptions {
     std::size_t MaxRssBytes{128u * 1024u * 1024u};
     std::size_t MaxPngBytes{96u * 1024u * 1024u};
     std::size_t MaxRgbaRowBytes{16u * 1024u};
+    // Test-only completed-file remover; empty in production. Its return is advisory.
+    std::function<bool(const std::filesystem::path&, std::string&)>
+        TestOnlyRemoveCompletedOutput;
 };
 
 struct TerrainBakeResult {
@@ -607,6 +610,11 @@ TerrainBakeResult BakeTerrainPage(
     const TerrainBakeOptions& options,
     std::string& detail);
 ```
+
+`TerrainBakeOptions::TestOnlyRemoveCompletedOutput` is the only public
+test seam for completed-file removal. Production callers must leave it empty.
+The callback return is advisory: after either the injected or real remove,
+physical state from `symlink_status` is authoritative.
 
 - [ ] **Step 1: Add RED pure-pixel tests**
 
@@ -769,7 +777,7 @@ set_tests_properties(
         ${CORSAIRS_REPO_ROOT})
 ```
 
-`AssetConverterLib` is the existing shared production library target already used by `AssetConverter` and `AssetConverterTests`; the probe links it instead of compiling a divergent implementation. `TerrainPageBudgetProbe` requires exactly one explicit `--repo-root` argument, rejects missing/extra arguments, resolves every real input beneath that root, performs only one production bake in a fresh process, and exits nonzero unless peak RSS is at most 128 MiB, PNG size at most 96 MiB, texture cache at most 32 MiB, and row staging at most 16 KiB.
+`AssetConverterLib` is the existing shared production library target already used by `AssetConverter` and `AssetConverterTests`; the probe links it instead of compiling a divergent implementation. `TerrainPageBudgetProbe` requires exactly one explicit `--repo-root` argument, rejects missing/extra arguments, resolves every real input beneath that root, atomically creates a unique output directory which it alone owns, performs only one production bake in a fresh process, and exits nonzero unless peak RSS is at most 128 MiB, PNG size at most 96 MiB, texture cache at most 32 MiB, and row staging at most 16 KiB. Probe cleanup uses the same physical `symlink_status` postcondition and fails if any directory or dangling symlink remains.
 
 Focused in-process tests set `MaxRssBytes=std::numeric_limits<std::size_t>::max()` and assert the recorded value only. The standalone budget probe and production command keep the 128 MiB option and are the only tests that verdict RSS.
 
@@ -845,9 +853,12 @@ clean up any partial PNG, and perform checked cleanup of any completed PNG
 owned by this attempt. After verified completed-output cleanup, clear successful
 path/hash fields. If removal of a completed PNG cannot be verified, return
 stable `RECOVERY_REQUIRED`, keep the retained path and available SHA/metrics as
-actionable recovery evidence, and never report success. Task 5 never writes or
-replaces the top-level manifest; Task 7 alone validates all run-private files
-and atomically publishes it.
+actionable recovery evidence, and never report success. Normalize only the
+expected `no_such_file_or_directory` status; cleanup is verified exactly when
+`symlink_status` has no error and reports `file_type::not_found`. A dangling
+symlink is retained state and therefore requires recovery. Task 5 never writes
+or replaces the top-level manifest; Task 7 alone validates all run-private
+files and atomically publishes it.
 
 - [ ] **Step 5: Verify GREEN**
 

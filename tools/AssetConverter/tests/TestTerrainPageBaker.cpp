@@ -33,6 +33,10 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 namespace {
 
 namespace AC = Corsairs::Tools::AssetConverter;
@@ -305,6 +309,35 @@ bool IsLowerHexSha(std::string_view hash) {
            });
 }
 
+bool IsWindowsSymlinkPermissionError(const std::error_code& error) {
+#if defined(_WIN32)
+    return error == std::errc::permission_denied ||
+           error.value() == ERROR_ACCESS_DENIED ||
+           error.value() == ERROR_PRIVILEGE_NOT_HELD;
+#else
+    static_cast<void>(error);
+    return false;
+#endif
+}
+
+void ReportWindowsSymlinkSkip(std::string_view testName,
+                              const std::error_code& error) {
+    std::cout << std::format(
+        "        SKIP {}: Windows symlink privilege/access denied: {}\n",
+        testName, error.message());
+}
+
+std::filesystem::file_status CleanupSymlinkStatus(
+    const std::filesystem::path& path, std::error_code& error) {
+    std::filesystem::file_status status =
+        std::filesystem::symlink_status(path, error);
+    if (status.type() == std::filesystem::file_type::not_found &&
+        error == std::errc::no_such_file_or_directory) {
+        error.clear();
+    }
+    return status;
+}
+
 class ScopedOwnedTree {
 public:
     explicit ScopedOwnedTree(std::filesystem::path path)
@@ -333,7 +366,10 @@ public:
             return false;
         }
         error.clear();
-        if (std::filesystem::exists(_path, error) || error) {
+        const std::filesystem::file_status cleanupStatus =
+            CleanupSymlinkStatus(_path, error);
+        if (error ||
+            cleanupStatus.type() != std::filesystem::file_type::not_found) {
             detail = error ? error.message() : "test-owned tree retained";
             return false;
         }
@@ -510,7 +546,11 @@ void RequireFailure(bool& corsairsTestOk,
     REQUIRE_EQ(detail, std::string{expectedDetail});
     REQUIRE(result.PngPath.empty());
     REQUIRE(result.PngSha256.empty());
-    REQUIRE(!std::filesystem::exists(expectedPng));
+    std::error_code statusError;
+    const std::filesystem::file_status outputStatus =
+        CleanupSymlinkStatus(expectedPng, statusError);
+    REQUIRE(!statusError);
+    REQUIRE(outputStatus.type() == std::filesystem::file_type::not_found);
 }
 
 CORSAIRS_TEST(TerrainPageBaker_UsesLiteralLegacyBgra565AndDefaultWhite) {
@@ -948,7 +988,7 @@ CORSAIRS_TEST(TerrainPageBaker_EnforcesEveryProductionBudgetGate) {
         std::size_t cleanupCalls = 0u;
         std::filesystem::path cleanupPath;
         std::optional<std::string> cleanupHash;
-        options.RemoveCompletedOutput =
+        options.TestOnlyRemoveCompletedOutput =
             [&](const std::filesystem::path& path, std::string& cleanupDetail) {
                 ++cleanupCalls;
                 cleanupPath = path;
@@ -1005,7 +1045,7 @@ CORSAIRS_TEST(TerrainPageBaker_RetainsRecoveryEvidenceWhenCleanupFails) {
     options.MaxPngBytes = 0u;
     std::size_t cleanupCalls = 0u;
     std::filesystem::path attemptedPath;
-    options.RemoveCompletedOutput =
+    options.TestOnlyRemoveCompletedOutput =
         [&](const std::filesystem::path& path, std::string& cleanupDetail) {
             ++cleanupCalls;
             attemptedPath = path;
@@ -1054,6 +1094,90 @@ CORSAIRS_TEST(TerrainPageBaker_RetainsRecoveryEvidenceWhenCleanupFails) {
     REQUIRE(std::filesystem::remove(expectedPng, removeError));
     REQUIRE(!removeError);
     REQUIRE(!std::filesystem::exists(expectedPng));
+}
+
+CORSAIRS_TEST(TerrainPageBaker_DanglingSymlinkIsRecoveryRequired) {
+    TerrainFixture fixture{"cleanup-dangling-symlink"};
+    REQUIRE(fixture.Ready());
+    REQUIRE(fixture.AddTexture(1u, "base", SolidImage(20u, 30u, 40u)));
+    REQUIRE(fixture.WriteAlpha(SolidImage(0u, 0u, 0u, 0u)));
+    REQUIRE(fixture.WriteMap(
+        "valid", 2, 2,
+        std::vector<std::optional<AC::MapTile>>(4u, Tile(1u))));
+    std::string detail;
+    auto catalog = fixture.LoadCatalog(detail);
+    REQUIRE(catalog.has_value());
+    auto reader = OpenReader(fixture.MapPath("valid"), detail);
+    REQUIRE(reader.has_value());
+
+    AC::TerrainBakeOptions options = Options(1u, 1u);
+    options.MaxPngBytes = 0u;
+    std::size_t cleanupCalls = 0u;
+    std::optional<std::error_code> symlinkError;
+    options.TestOnlyRemoveCompletedOutput =
+        [&](const std::filesystem::path& path, std::string& cleanupDetail) {
+            ++cleanupCalls;
+            std::error_code error;
+            const bool removed = std::filesystem::remove(path, error);
+            if (error || !removed) {
+                cleanupDetail = "injected remover не удалил original PNG";
+                return false;
+            }
+            std::filesystem::create_symlink(
+                "missing-recovery-target.png", path, error);
+            if (error) {
+                symlinkError = error;
+                cleanupDetail = "injected remover не создал dangling symlink";
+                return false;
+            }
+            cleanupDetail = "injected dangling symlink replacement";
+            return true;
+        };
+    const auto output = fixture.Output("dangling-recovery");
+    const auto expectedPng = output / "garner.albedo_0_0.png";
+    const auto failed = AC::BakeTerrainPage(
+        *reader, *catalog, {0u, 0u}, fixture.AlphaPath(), output, options, detail);
+
+    REQUIRE_EQ(cleanupCalls, 1u);
+    if (symlinkError.has_value() &&
+        IsWindowsSymlinkPermissionError(*symlinkError)) {
+        std::error_code skipCleanupError;
+        std::filesystem::remove(expectedPng, skipCleanupError);
+        REQUIRE(!skipCleanupError);
+        const std::filesystem::file_status skipCleanupStatus =
+            CleanupSymlinkStatus(expectedPng, skipCleanupError);
+        REQUIRE(!skipCleanupError);
+        REQUIRE(skipCleanupStatus.type() ==
+                std::filesystem::file_type::not_found);
+        ReportWindowsSymlinkSkip(
+            "TerrainPageBaker_DanglingSymlinkIsRecoveryRequired", *symlinkError);
+        return;
+    }
+    REQUIRE(!symlinkError.has_value());
+    REQUIRE(!failed.Ok);
+    REQUIRE(failed.PngPath == expectedPng);
+    REQUIRE(IsLowerHexSha(failed.PngSha256));
+    REQUIRE_EQ(
+        detail,
+        std::format(
+            "RECOVERY_REQUIRED: не удалось удалить PNG отклонённой попытки; "
+            "cause=превышен budget размера PNG; retained={}; sha256={}; "
+            "cleanup=injected dangling symlink replacement",
+            expectedPng.generic_string(), failed.PngSha256));
+    std::error_code statusError;
+    const std::filesystem::file_status retainedStatus =
+        std::filesystem::symlink_status(expectedPng, statusError);
+    REQUIRE(!statusError);
+    REQUIRE(retainedStatus.type() == std::filesystem::file_type::symlink);
+
+    std::error_code removeError;
+    REQUIRE(std::filesystem::remove(expectedPng, removeError));
+    REQUIRE(!removeError);
+    statusError.clear();
+    const std::filesystem::file_status removedStatus =
+        CleanupSymlinkStatus(expectedPng, statusError);
+    REQUIRE(!statusError);
+    REQUIRE(removedStatus.type() == std::filesystem::file_type::not_found);
 }
 
 CORSAIRS_TEST(TerrainPageBaker_RejectsSingleDecodedTextureAboveHardLiveLimit) {
@@ -1357,9 +1481,22 @@ CORSAIRS_TEST(TerrainPageBudgetProbe_RejectsCanonicalRepoSymlinkEscape) {
     std::error_code error;
     std::filesystem::create_directory_symlink(
         realRoot / "Client", *fakeRoot / "Client", error);
+    if (error && IsWindowsSymlinkPermissionError(error)) {
+        ReportWindowsSymlinkSkip(
+            "TerrainPageBudgetProbe_RejectsCanonicalRepoSymlinkEscape", error);
+        REQUIRE(fakeCleanup.CleanupChecked(detail));
+        return;
+    }
     REQUIRE(!error);
+    error.clear();
     std::filesystem::create_directory_symlink(
         realRoot / "databases", *fakeRoot / "databases", error);
+    if (error && IsWindowsSymlinkPermissionError(error)) {
+        ReportWindowsSymlinkSkip(
+            "TerrainPageBudgetProbe_RejectsCanonicalRepoSymlinkEscape", error);
+        REQUIRE(fakeCleanup.CleanupChecked(detail));
+        return;
+    }
     REQUIRE(!error);
 
     const std::filesystem::path logPath = *fakeRoot / "probe.log";

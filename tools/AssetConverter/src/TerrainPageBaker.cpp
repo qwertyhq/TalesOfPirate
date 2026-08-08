@@ -14,12 +14,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <ios>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace Corsairs::Tools::AssetConverter {
@@ -27,6 +29,17 @@ namespace Corsairs::Tools::AssetConverter {
 namespace {
 
 constexpr std::size_t kHardTextureCacheBytes = 32u * 1024u * 1024u;
+
+std::filesystem::file_status CleanupSymlinkStatus(
+    const std::filesystem::path& path, std::error_code& error) {
+    std::filesystem::file_status status =
+        std::filesystem::symlink_status(path, error);
+    if (status.type() == std::filesystem::file_type::not_found &&
+        error == std::errc::no_such_file_or_directory) {
+        error.clear();
+    }
+    return status;
+}
 
 std::uint8_t RoundUnorm8(double value) {
     return static_cast<std::uint8_t>(
@@ -114,8 +127,10 @@ TerrainBakeResult BakeTerrainPage(
         if (completedOutputOwned) {
             const std::string cause = detail;
             std::string cleanupDetail;
-            if (options.RemoveCompletedOutput) {
-                options.RemoveCompletedOutput(outputPath, cleanupDetail);
+            if (options.TestOnlyRemoveCompletedOutput) {
+                const bool advisoryResult =
+                    options.TestOnlyRemoveCompletedOutput(outputPath, cleanupDetail);
+                static_cast<void>(advisoryResult);
             }
             else {
                 std::error_code removeError;
@@ -128,12 +143,15 @@ TerrainBakeResult BakeTerrainPage(
                 }
             }
 
-            std::error_code existenceError;
-            const bool retained = std::filesystem::exists(outputPath, existenceError);
-            if (existenceError || retained) {
+            std::error_code statusError;
+            const std::filesystem::file_status outputStatus =
+                CleanupSymlinkStatus(outputPath, statusError);
+            const bool verifiedGone = !statusError &&
+                outputStatus.type() == std::filesystem::file_type::not_found;
+            if (!verifiedGone) {
                 if (cleanupDetail.empty()) {
-                    cleanupDetail = existenceError
-                        ? existenceError.message()
+                    cleanupDetail = statusError
+                        ? statusError.message()
                         : "после cleanup PNG всё ещё существует";
                 }
                 result.Ok = false;

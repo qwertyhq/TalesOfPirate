@@ -23,6 +23,17 @@ int Fail(const std::string& detail) {
     return 1;
 }
 
+std::filesystem::file_status CleanupSymlinkStatus(
+    const std::filesystem::path& path, std::error_code& error) {
+    std::filesystem::file_status status =
+        std::filesystem::symlink_status(path, error);
+    if (status.type() == std::filesystem::file_type::not_found &&
+        error == std::errc::no_such_file_or_directory) {
+        error.clear();
+    }
+    return status;
+}
+
 bool IsContainedBy(const std::filesystem::path& root,
                    const std::filesystem::path& candidate) {
     auto rootPart = root.begin();
@@ -123,7 +134,11 @@ public:
             return false;
         }
         error.clear();
-        if (std::filesystem::exists(_path, error) || error) {
+        const std::filesystem::file_status outputStatus =
+            CleanupSymlinkStatus(_path, error);
+        const bool verifiedGone = !error &&
+            outputStatus.type() == std::filesystem::file_type::not_found;
+        if (!verifiedGone) {
             detail = "не удалось очистить private output " +
                 _path.generic_string() +
                 (error ? ": " + error.message() : ": каталог сохранён");
