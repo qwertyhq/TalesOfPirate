@@ -1,5 +1,6 @@
 #include "Corsairs/Tools/AssetConverter/BinaryReader.h"
 #include "Corsairs/Tools/AssetConverter/MapSectionReader.h"
+#include "Corsairs/Tools/AssetConverter/Sha256.h"
 #include "Corsairs/Tools/AssetConverter/TerrainPageBaker.h"
 #include "Corsairs/Tools/AssetConverter/TerrainPageMeshWriter.h"
 
@@ -23,9 +24,19 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <csignal>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -448,6 +459,76 @@ bool HasCanonicalVertexOrder(const DecodedTerrainGltf& mesh,
     return expectedIndex == mesh.Positions.size();
 }
 
+bool HasGlobalRowMajorCellBlocks(const DecodedTerrainGltf& mesh,
+                                 std::uint32_t step) {
+    if (step == 0u || kCellsPerPage % step != 0u ||
+        mesh.Indices.empty() || mesh.Indices.size() % 3u != 0u) {
+        return false;
+    }
+    const std::uint32_t coarseCells = kCellsPerPage / step;
+    std::vector<std::size_t> trianglesPerCell(
+        static_cast<std::size_t>(coarseCells) * coarseCells, 0u);
+    std::size_t previousCell = 0u;
+    bool firstTriangle = true;
+    for (std::size_t offset = 0u; offset < mesh.Indices.size(); offset += 3u) {
+        float minX = static_cast<float>(kCellsPerPage);
+        float minY = static_cast<float>(kCellsPerPage);
+        float maxX = 0.0f;
+        float maxY = 0.0f;
+        for (std::size_t corner = 0u; corner < 3u; ++corner) {
+            const std::uint32_t vertex = mesh.Indices[offset + corner];
+            if (vertex >= mesh.Positions.size()) {
+                return false;
+            }
+            const float x = mesh.Positions[vertex][0];
+            const float y = -mesh.Positions[vertex][2];
+            minX = std::min(minX, x);
+            minY = std::min(minY, y);
+            maxX = std::max(maxX, x);
+            maxY = std::max(maxY, y);
+        }
+        const std::uint32_t cellX = std::min(
+            static_cast<std::uint32_t>(minX) / step, coarseCells - 1u);
+        const std::uint32_t cellY = std::min(
+            static_cast<std::uint32_t>(minY) / step, coarseCells - 1u);
+        if (minX < static_cast<float>(cellX * step) ||
+            minY < static_cast<float>(cellY * step) ||
+            maxX > static_cast<float>((cellX + 1u) * step) ||
+            maxY > static_cast<float>((cellY + 1u) * step)) {
+            return false;
+        }
+        const std::size_t cell =
+            static_cast<std::size_t>(cellY) * coarseCells + cellX;
+        if (!firstTriangle && cell < previousCell) {
+            return false;
+        }
+        firstTriangle = false;
+        previousCell = cell;
+        ++trianglesPerCell[cell];
+    }
+
+    for (std::uint32_t cellY = 0u; cellY < coarseCells; ++cellY) {
+        for (std::uint32_t cellX = 0u; cellX < coarseCells; ++cellX) {
+            const bool top = cellY == 0u;
+            const bool bottom = cellY + 1u == coarseCells;
+            const bool left = cellX == 0u;
+            const bool right = cellX + 1u == coarseCells;
+            const bool corner = (top || bottom) && (left || right);
+            const std::size_t expected = step == 1u ||
+                    (!top && !bottom && !left && !right)
+                ? 2u
+                : corner ? static_cast<std::size_t>(step) * 2u
+                         : static_cast<std::size_t>(step) + 1u;
+            const std::size_t cell =
+                static_cast<std::size_t>(cellY) * coarseCells + cellX;
+            if (trianglesPerCell[cell] != expected) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 std::vector<std::uint32_t> CellIndices(const DecodedTerrainGltf& mesh,
                                        std::uint32_t cellX,
                                        std::uint32_t cellY,
@@ -522,6 +603,62 @@ bool IsWriterFailure(const AC::TerrainPageMeshResult& result,
         result.BinPath.empty() && !detail.empty();
 }
 
+bool WriteTextFile(const std::filesystem::path& path, std::string_view text) {
+    std::ofstream output{path, std::ios::binary | std::ios::trunc};
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+    return static_cast<bool>(output);
+}
+
+struct FileSnapshot {
+    std::filesystem::path Path;
+    std::string Contents;
+    std::string Sha256;
+};
+
+std::optional<FileSnapshot> SnapshotFile(const std::filesystem::path& path) {
+    const auto contents = ReadText(path);
+    std::string detail;
+    const auto sha256 = AC::Sha256File(path, detail);
+    if (!contents.has_value() || !sha256.has_value() || !detail.empty()) {
+        return std::nullopt;
+    }
+    return FileSnapshot{path, *contents, *sha256};
+}
+
+bool SnapshotUnchanged(const FileSnapshot& snapshot) {
+    const auto contents = ReadText(snapshot.Path);
+    std::string detail;
+    const auto sha256 = AC::Sha256File(snapshot.Path, detail);
+    return contents.has_value() && sha256.has_value() && detail.empty() &&
+        *contents == snapshot.Contents && *sha256 == snapshot.Sha256;
+}
+
+std::optional<std::filesystem::file_type> PhysicalType(
+    const std::filesystem::path& path) {
+    std::error_code error;
+    const std::filesystem::file_status status =
+        std::filesystem::symlink_status(path, error);
+    if (status.type() == std::filesystem::file_type::not_found &&
+        error == std::errc::no_such_file_or_directory) {
+        error.clear();
+    }
+    if (error) {
+        return std::nullopt;
+    }
+    return status.type();
+}
+
+bool IsWindowsSymlinkPermissionError(const std::error_code& error) {
+#if defined(_WIN32)
+    return error == std::errc::permission_denied ||
+        error.value() == ERROR_ACCESS_DENIED ||
+        error.value() == ERROR_PRIVILEGE_NOT_HELD;
+#else
+    static_cast<void>(error);
+    return false;
+#endif
+}
+
 CORSAIRS_TEST(TerrainPageMeshWriter_SelectsLargestPassingStepInclusively) {
     ScopedTestDirectory temporary{"adaptive"};
     REQUIRE(temporary.Ready());
@@ -563,6 +700,14 @@ CORSAIRS_TEST(TerrainPageMeshWriter_SelectsLargestPassingStepInclusively) {
     REQUIRE_EQ(spikeResult.Error.RmsCm, 0.0);
     REQUIRE_EQ(spikeResult.Error.SharedBoundaryMaxCm, 0.0);
     REQUIRE_EQ(spikeResult.Error.Samples, kSampleCount);
+    const auto spikeMesh = DecodeTerrainGltf(spikeResult.GltfPath);
+    REQUIRE(spikeMesh.has_value());
+    REQUIRE_EQ(spikeMesh->Positions.size(), kSampleCount);
+    REQUIRE(HasCanonicalVertexOrder(*spikeMesh, 1u));
+    REQUIRE(HasOnlyTopFacingTriangles(*spikeMesh));
+    REQUIRE(HasGlobalRowMajorCellBlocks(*spikeMesh, 1u));
+    REQUIRE(CellIndicesEqual(*spikeMesh, 65u, 65u, 1u,
+        {8450u, 8451u, 8579u, 8451u, 8580u, 8579u}));
 
     AC::TerrainPageMeshOptions inclusive;
     inclusive.MaxAbsCm = 100.0;
@@ -608,6 +753,8 @@ CORSAIRS_TEST(TerrainPageMeshWriter_DecodesCanonicalTopologyAndDeterministicPair
     REQUIRE(HasCanonicalVertexOrder(*stepTwo, 2u));
     REQUIRE(HasOnlyTopFacingTriangles(*stepFour));
     REQUIRE(HasOnlyTopFacingTriangles(*stepTwo));
+    REQUIRE(HasGlobalRowMajorCellBlocks(*stepFour, 4u));
+    REQUIRE(HasGlobalRowMajorCellBlocks(*stepTwo, 2u));
     REQUIRE(std::all_of(stepFour->Normals.begin(), stepFour->Normals.end(),
                         [](const auto& normal) {
                             return normal == std::array<float, 3>{0.0f, 1.0f, 0.0f};
@@ -866,6 +1013,279 @@ CORSAIRS_TEST(TerrainPageMeshWriter_UsesGarnerSparseHaloDefaultDeterministically
                      "garner.terrain_17_21.gltf"));
     REQUIRE(IsNoFile(temporary.Path() / "missing" /
                      "garner.terrain_17_21.bin"));
+}
+
+CORSAIRS_TEST(TerrainPageMeshWriter_PreservesEveryOccupiedOutputLeaf) {
+    ScopedTestDirectory temporary{"occupied-leaves"};
+    REQUIRE(temporary.Ready());
+
+    enum class LeafKind { Missing, Regular, Directory, Symlink };
+    struct OccupiedLeafCase {
+        std::string_view Name;
+        LeafKind Gltf;
+        LeafKind Bin;
+    };
+    std::vector<OccupiedLeafCase> cases{
+        {"gltf-regular-bin-missing", LeafKind::Regular, LeafKind::Missing},
+        {"gltf-missing-bin-regular", LeafKind::Missing, LeafKind::Regular},
+        {"gltf-directory-bin-regular", LeafKind::Directory, LeafKind::Regular},
+        {"gltf-regular-bin-directory", LeafKind::Regular, LeafKind::Directory},
+        {"both-regular", LeafKind::Regular, LeafKind::Regular},
+    };
+    bool leafSymlinkSupported = true;
+#if defined(_WIN32)
+    const std::filesystem::path probeTarget =
+        temporary.Path() / "windows-symlink-probe-target.txt";
+    const std::filesystem::path probeLink =
+        temporary.Path() / "windows-symlink-probe-link.txt";
+    REQUIRE(WriteTextFile(probeTarget, "probe"));
+    std::error_code probeError;
+    std::filesystem::create_symlink(probeTarget, probeLink, probeError);
+    if (probeError && IsWindowsSymlinkPermissionError(probeError)) {
+        std::cout << std::format(
+            "        SKIP Windows occupied-leaf symlink case: {}\n",
+            probeError.message());
+        leafSymlinkSupported = false;
+    }
+    else {
+        REQUIRE(!probeError);
+        probeError.clear();
+        REQUIRE(std::filesystem::remove(probeLink, probeError));
+        REQUIRE(!probeError);
+        REQUIRE(IsNoFile(probeLink));
+    }
+#endif
+    if (leafSymlinkSupported) {
+        cases.push_back(
+            {"gltf-symlink-bin-regular", LeafKind::Symlink, LeafKind::Regular});
+    }
+
+    bool allCasesPassed = true;
+    for (const OccupiedLeafCase& testCase : cases) {
+        const std::filesystem::path outputDirectory =
+            temporary.Path() / testCase.Name;
+        std::error_code error;
+        const bool directoryCreated =
+            std::filesystem::create_directory(outputDirectory, error);
+        if (!directoryCreated || error) {
+            std::cout << std::format(
+                "        case {}: output directory setup failed: {}\n",
+                testCase.Name, error.message());
+            allCasesPassed = false;
+            continue;
+        }
+        const std::filesystem::path gltfPath =
+            outputDirectory / "garner.terrain_00_00.gltf";
+        const std::filesystem::path binPath =
+            outputDirectory / "garner.terrain_00_00.bin";
+        std::vector<FileSnapshot> snapshots;
+
+        const auto prepareLeaf = [&](const std::filesystem::path& path,
+                                     LeafKind kind,
+                                     std::string_view label) {
+            if (kind == LeafKind::Missing) {
+                return true;
+            }
+            std::filesystem::path protectedFile = path;
+            if (kind == LeafKind::Directory) {
+                std::error_code createError;
+                if (!std::filesystem::create_directory(path, createError) ||
+                    createError) {
+                    return false;
+                }
+                protectedFile = path / "inside-sentinel.txt";
+            }
+            else if (kind == LeafKind::Symlink) {
+                protectedFile = path.parent_path() /
+                    std::format("{}-target.txt", label);
+            }
+            if (!WriteTextFile(
+                    protectedFile,
+                    std::format("preserve-{}-{}", testCase.Name, label))) {
+                return false;
+            }
+            if (kind == LeafKind::Symlink) {
+                std::error_code linkError;
+                std::filesystem::create_symlink(protectedFile, path, linkError);
+                if (linkError) {
+                    return false;
+                }
+            }
+            const auto snapshot = SnapshotFile(protectedFile);
+            if (!snapshot.has_value()) {
+                return false;
+            }
+            snapshots.push_back(*snapshot);
+            return true;
+        };
+
+        const bool setupOk =
+            prepareLeaf(gltfPath, testCase.Gltf, "gltf") &&
+            prepareLeaf(binPath, testCase.Bin, "bin");
+        const auto gltfTypeBefore = PhysicalType(gltfPath);
+        const auto binTypeBefore = PhysicalType(binPath);
+        if (!setupOk || !gltfTypeBefore.has_value() ||
+            !binTypeBefore.has_value()) {
+            std::cout << std::format(
+                "        case {}: leaf setup/snapshot failed\n", testCase.Name);
+            allCasesPassed = false;
+            continue;
+        }
+
+        std::string detail;
+        const auto result = AC::WriteTerrainPageMesh(
+            FlatPage(), {0u, 0u}, outputDirectory, {}, detail);
+        const auto gltfTypeAfter = PhysicalType(gltfPath);
+        const auto binTypeAfter = PhysicalType(binPath);
+        const auto symlinkTargetUnchanged = [](
+            const std::filesystem::path& path,
+            LeafKind kind,
+            std::string_view label) {
+            if (kind != LeafKind::Symlink) {
+                return true;
+            }
+            std::error_code linkError;
+            const std::filesystem::path target =
+                std::filesystem::read_symlink(path, linkError);
+            return !linkError && target == path.parent_path() /
+                std::format("{}-target.txt", label);
+        };
+        const bool snapshotsUnchanged = std::all_of(
+            snapshots.begin(), snapshots.end(), SnapshotUnchanged);
+        const bool casePassed = IsWriterFailure(result, detail) &&
+            gltfTypeAfter == gltfTypeBefore && binTypeAfter == binTypeBefore &&
+            snapshotsUnchanged &&
+            symlinkTargetUnchanged(gltfPath, testCase.Gltf, "gltf") &&
+            symlinkTargetUnchanged(binPath, testCase.Bin, "bin");
+        if (!casePassed) {
+            std::cout << std::format(
+                "        case {}: result/presence/content/hash changed\n",
+                testCase.Name);
+            allCasesPassed = false;
+        }
+    }
+    REQUIRE(allCasesPassed);
+}
+
+CORSAIRS_TEST(TerrainPageMeshWriter_RejectsFifoLeafWithoutBlocking) {
+#if defined(_WIN32)
+    std::cout << "        SKIP POSIX-only FIFO regression\n";
+    static_cast<void>(corsairsTestOk);
+    return;
+#else
+    ScopedTestDirectory temporary{"fifo-leaf"};
+    REQUIRE(temporary.Ready());
+    const std::filesystem::path outputDirectory = temporary.Path() / "output";
+    REQUIRE(std::filesystem::create_directory(outputDirectory));
+    const std::filesystem::path gltfPath =
+        outputDirectory / "garner.terrain_00_00.gltf";
+    const std::filesystem::path binPath =
+        outputDirectory / "garner.terrain_00_00.bin";
+    REQUIRE(::mkfifo(binPath.c_str(), 0600) == 0);
+    const AC::MapPageTiles page = FlatPage();
+
+    constexpr auto timeout = std::chrono::milliseconds{1500};
+    const auto started = std::chrono::steady_clock::now();
+    const pid_t child = ::fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        std::string detail;
+        const auto result = AC::WriteTerrainPageMesh(
+            page, {0u, 0u}, outputDirectory, {}, detail);
+        ::_exit(IsWriterFailure(result, detail) ? 0 : 2);
+    }
+
+    int childStatus = 0;
+    bool completed = false;
+    bool waitError = false;
+    while (std::chrono::steady_clock::now() - started < timeout) {
+        const pid_t waited = ::waitpid(child, &childStatus, WNOHANG);
+        if (waited == child) {
+            completed = true;
+            break;
+        }
+        if (waited < 0) {
+            waitError = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    }
+    bool childReaped = completed;
+    if (!completed) {
+        const int killResult = ::kill(child, SIGKILL);
+        const pid_t reaped = ::waitpid(child, &childStatus, 0);
+        childReaped = killResult == 0 && reaped == child;
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+
+    const auto retainedFifoType = PhysicalType(binPath);
+    std::error_code cleanupError;
+    const bool fifoRemoved = std::filesystem::remove(binPath, cleanupError);
+    const bool cleanupChecked =
+        retainedFifoType == std::filesystem::file_type::fifo && fifoRemoved &&
+        !cleanupError && IsNoFile(binPath);
+    REQUIRE(cleanupChecked);
+    REQUIRE(childReaped);
+    REQUIRE(!waitError);
+    REQUIRE(completed);
+    REQUIRE(WIFEXITED(childStatus));
+    REQUIRE_EQ(WEXITSTATUS(childStatus), 0);
+    REQUIRE(elapsed < timeout);
+    REQUIRE(IsNoFile(gltfPath));
+#endif
+}
+
+CORSAIRS_TEST(TerrainPageMeshWriter_RejectsSymlinkOutputDirectoryWithoutEscape) {
+    ScopedTestDirectory temporary{"symlink-output-directory"};
+    REQUIRE(temporary.Ready());
+    const std::filesystem::path outside = temporary.Path() / "outside";
+    REQUIRE(std::filesystem::create_directory(outside));
+    const std::filesystem::path sentinel = outside / "outside-sentinel.txt";
+    REQUIRE(WriteTextFile(sentinel, "outside-must-stay-byte-identical"));
+    const auto sentinelBefore = SnapshotFile(sentinel);
+    REQUIRE(sentinelBefore.has_value());
+
+    const std::filesystem::path linkedOutput = temporary.Path() / "linked-output";
+    std::error_code linkError;
+    std::filesystem::create_directory_symlink(outside, linkedOutput, linkError);
+    bool symlinkCasePassed = true;
+    if (linkError) {
+        if (IsWindowsSymlinkPermissionError(linkError)) {
+            std::cout << std::format(
+                "        SKIP Windows directory symlink regression: {}\n",
+                linkError.message());
+        }
+        else {
+            symlinkCasePassed = false;
+        }
+    }
+    else {
+        std::string detail;
+        const auto result = AC::WriteTerrainPageMesh(
+            FlatPage(), {0u, 0u}, linkedOutput, {}, detail);
+        const std::filesystem::path trailingLinkedOutput{
+            linkedOutput.generic_string() + "/"};
+        const auto trailingResult = AC::WriteTerrainPageMesh(
+            FlatPage(), {0u, 0u}, trailingLinkedOutput, {}, detail);
+        symlinkCasePassed = IsWriterFailure(result, detail) &&
+            IsWriterFailure(trailingResult, detail) &&
+            PhysicalType(linkedOutput) == std::filesystem::file_type::symlink &&
+            SnapshotUnchanged(*sentinelBefore) &&
+            IsNoFile(outside / "garner.terrain_00_00.gltf") &&
+            IsNoFile(outside / "garner.terrain_00_00.bin");
+    }
+
+    std::string detail;
+    const std::filesystem::path missingReal = temporary.Path() / "missing-real";
+    const auto missingResult = AC::WriteTerrainPageMesh(
+        FlatPage(), {0u, 0u}, missingReal, {}, detail);
+    const std::filesystem::path existingReal = temporary.Path() / "existing-real";
+    REQUIRE(std::filesystem::create_directory(existingReal));
+    const auto existingResult = AC::WriteTerrainPageMesh(
+        FlatPage(), {0u, 0u}, existingReal, {}, detail);
+    REQUIRE(symlinkCasePassed);
+    REQUIRE(missingResult.Ok);
+    REQUIRE(existingResult.Ok);
 }
 
 CORSAIRS_TEST(TerrainPageMeshWriter_RejectsMalformedInputsAndCleansPartialPair) {

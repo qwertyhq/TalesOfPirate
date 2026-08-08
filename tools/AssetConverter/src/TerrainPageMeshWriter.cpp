@@ -365,8 +365,8 @@ std::filesystem::file_status SymlinkStatus(
     return status;
 }
 
-bool RemoveRegularFile(const std::filesystem::path& path,
-                       std::string& detail) {
+bool RemoveAttemptRegularFile(const std::filesystem::path& path,
+                              std::string& detail) {
     std::error_code statusError;
     const std::filesystem::file_status status =
         SymlinkStatus(path, statusError);
@@ -403,17 +403,89 @@ bool RemoveRegularFile(const std::filesystem::path& path,
     return true;
 }
 
-bool RejectSymlinkTarget(const std::filesystem::path& path,
-                         std::string& detail) {
+std::filesystem::path OutputDirectoryLeafPath(
+    const std::filesystem::path& path) {
+    std::filesystem::path leaf = path;
+    while (!leaf.empty() && leaf != leaf.root_path() &&
+           (leaf.filename().empty() || leaf.filename() == ".")) {
+        const std::filesystem::path parent = leaf.parent_path();
+        if (parent.empty() || parent == leaf) {
+            break;
+        }
+        leaf = parent;
+    }
+    return leaf;
+}
+
+bool PreparePhysicalOutputDirectory(const std::filesystem::path& path,
+                                    std::string& detail) {
+    const std::filesystem::path physicalLeaf = OutputDirectoryLeafPath(path);
     std::error_code error;
-    const std::filesystem::file_status status = SymlinkStatus(path, error);
+    std::filesystem::file_status status = SymlinkStatus(physicalLeaf, error);
     if (error) {
-        detail = std::format("не удалось проверить target {}: {}",
+        detail = std::format("не удалось проверить outputDirectory {}: {}",
                              path.generic_string(), error.message());
         return false;
     }
-    if (status.type() == std::filesystem::file_type::symlink) {
-        detail = std::format("terrain mesh target является symlink: {}",
+    if (status.type() == std::filesystem::file_type::not_found) {
+        std::filesystem::create_directories(physicalLeaf, error);
+        if (error) {
+            detail = std::format("не удалось создать outputDirectory {}: {}",
+                                 path.generic_string(), error.message());
+            return false;
+        }
+        status = SymlinkStatus(physicalLeaf, error);
+        if (error) {
+            detail = std::format(
+                "не удалось подтвердить созданный outputDirectory {}: {}",
+                path.generic_string(), error.message());
+            return false;
+        }
+    }
+
+    std::error_code directoryError;
+    const bool directory =
+        std::filesystem::is_directory(physicalLeaf, directoryError);
+    if (directoryError ||
+        status.type() != std::filesystem::file_type::directory || !directory) {
+        detail = std::format(
+            "outputDirectory должен быть physical directory без symlink: {}{}{}",
+            path.generic_string(),
+            directoryError ? ": " : "",
+            directoryError ? directoryError.message() : "");
+        return false;
+    }
+    return true;
+}
+
+bool RequireMissingOutputLeaf(const std::filesystem::path& path,
+                              std::string& detail) {
+    std::error_code error;
+    const std::filesystem::file_status status = SymlinkStatus(path, error);
+    if (error) {
+        detail = std::format("не удалось проверить terrain mesh target {}: {}",
+                             path.generic_string(), error.message());
+        return false;
+    }
+    if (status.type() != std::filesystem::file_type::not_found) {
+        detail = std::format("terrain mesh target уже существует: {}",
+                             path.generic_string());
+        return false;
+    }
+    return true;
+}
+
+bool IsPhysicalRegularFile(const std::filesystem::path& path,
+                           std::string& detail) {
+    std::error_code error;
+    const std::filesystem::file_status status = SymlinkStatus(path, error);
+    if (error) {
+        detail = std::format("не удалось проверить записанный target {}: {}",
+                             path.generic_string(), error.message());
+        return false;
+    }
+    if (status.type() != std::filesystem::file_type::regular) {
+        detail = std::format("записанный target не является physical regular file: {}",
                              path.generic_string());
         return false;
     }
@@ -494,9 +566,11 @@ TerrainPageMeshResult WriteTerrainPageMesh(
         const std::string cause = detail.empty() ? std::move(message) : detail;
         std::string cleanupDetail;
         if (writeAttemptStarted) {
-            const bool gltfRemoved = RemoveRegularFile(gltfPath, cleanupDetail);
+            const bool gltfRemoved =
+                RemoveAttemptRegularFile(gltfPath, cleanupDetail);
             std::string binCleanupDetail;
-            const bool binRemoved = RemoveRegularFile(binPath, binCleanupDetail);
+            const bool binRemoved =
+                RemoveAttemptRegularFile(binPath, binCleanupDetail);
             if (!gltfRemoved || !binRemoved) {
                 detail = std::format(
                     "RECOVERY_REQUIRED: не удалось очистить terrain mesh pair; "
@@ -566,26 +640,27 @@ TerrainPageMeshResult WriteTerrainPageMesh(
     if (outputDirectory.empty()) {
         return fail("outputDirectory для terrain mesh пуст");
     }
-    std::error_code directoryError;
-    std::filesystem::create_directories(outputDirectory, directoryError);
-    if (directoryError || !std::filesystem::is_directory(outputDirectory)) {
-        return fail(std::format("не удалось подготовить outputDirectory {}: {}",
-                                outputDirectory.generic_string(),
-                                directoryError ? directoryError.message()
-                                               : "path не является directory"));
+    if (!PreparePhysicalOutputDirectory(outputDirectory, detail)) {
+        return fail("не удалось подготовить physical outputDirectory");
     }
 
     gltfPath = outputDirectory /
         std::format("garner.terrain_{:02}_{:02}.gltf", pageId.X, pageId.Y);
     binPath = outputDirectory /
         std::format("garner.terrain_{:02}_{:02}.bin", pageId.X, pageId.Y);
-    if (!RejectSymlinkTarget(gltfPath, detail) ||
-        !RejectSymlinkTarget(binPath, detail)) {
+    std::string gltfValidationDetail;
+    std::string binValidationDetail;
+    const bool gltfMissing =
+        RequireMissingOutputLeaf(gltfPath, gltfValidationDetail);
+    const bool binMissing =
+        RequireMissingOutputLeaf(binPath, binValidationDetail);
+    if (!gltfMissing || !binMissing) {
+        detail = std::format(
+            "terrain mesh pair должен быть полностью свободен: {}{}{}",
+            gltfValidationDetail,
+            gltfValidationDetail.empty() || binValidationDetail.empty() ? "" : "; ",
+            binValidationDetail);
         return fail("terrain mesh target validation failed");
-    }
-    if (!RemoveRegularFile(gltfPath, detail) ||
-        !RemoveRegularFile(binPath, detail)) {
-        return fail("не удалось очистить прежний terrain mesh pair");
     }
 
     writeAttemptStarted = true;
@@ -594,11 +669,17 @@ TerrainPageMeshResult WriteTerrainPageMesh(
     if (status != GltfStatus::OK) {
         return fail("WriteGltf не записал terrain mesh pair");
     }
-    std::error_code gltfError;
-    std::error_code binError;
-    const bool gltfRegular = std::filesystem::is_regular_file(gltfPath, gltfError);
-    const bool binRegular = std::filesystem::is_regular_file(binPath, binError);
-    if (gltfError || binError || !gltfRegular || !binRegular) {
+    std::string gltfCheckDetail;
+    std::string binCheckDetail;
+    const bool gltfRegular = IsPhysicalRegularFile(gltfPath, gltfCheckDetail);
+    const bool binRegular = IsPhysicalRegularFile(binPath, binCheckDetail);
+    if (!gltfRegular || !binRegular) {
+        detail = std::format(
+            "WriteGltf не оставил полный physical regular terrain mesh pair: "
+            "{}{}{}",
+            gltfCheckDetail,
+            gltfCheckDetail.empty() || binCheckDetail.empty() ? "" : "; ",
+            binCheckDetail);
         return fail("WriteGltf не оставил полный regular terrain mesh pair");
     }
 
