@@ -144,6 +144,48 @@ class OrchestratorContractTests(unittest.TestCase):
             ("-cook", "-stage", "-pak", "-package", "-archive"))
         self.assertEqual(command.argv.count("-package"), 1)
 
+    def test_unrealpak_list_normalizes_ue58_mount_relative_members(self):
+        output = "\n".join((
+            'LogPakFile: Display: Listing CorsairsUE-Mac.pak with mount point "../../../"',
+            'LogPakFile: Display: "CorsairsUE/Data/Heights/garner.block.raw" '
+            'offset: 137722, size: 3260865 bytes, sha1: ABC, compression: Oodle.',
+            'LogPakFile: Display: "CorsairsUE/Data/Heights/garner.terrain.json" '
+            'offset: 3415028, size: 286 bytes, sha1: DEF, compression: None.',
+            'LogPakFile: Display: 2 files (3261151 bytes), (0 filtered bytes).',
+        ))
+        self.assertEqual(build.parse_unrealpak_list(output), [
+            {
+                "path": "../../../CorsairsUE/Data/Heights/garner.block.raw",
+                "sizeBytes": 3260865,
+            },
+            {
+                "path": "../../../CorsairsUE/Data/Heights/garner.terrain.json",
+                "sizeBytes": 286,
+            },
+        ])
+
+    def test_unrealpak_list_rejects_ambiguous_or_unsafe_paths(self):
+        header = (
+            'LogPakFile: Display: Listing CorsairsUE-Mac.pak with mount point '
+            '"../../../"')
+        member = (
+            'LogPakFile: Display: "CorsairsUE/Data/Heights/garner.block.raw" '
+            'offset: 0, size: 1 bytes, sha1: ABC, compression: None.')
+        cases = {
+            "missing mount": member,
+            "wrong mount": header.replace('../../../', '../../') + "\n" + member,
+            "multiple mounts": header + "\n" + header + "\n" + member,
+            "duplicate member": header + "\n" + member + "\n" + member,
+            "absolute member": header + "\n" + member.replace(
+                '"CorsairsUE/', '"/CorsairsUE/'),
+            "traversal member": header + "\n" + member.replace(
+                "Data/Heights", "Data/../Heights"),
+        }
+        for name, output in cases.items():
+            with self.subTest(name=name):
+                with self.assertRaises(build.Task8Error):
+                    build.parse_unrealpak_list(output)
+
     def test_clean_checkout_orders_installer_before_game_build_and_cook(self):
         seen = []
 

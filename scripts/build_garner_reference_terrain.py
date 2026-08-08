@@ -1412,22 +1412,36 @@ def write_inventory_report(
     return report
 
 
+_UNREALPAK_MOUNT = re.compile(
+    r'^\s*(?:LogPakFile:\s*Display:\s*)?Listing .+ with mount point '
+    r'"(?P<mount>[^\"]+)"\s*$',
+    re.IGNORECASE)
 _UNREALPAK_MEMBER = re.compile(
-    r'^\s*"(?P<path>\.\./\.\./\.\./[^\"]+)".*?\bsize:\s*(?P<size>[0-9]+)',
+    r'^\s*(?:LogPakFile:\s*Display:\s*)?"(?P<path>[^\"]+)".*?'
+    r'\bsize:\s*(?P<size>[0-9]+)\s+bytes\b',
     re.IGNORECASE)
 
 
 def parse_unrealpak_list(output: str) -> list[dict[str, Any]]:
+    mounts = [
+        match.group("mount")
+        for line in output.splitlines()
+        if (match := _UNREALPAK_MOUNT.search(line)) is not None
+    ]
+    if mounts != ["../../../"]:
+        raise Task8Error("UnrealPak emitted missing or ambiguous mount point")
     members = []
     for line in output.splitlines():
         match = _UNREALPAK_MEMBER.search(line)
         if match is None:
             continue
-        member = match.group("path")
-        suffix = member[9:]
-        if not _normalized_relative(suffix):
-            raise Task8Error(f"UnrealPak emitted invalid member path: {member}")
-        members.append({"path": member, "sizeBytes": int(match.group("size"))})
+        relative = match.group("path")
+        if not _normalized_relative(relative):
+            raise Task8Error(f"UnrealPak emitted invalid member path: {relative}")
+        members.append({
+            "path": "../../../" + relative,
+            "sizeBytes": int(match.group("size")),
+        })
     members.sort(key=lambda item: item["path"])
     if not members or len({item["path"] for item in members}) != len(members):
         raise Task8Error("UnrealPak member list is empty or duplicated")
