@@ -4,6 +4,7 @@
 #include "Corsairs/Tools/AssetConverter/TerrainPageMeshWriter.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -197,6 +198,30 @@ struct TerrainReferenceDependencies {
         std::string_view json)> AtomicPublish;
 };
 
+enum class TerrainRunDurabilityAction : std::uint32_t {
+    FLUSH_FILE,
+    SYNC_DIRECTORY_OR_EQUIVALENT,
+};
+
+struct TerrainRunDurabilityStep {
+    std::size_t ProductIndex{0u};
+    TerrainRunDurabilityAction Action{};
+};
+
+using TerrainRunDurabilityStepExecutor = std::function<bool(
+    const TerrainRunDurabilityStep&,
+    std::string&)>;
+
+// Shared production/test orchestration: all seven file barriers must finish
+// before the one directory/finalization barrier can run.
+[[nodiscard]] std::vector<TerrainRunDurabilityStep>
+PlanTerrainRunDurability(std::size_t productCount);
+
+[[nodiscard]] bool ExecuteTerrainRunDurabilitySteps(
+    std::span<const TerrainRunDurabilityStep> steps,
+    const TerrainRunDurabilityStepExecutor& execute,
+    std::string& detail);
+
 enum class TerrainReferenceFaultAction : std::uint32_t {
     NONE,
     FAIL,
@@ -205,6 +230,75 @@ enum class TerrainReferenceFaultAction : std::uint32_t {
 
 using TerrainReferenceFaultInjector =
     std::function<TerrainReferenceFaultAction(std::string_view point)>;
+
+// Platform-neutral plan shared by the Win32 adapter and behavioral tests.
+struct TerrainWindowsDurableEntryState {
+    bool SourcePresent{false};
+    bool ReservationPresent{false};
+    bool ReservationIsExactRecord{false};
+    bool ReservationIsRecordedPayload{false};
+    bool SourceMatchesRecordedArtifact{true};
+    bool ReservationMatchesRecordedArtifact{true};
+    bool ReservationRecordMatchesOwnedArtifact{true};
+};
+
+[[nodiscard]] std::optional<std::string>
+ReconcileTerrainWindowsFinalizationIdentity(
+    std::string_view recordedIdentity,
+    std::string_view observedIdentity,
+    std::string& detail);
+
+enum class TerrainWindowsDurableAction : std::uint32_t {
+    REMOVE_RESERVATION,
+    RESTORE_SOURCE,
+    FLUSH_SOURCE,
+    RESERVE_TARGET,
+    MOVE_TO_RESERVATION,
+    MOVE_TO_SOURCE,
+    VERIFY_SOURCE,
+    VERIFY_RESERVATION_PAYLOAD,
+    CLEAR_READONLY,
+    DELETE_RESERVATION,
+    VERIFY_ABSENCE,
+    VERIFY_LOCK_IDENTITIES,
+    ACCEPT_DELETE_PENDING,
+    CLOSE_LOCK_HANDLE,
+};
+
+struct TerrainWindowsDurableStep {
+    std::size_t EntryIndex{0};
+    TerrainWindowsDurableAction Action{};
+};
+
+[[nodiscard]] std::optional<std::vector<TerrainWindowsDurableStep>>
+PlanTerrainWindowsEntryFinalization(
+    std::span<const TerrainWindowsDurableEntryState> states,
+    std::string& detail);
+
+struct TerrainWindowsRemoveOwnedState {
+    bool SourcePresent{false};
+    bool TombstonePresent{false};
+    bool TombstoneIsExactReservation{false};
+    bool SourceMatchesRecordedArtifact{true};
+    bool TombstoneMatchesRecordedArtifact{true};
+};
+
+[[nodiscard]] std::optional<std::vector<TerrainWindowsDurableStep>>
+PlanTerrainWindowsOwnedRemoval(
+    const TerrainWindowsRemoveOwnedState& state,
+    std::string& detail);
+
+[[nodiscard]] std::vector<TerrainWindowsDurableStep>
+PlanTerrainWindowsLockRetirement();
+
+using TerrainWindowsDurableStepExecutor = std::function<bool(
+    const TerrainWindowsDurableStep&,
+    std::string&)>;
+
+[[nodiscard]] bool ExecuteTerrainWindowsDurableSteps(
+    std::span<const TerrainWindowsDurableStep> steps,
+    const TerrainWindowsDurableStepExecutor& execute,
+    std::string& detail);
 
 // Narrow test seam over the real durable publisher. Production binds the same
 // implementation with an empty fault injector.

@@ -847,6 +847,114 @@ std::string LowerAscii(std::string value) {
     return value;
 }
 
+struct PhysicalFileIdentity {
+    std::uint64_t Volume{0u};
+    std::uint64_t FileHigh{0u};
+    std::uint64_t FileLow{0u};
+
+    bool operator==(const PhysicalFileIdentity&) const = default;
+    bool operator<(const PhysicalFileIdentity& other) const {
+        return std::array{Volume, FileHigh, FileLow} <
+            std::array{other.Volume, other.FileHigh, other.FileLow};
+    }
+};
+
+std::string SerializePhysicalIdentity(const PhysicalFileIdentity& identity) {
+    return std::format("{:016x}-{:016x}-{:016x}", identity.Volume,
+                       identity.FileHigh, identity.FileLow);
+}
+
+std::string DurableNativeError(
+    std::string_view operation,
+    const std::filesystem::path& path,
+    int nativeError);
+
+#if defined(_WIN32)
+std::optional<PhysicalFileIdentity> PhysicalIdentityFromHandle(
+    HANDLE handle,
+    const std::filesystem::path& path,
+    std::string_view operation,
+    std::string& detail) {
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (!GetFileInformationByHandle(handle, &information)) {
+        const DWORD nativeError = GetLastError();
+        detail = DurableNativeError(
+            operation, path, static_cast<int>(nativeError));
+        return std::nullopt;
+    }
+    if ((information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u ||
+        (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0u ||
+        information.nNumberOfLinks != 1u) {
+        detail = DurableNativeError(operation, path, ERROR_INVALID_DATA);
+        return std::nullopt;
+    }
+    return PhysicalFileIdentity{
+        information.dwVolumeSerialNumber,
+        information.nFileIndexHigh,
+        information.nFileIndexLow};
+}
+#endif
+
+std::optional<PhysicalFileIdentity> PhysicalIdentityNoFollow(
+    const std::filesystem::path& path,
+    std::string& detail) {
+#if defined(_WIN32)
+    const HANDLE handle = CreateFileW(
+        path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        detail = std::format("cannot open physical identity: {}",
+                             path.generic_string());
+        return std::nullopt;
+    }
+    BY_HANDLE_FILE_INFORMATION information{};
+    const bool valid = GetFileInformationByHandle(handle, &information) &&
+        (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0u &&
+        (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0u &&
+        information.nNumberOfLinks == 1u;
+    CloseHandle(handle);
+    if (!valid) {
+        detail = std::format("physical identity is not a no-link regular file: {}",
+                             path.generic_string());
+        return std::nullopt;
+    }
+    return PhysicalFileIdentity{
+        information.dwVolumeSerialNumber,
+        information.nFileIndexHigh,
+        information.nFileIndexLow};
+#else
+    struct stat status {};
+    if (::lstat(path.c_str(), &status) != 0 || !S_ISREG(status.st_mode) ||
+        status.st_nlink != 1) {
+        detail = std::format("physical identity is not a no-link regular file: {}",
+                             path.generic_string());
+        return std::nullopt;
+    }
+    return PhysicalFileIdentity{
+        static_cast<std::uint64_t>(status.st_dev), 0u,
+        static_cast<std::uint64_t>(status.st_ino)};
+#endif
+}
+
+bool IsLexicallyBeneath(
+    const std::filesystem::path& root,
+    const std::filesystem::path& candidate) {
+    if (!IsNormalizedRelativePath(root) ||
+        !IsNormalizedRelativePath(candidate) || root == candidate) {
+        return false;
+    }
+    auto candidatePart = candidate.begin();
+    for (auto rootPart = root.begin(); rootPart != root.end();
+         ++rootPart, ++candidatePart) {
+        if (candidatePart == candidate.end() || *candidatePart != *rootPart) {
+            return false;
+        }
+    }
+    return candidatePart != candidate.end();
+}
+
 } // namespace
 
 std::string SerializeTerrainReferenceManifest(
@@ -1332,6 +1440,7 @@ std::vector<TerrainManifestIssue> ValidateTerrainReferenceManifest(
     }};
     std::optional<std::string> runId;
     std::set<std::string> normalizedFileAliases;
+    std::set<PhysicalFileIdentity> physicalFileIdentities;
     std::filesystem::path canonicalRunDirectory;
     for (const FileCheck& check : fileChecks) {
         const std::string field = std::format("/files/{}", check.Key);
@@ -1376,6 +1485,14 @@ std::vector<TerrainManifestIssue> ValidateTerrainReferenceManifest(
             return issue(TerrainManifestIssueCode::INVALID_FILE,
                          field + "/path",
                          "output must be a non-symlink regular file");
+        }
+        std::string identityDetail;
+        const auto identity = PhysicalIdentityNoFollow(candidate, identityDetail);
+        if (!identity.has_value() ||
+            !physicalFileIdentities.insert(*identity).second) {
+            return issue(
+                TerrainManifestIssueCode::INVALID_FILE, field + "/path",
+                "outputs must have seven distinct physical identities");
         }
         const std::filesystem::path canonicalCandidate =
             std::filesystem::canonical(candidate, pathError);
@@ -1495,6 +1612,12 @@ std::vector<TerrainManifestIssue> ValidateTerrainReferenceManifest(
             !IsLowerHexSha256(texture.Sha256)) {
             return issue(TerrainManifestIssueCode::INVALID_PROVENANCE,
                          field + "/path", "invalid texture provenance path/hash");
+        }
+        if (!IsLexicallyBeneath(manifest.Source.ClientRoot, texture.Path)) {
+            return issue(
+                TerrainManifestIssueCode::INVALID_PROVENANCE,
+                field + "/path",
+                "texture path is not lexically beneath client root");
         }
         const std::string alias = LowerAscii(texture.Path.generic_string());
         if (!sourceAliases.insert(alias).second) {
@@ -1735,6 +1858,199 @@ std::optional<TerrainReferenceOptions> ParseTerrainReferenceArguments(
     return options;
 }
 
+std::optional<std::vector<TerrainWindowsDurableStep>>
+PlanTerrainWindowsEntryFinalization(
+    std::span<const TerrainWindowsDurableEntryState> states,
+    std::string& detail) {
+    detail.clear();
+    std::vector<TerrainWindowsDurableStep> steps;
+    steps.reserve(states.size() * 7u);
+    for (std::size_t index = 0u; index < states.size(); ++index) {
+        const TerrainWindowsDurableEntryState& state = states[index];
+        if (state.SourcePresent && !state.SourceMatchesRecordedArtifact) {
+            detail = std::format(
+                "typed finalization entry {} source identity/mode changed",
+                index);
+            return std::nullopt;
+        }
+        if (state.SourcePresent && state.ReservationPresent) {
+            if (state.ReservationIsExactRecord &&
+                !state.ReservationRecordMatchesOwnedArtifact) {
+                detail = "Windows finalization reservation record changed";
+                return std::nullopt;
+            }
+            if (!state.ReservationIsExactRecord ||
+                state.ReservationIsRecordedPayload) {
+                detail = std::format(
+                    "typed finalization entry {} has foreign reservation",
+                    index);
+                return std::nullopt;
+            }
+            steps.push_back({
+                index, TerrainWindowsDurableAction::REMOVE_RESERVATION});
+        }
+        else if (!state.SourcePresent && state.ReservationPresent) {
+            if (state.ReservationIsExactRecord ||
+                !state.ReservationIsRecordedPayload ||
+                !state.ReservationMatchesRecordedArtifact) {
+                detail = std::format(
+                    "typed finalization entry {} has ambiguous moved state",
+                    index);
+                return std::nullopt;
+            }
+            steps.push_back({
+                index, TerrainWindowsDurableAction::RESTORE_SOURCE});
+        }
+        else if (!state.SourcePresent) {
+            detail = std::format(
+                "typed finalization entry {} has no recoverable payload",
+                index);
+            return std::nullopt;
+        }
+    }
+    for (std::size_t index = 0u; index < states.size(); ++index) {
+        steps.push_back({index, TerrainWindowsDurableAction::FLUSH_SOURCE});
+    }
+    for (std::size_t index = 0u; index < states.size(); ++index) {
+        steps.push_back({index, TerrainWindowsDurableAction::RESERVE_TARGET});
+        steps.push_back({index,
+                         TerrainWindowsDurableAction::MOVE_TO_RESERVATION});
+        steps.push_back({index, TerrainWindowsDurableAction::MOVE_TO_SOURCE});
+        steps.push_back({index, TerrainWindowsDurableAction::VERIFY_SOURCE});
+    }
+    return steps;
+}
+
+std::vector<TerrainRunDurabilityStep>
+PlanTerrainRunDurability(const std::size_t productCount) {
+    std::vector<TerrainRunDurabilityStep> steps;
+    steps.reserve(productCount + 1u);
+    for (std::size_t index = 0u; index < productCount; ++index) {
+        steps.push_back({index, TerrainRunDurabilityAction::FLUSH_FILE});
+    }
+    steps.push_back({productCount,
+                     TerrainRunDurabilityAction::SYNC_DIRECTORY_OR_EQUIVALENT});
+    return steps;
+}
+
+bool ExecuteTerrainRunDurabilitySteps(
+    const std::span<const TerrainRunDurabilityStep> steps,
+    const TerrainRunDurabilityStepExecutor& execute,
+    std::string& detail) {
+    detail.clear();
+    if (!execute) {
+        detail = "run durability step executor is missing";
+        return false;
+    }
+    for (const TerrainRunDurabilityStep& step : steps) {
+        if (!execute(step, detail)) {
+            if (detail.empty()) {
+                detail = std::format(
+                    "run durability action {} failed for product {}",
+                    static_cast<std::uint32_t>(step.Action),
+                    step.ProductIndex);
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+std::optional<std::string>
+ReconcileTerrainWindowsFinalizationIdentity(
+    std::string_view recordedIdentity,
+    std::string_view observedIdentity,
+    std::string& detail) {
+    detail.clear();
+    if (observedIdentity.empty()) {
+        detail = "Windows finalization identity is missing";
+        return std::nullopt;
+    }
+    if (!recordedIdentity.empty() && recordedIdentity != observedIdentity) {
+        detail = "Windows finalization identity changed";
+        return std::nullopt;
+    }
+    return std::string{observedIdentity};
+}
+
+std::optional<std::vector<TerrainWindowsDurableStep>>
+PlanTerrainWindowsOwnedRemoval(
+    const TerrainWindowsRemoveOwnedState& state,
+    std::string& detail) {
+    detail.clear();
+    std::vector<TerrainWindowsDurableStep> steps;
+    if (!state.SourcePresent && !state.TombstonePresent) {
+        return steps;
+    }
+    if (state.SourcePresent && !state.SourceMatchesRecordedArtifact) {
+        detail = "remove-owned source identity/hash/mode changed";
+        return std::nullopt;
+    }
+    if (state.SourcePresent && state.TombstonePresent) {
+        if (!state.TombstoneIsExactReservation) {
+            detail = "remove-owned foreign pre-move tombstone";
+            return std::nullopt;
+        }
+        steps.push_back({0u, TerrainWindowsDurableAction::REMOVE_RESERVATION});
+    }
+    else if (!state.SourcePresent) {
+        if (state.TombstoneIsExactReservation ||
+            !state.TombstoneMatchesRecordedArtifact) {
+            detail = "remove-owned ambiguous post-move tombstone";
+            return std::nullopt;
+        }
+        steps.push_back({
+            0u, TerrainWindowsDurableAction::VERIFY_RESERVATION_PAYLOAD});
+        steps.push_back({0u, TerrainWindowsDurableAction::CLEAR_READONLY});
+        steps.push_back({0u, TerrainWindowsDurableAction::DELETE_RESERVATION});
+        steps.push_back({0u, TerrainWindowsDurableAction::VERIFY_ABSENCE});
+        return steps;
+    }
+    steps.push_back({0u, TerrainWindowsDurableAction::VERIFY_SOURCE});
+    steps.push_back({0u, TerrainWindowsDurableAction::RESERVE_TARGET});
+    steps.push_back({0u, TerrainWindowsDurableAction::MOVE_TO_RESERVATION});
+    steps.push_back({
+        0u, TerrainWindowsDurableAction::VERIFY_RESERVATION_PAYLOAD});
+    steps.push_back({0u, TerrainWindowsDurableAction::CLEAR_READONLY});
+    steps.push_back({0u, TerrainWindowsDurableAction::DELETE_RESERVATION});
+    steps.push_back({0u, TerrainWindowsDurableAction::VERIFY_ABSENCE});
+    return steps;
+}
+
+std::vector<TerrainWindowsDurableStep>
+PlanTerrainWindowsLockRetirement() {
+    return {
+        {0u, TerrainWindowsDurableAction::VERIFY_LOCK_IDENTITIES},
+        {0u, TerrainWindowsDurableAction::RESERVE_TARGET},
+        {0u, TerrainWindowsDurableAction::MOVE_TO_RESERVATION},
+        {0u, TerrainWindowsDurableAction::VERIFY_RESERVATION_PAYLOAD},
+        {0u, TerrainWindowsDurableAction::ACCEPT_DELETE_PENDING},
+        {0u, TerrainWindowsDurableAction::CLOSE_LOCK_HANDLE},
+    };
+}
+
+bool ExecuteTerrainWindowsDurableSteps(
+    std::span<const TerrainWindowsDurableStep> steps,
+    const TerrainWindowsDurableStepExecutor& execute,
+    std::string& detail) {
+    detail.clear();
+    if (!execute) {
+        detail = "Windows durable step executor is missing";
+        return false;
+    }
+    for (const TerrainWindowsDurableStep& step : steps) {
+        if (!execute(step, detail)) {
+            if (detail.empty()) {
+                detail = std::format(
+                    "Windows durable action {} failed for entry {}",
+                    static_cast<std::uint32_t>(step.Action), step.EntryIndex);
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
 namespace {
 
 constexpr std::array<std::string_view, 7> kTerrainReferenceLeaves{
@@ -1963,6 +2279,20 @@ constexpr std::uint32_t PrivatePhysicalMode() noexcept {
 #endif
 }
 
+struct PhysicalEntryToFinalize {
+    std::filesystem::path Source;
+    std::filesystem::path Reservation;
+    std::string Kind;
+    std::string TransactionId;
+    std::string Sha256;
+    std::string Identity;
+    std::uint32_t Mode{0u};
+};
+
+std::optional<std::uint32_t> PhysicalFileMode(
+    const std::filesystem::path& path,
+    std::string& detail);
+
 #if defined(_WIN32)
 bool ReserveMoveTargetWindows(
     const std::filesystem::path& source,
@@ -1972,8 +2302,8 @@ bool ReserveMoveTargetWindows(
     std::string_view sourceHash,
     std::string& detail);
 
-bool FinalizeWindowsPhysicalEntry(
-    const std::filesystem::path& path,
+bool FinalizeWindowsPhysicalEntries(
+    std::span<const PhysicalEntryToFinalize> entries,
     std::string& detail);
 #endif
 
@@ -1981,34 +2311,161 @@ bool FlushPhysicalFile(
     const std::filesystem::path& path,
     std::string& detail) {
 #if defined(_WIN32)
-    const HANDLE file = CreateFileW(
-        path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
+    HANDLE metadata = CreateFileW(
+        path.c_str(), GENERIC_READ | FILE_WRITE_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL |
+            FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (metadata == INVALID_HANDLE_VALUE) {
+        const DWORD nativeError = GetLastError();
+        detail = DurableNativeError("FlushFile", path,
+                                    static_cast<int>(nativeError));
+        return false;
+    }
+    BY_HANDLE_FILE_INFORMATION originalIdentity{};
+    FILE_BASIC_INFO originalBasic{};
+    DWORD nativeError = ERROR_SUCCESS;
+    bool readonlyCleared = false;
+    if (!GetFileInformationByHandle(metadata, &originalIdentity)) {
+        nativeError = GetLastError();
+    }
+    else if ((originalIdentity.dwFileAttributes &
+              (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0u ||
+             originalIdentity.nNumberOfLinks != 1u) {
+        nativeError = ERROR_INVALID_DATA;
+    }
+    else if (!GetFileInformationByHandleEx(
+                 metadata, FileBasicInfo, &originalBasic,
+                 sizeof(originalBasic))) {
+        nativeError = GetLastError();
+    }
+    else if ((originalBasic.FileAttributes & FILE_ATTRIBUTE_READONLY) != 0u) {
+        FILE_BASIC_INFO writableBasic = originalBasic;
+        writableBasic.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
+        if (writableBasic.FileAttributes == 0u) {
+            writableBasic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+        }
+        if (!SetFileInformationByHandle(
+                metadata, FileBasicInfo, &writableBasic,
+                sizeof(writableBasic))) {
+            nativeError = GetLastError();
+        }
+        else {
+            readonlyCleared = true;
+            FILE_BASIC_INFO readback{};
+            if (!GetFileInformationByHandleEx(
+                    metadata, FileBasicInfo, &readback, sizeof(readback))) {
+                nativeError = GetLastError();
+            }
+            else if (readback.FileAttributes != writableBasic.FileAttributes) {
+                nativeError = ERROR_INVALID_DATA;
+            }
+        }
+    }
+    if (nativeError != ERROR_SUCCESS) {
+        if (readonlyCleared) {
+            SetFileInformationByHandle(
+                metadata, FileBasicInfo, &originalBasic,
+                sizeof(originalBasic));
+        }
+        CloseHandle(metadata);
+        detail = DurableNativeError(
+            "FlushFile", path, static_cast<int>(nativeError));
+        return false;
+    }
+
+    HANDLE file = CreateFileW(
+        path.c_str(), GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL |
             FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
-        const DWORD nativeError = GetLastError();
-        detail = DurableNativeError("FlushFile", path,
-                                    static_cast<int>(nativeError));
+        nativeError = GetLastError();
+        if (readonlyCleared) {
+            SetFileInformationByHandle(
+                metadata, FileBasicInfo, &originalBasic,
+                sizeof(originalBasic));
+        }
+        CloseHandle(metadata);
+        detail = DurableNativeError(
+            "FlushFile", path, static_cast<int>(nativeError));
         return false;
     }
-    FILE_ATTRIBUTE_TAG_INFO tag{};
-    if (!GetFileInformationByHandleEx(
-            file, FileAttributeTagInfo, &tag, sizeof(tag)) ||
-        (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u) {
-        const DWORD nativeError = GetLastError();
-        CloseHandle(file);
-        detail = DurableNativeError("FlushFile", path,
-                                    static_cast<int>(nativeError));
+
+    BY_HANDLE_FILE_INFORMATION openedIdentity{};
+    bool flushOk = true;
+    if (!GetFileInformationByHandle(file, &openedIdentity)) {
+        nativeError = GetLastError();
+        flushOk = false;
+    }
+    else if (openedIdentity.dwVolumeSerialNumber !=
+                 originalIdentity.dwVolumeSerialNumber ||
+             openedIdentity.nFileIndexHigh != originalIdentity.nFileIndexHigh ||
+             openedIdentity.nFileIndexLow != originalIdentity.nFileIndexLow ||
+             openedIdentity.nNumberOfLinks != 1u ||
+             (openedIdentity.dwFileAttributes &
+              (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0u) {
+        nativeError = ERROR_INVALID_DATA;
+        flushOk = false;
+    }
+    else if (!FlushFileBuffers(file)) {
+        nativeError = GetLastError();
+        flushOk = false;
+    }
+
+    if (flushOk && readonlyCleared) {
+        if (!SetFileInformationByHandle(
+                file, FileBasicInfo, &originalBasic, sizeof(originalBasic))) {
+            nativeError = GetLastError();
+            flushOk = false;
+        }
+        else {
+            FILE_BASIC_INFO readback{};
+            if (!GetFileInformationByHandleEx(
+                    file, FileBasicInfo, &readback, sizeof(readback))) {
+                nativeError = GetLastError();
+                flushOk = false;
+            }
+            else if (readback.FileAttributes != originalBasic.FileAttributes) {
+                nativeError = ERROR_INVALID_DATA;
+                flushOk = false;
+            }
+            else if (!FlushFileBuffers(file)) {
+                nativeError = GetLastError();
+                flushOk = false;
+            }
+        }
+    }
+
+    BY_HANDLE_FILE_INFORMATION finalIdentity{};
+    if (flushOk && !GetFileInformationByHandle(file, &finalIdentity)) {
+        nativeError = GetLastError();
+        flushOk = false;
+    }
+    else if (flushOk &&
+             (finalIdentity.dwVolumeSerialNumber !=
+                  originalIdentity.dwVolumeSerialNumber ||
+              finalIdentity.nFileIndexHigh != originalIdentity.nFileIndexHigh ||
+              finalIdentity.nFileIndexLow != originalIdentity.nFileIndexLow ||
+              finalIdentity.nNumberOfLinks != 1u)) {
+        nativeError = ERROR_INVALID_DATA;
+        flushOk = false;
+    }
+
+    if (!flushOk && readonlyCleared) {
+        SetFileInformationByHandle(
+            metadata, FileBasicInfo, &originalBasic, sizeof(originalBasic));
+    }
+    const bool fileCloseOk = CloseHandle(file) != 0;
+    const bool metadataCloseOk = CloseHandle(metadata) != 0;
+    if (!flushOk || !fileCloseOk || !metadataCloseOk) {
+        if (nativeError == ERROR_SUCCESS) {
+            nativeError = ERROR_WRITE_FAULT;
+        }
+        detail = DurableNativeError(
+            "FlushFile", path, static_cast<int>(nativeError));
         return false;
     }
-    if (!FlushFileBuffers(file)) {
-        const DWORD nativeError = GetLastError();
-        CloseHandle(file);
-        detail = DurableNativeError("FlushFile", path,
-                                    static_cast<int>(nativeError));
-        return false;
-    }
-    CloseHandle(file);
     return true;
 #else
     const int descriptor =
@@ -2042,13 +2499,17 @@ bool FlushPhysicalFile(
 
 bool SyncPhysicalDirectory(
     const std::filesystem::path& directory,
-    std::string& detail) {
+    std::string& detail,
+    std::span<const PhysicalEntryToFinalize> entriesToFinalize = {}) {
 #if defined(_WIN32)
-    // File-data flushes and write-through moves are the Windows entry barrier.
     (void)directory;
+    if (!FinalizeWindowsPhysicalEntries(entriesToFinalize, detail)) {
+        return false;
+    }
     detail.clear();
     return true;
 #else
+    (void)entriesToFinalize;
     const int descriptor =
         ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (descriptor < 0) {
@@ -2082,54 +2543,48 @@ bool DurabilizeRunProductsPortable(
         detail = "DurabilizeRunProducts requires exactly seven paths";
         return false;
     }
-    for (const std::filesystem::path& path : paths) {
-        if (!FlushPhysicalFile(path, detail)) {
+    std::vector<PhysicalEntryToFinalize> entries(paths.size());
+    const std::string runId = paths.front().parent_path().filename().generic_string();
+    const std::vector plan = PlanTerrainRunDurability(paths.size());
+    return ExecuteTerrainRunDurabilitySteps(
+        plan,
+        [&](const TerrainRunDurabilityStep& step,
+            std::string& stepDetail) {
+            if (step.Action == TerrainRunDurabilityAction::FLUSH_FILE) {
+                const std::filesystem::path& path = paths[step.ProductIndex];
+                if (!FlushPhysicalFile(path, stepDetail)) {
+                    return false;
+                }
+                std::string hashDetail;
+                const auto hash = Sha256File(path, hashDetail);
+                if (!hash.has_value()) {
+                    stepDetail = hashDetail;
+                    return false;
+                }
+                const auto identity = PhysicalIdentityNoFollow(path, stepDetail);
+                const auto mode = PhysicalFileMode(path, stepDetail);
+                if (!identity.has_value() || !mode.has_value()) {
+                    return false;
+                }
+                entries[step.ProductIndex] = PhysicalEntryToFinalize{
+                    path,
+                    path.parent_path() /
+                        std::format(
+                            ".garner.reference-albedo.finalize.{}.{}",
+                            runId, path.filename().generic_string()),
+                    "finalize-run-entry", runId, *hash,
+                    SerializePhysicalIdentity(*identity), *mode};
+                return true;
+            }
+            if (step.Action ==
+                TerrainRunDurabilityAction::SYNC_DIRECTORY_OR_EQUIVALENT) {
+                return SyncPhysicalDirectory(
+                    paths.front().parent_path(), stepDetail, entries);
+            }
+            stepDetail = "unexpected run durability action";
             return false;
-        }
-    }
-#if defined(_WIN32)
-    for (const std::filesystem::path& path : paths) {
-        if (!FinalizeWindowsPhysicalEntry(path, detail)) {
-            return false;
-        }
-    }
-    return true;
-#else
-    return SyncPhysicalDirectory(paths.front().parent_path(), detail);
-#endif
-}
-
-bool OpenExclusivePhysicalFile(
-    const std::filesystem::path& path,
-    std::string& detail) {
-#if defined(_WIN32)
-    const HANDLE file = CreateFileW(
-        path.c_str(), GENERIC_READ | GENERIC_WRITE, 0u, nullptr, CREATE_NEW,
-        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
-        const DWORD nativeError = GetLastError();
-        detail = DurableNativeError("OpenExclusiveTemp", path,
-                                    static_cast<int>(nativeError));
-        return false;
-    }
-    CloseHandle(file);
-    return true;
-#else
-    const int descriptor = ::open(
-        path.c_str(), O_CREAT | O_EXCL | O_NOFOLLOW | O_RDWR | O_CLOEXEC,
-        S_IRUSR | S_IWUSR);
-    if (descriptor < 0) {
-        const int nativeError = errno;
-        detail = DurableNativeError("OpenExclusiveTemp", path, nativeError);
-        return false;
-    }
-    if (::close(descriptor) != 0) {
-        const int nativeError = errno;
-        detail = DurableNativeError("OpenExclusiveTemp", path, nativeError);
-        return false;
-    }
-    return true;
-#endif
+        },
+        detail);
 }
 
 bool ReplacePhysicalFile(
@@ -2214,7 +2669,10 @@ bool ReplacePhysicalFile(
 
 bool RemoveOwnedPhysical(
     const std::filesystem::path& path,
-    std::string& detail) {
+    std::string& detail,
+    std::string_view expectedIdentity = {},
+    std::string_view expectedHash = {},
+    std::optional<std::uint32_t> expectedMode = std::nullopt) {
     std::error_code statusError;
     const std::filesystem::file_status status =
         std::filesystem::symlink_status(path, statusError);
@@ -2227,8 +2685,121 @@ bool RemoveOwnedPhysical(
                                     statusError ? statusError.value() : EINVAL);
         return false;
     }
+    if (expectedIdentity.empty() || expectedHash.empty() ||
+        !expectedMode.has_value()) {
+        detail = std::format(
+            "owned removal lacks recorded identity/hash/mode: {}",
+            path.generic_string());
+        return false;
+    }
+    if (!expectedIdentity.empty()) {
+        const auto identity = PhysicalIdentityNoFollow(path, detail);
+        std::string hashDetail;
+        const auto hash = Sha256File(path, hashDetail);
+        const auto mode = PhysicalFileMode(path, detail);
+        if (!identity.has_value() ||
+            SerializePhysicalIdentity(*identity) != expectedIdentity ||
+            !hash.has_value() || *hash != expectedHash ||
+            (expectedMode.has_value() &&
+             (!mode.has_value() || *mode != *expectedMode))) {
+            detail = hash.has_value()
+                ? std::format(
+                      "owned removal identity/hash/mode changed: {}",
+                      path.generic_string())
+                : hashDetail;
+            return false;
+        }
+    }
 #if defined(_WIN32)
-    if (!DeleteFileW(path.c_str())) {
+    if (!expectedIdentity.empty()) {
+        HANDLE handle = CreateFileW(
+            path.c_str(), DELETE | GENERIC_READ,
+            FILE_SHARE_READ,
+            nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            const DWORD nativeError = GetLastError();
+            detail = DurableNativeError(
+                "RemoveOwned", path, static_cast<int>(nativeError));
+            return false;
+        }
+        const auto handleIdentity = PhysicalIdentityFromHandle(
+            handle, path, "RemoveOwned", detail);
+        FILE_BASIC_INFO basic{};
+        LARGE_INTEGER pinnedSize{};
+        DWORD nativeError = ERROR_SUCCESS;
+        bool deletePending = false;
+        if (!handleIdentity.has_value() ||
+            SerializePhysicalIdentity(*handleIdentity) != expectedIdentity) {
+            nativeError = ERROR_FILE_INVALID;
+        }
+        else if (!GetFileInformationByHandleEx(
+                     handle, FileBasicInfo, &basic, sizeof(basic))) {
+            nativeError = GetLastError();
+        }
+        else if (expectedMode.has_value() &&
+                 basic.FileAttributes != *expectedMode) {
+            nativeError = ERROR_INVALID_DATA;
+        }
+        else if (!GetFileSizeEx(handle, &pinnedSize)) {
+            nativeError = GetLastError();
+        }
+        else if (pinnedSize.QuadPart < 0 ||
+                 static_cast<unsigned long long>(pinnedSize.QuadPart) >
+                     static_cast<unsigned long long>(
+                         std::numeric_limits<std::size_t>::max())) {
+            nativeError = ERROR_FILE_TOO_LARGE;
+        }
+        else {
+            std::vector<std::uint8_t> pinnedBytes(
+                static_cast<std::size_t>(pinnedSize.QuadPart));
+            std::size_t offset = 0u;
+            while (offset < pinnedBytes.size()) {
+                const DWORD requested = static_cast<DWORD>(std::min<std::size_t>(
+                    pinnedBytes.size() - offset,
+                    static_cast<std::size_t>(UINT32_MAX)));
+                DWORD read = 0u;
+                if (!ReadFile(handle, pinnedBytes.data() + offset, requested,
+                              &read, nullptr)) {
+                    nativeError = GetLastError();
+                    break;
+                }
+                if (read != requested) {
+                    nativeError = ERROR_HANDLE_EOF;
+                    break;
+                }
+                offset += read;
+            }
+            if (nativeError == ERROR_SUCCESS &&
+                Sha256Bytes(pinnedBytes) != expectedHash) {
+                nativeError = ERROR_CRC;
+            }
+            if (nativeError == ERROR_SUCCESS) {
+                FILE_DISPOSITION_INFO disposition{};
+                disposition.DeleteFile = TRUE;
+                if (!SetFileInformationByHandle(
+                        handle, FileDispositionInfo, &disposition,
+                        sizeof(disposition))) {
+                    nativeError = GetLastError();
+                }
+                else {
+                    deletePending = true;
+                }
+            }
+        }
+        const bool closeOk = CloseHandle(handle) != 0;
+        if (!deletePending || !closeOk) {
+            if (detail.empty()) {
+                detail = DurableNativeError(
+                    "RemoveOwned", path,
+                    static_cast<int>(nativeError == ERROR_SUCCESS
+                                         ? ERROR_WRITE_FAULT
+                                         : nativeError));
+            }
+            return false;
+        }
+    }
+    else if (!DeleteFileW(path.c_str())) {
         const DWORD nativeError = GetLastError();
         detail = DurableNativeError("RemoveOwned", path,
                                     static_cast<int>(nativeError));
@@ -2254,42 +2825,6 @@ bool RemoveOwnedPhysical(
         return false;
     }
     return true;
-}
-
-bool RestorePhysicalMode(
-    const std::filesystem::path& path,
-    std::uint32_t mode,
-    std::string& detail) {
-#if defined(_WIN32)
-    if (!SetFileAttributesW(path.c_str(), mode)) {
-        const DWORD nativeError = GetLastError();
-        detail = DurableNativeError("RestoreMode", path,
-                                    static_cast<int>(nativeError));
-        return false;
-    }
-#else
-    const int descriptor =
-        ::open(path.c_str(), O_RDWR | O_NOFOLLOW | O_CLOEXEC);
-    if (descriptor < 0) {
-        const int nativeError = errno;
-        detail = DurableNativeError("RestoreMode", path, nativeError);
-        return false;
-    }
-    if (::fchmod(descriptor, static_cast<mode_t>(mode)) != 0 ||
-        ::fsync(descriptor) != 0) {
-        const int nativeError = errno;
-        ::close(descriptor);
-        detail = DurableNativeError("RestoreMode", path, nativeError);
-        return false;
-    }
-    if (::close(descriptor) != 0) {
-        const int nativeError = errno;
-        detail = DurableNativeError("RestoreMode", path, nativeError);
-        return false;
-    }
-    return true;
-#endif
-    return FlushPhysicalFile(path, detail);
 }
 
 bool ReadPhysicalText(
@@ -2400,34 +2935,46 @@ bool ReserveMoveTargetWindows(
     }
     FILE_ATTRIBUTE_TAG_INFO tag{};
     if (!GetFileInformationByHandleEx(
-            handle, FileAttributeTagInfo, &tag, sizeof(tag)) ||
-        (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u) {
+            handle, FileAttributeTagInfo, &tag, sizeof(tag))) {
         const DWORD nativeError = GetLastError();
         CloseHandle(handle);
         detail = DurableNativeError(
-            "ReserveMoveTarget", reserved,
-            static_cast<int>(nativeError == ERROR_SUCCESS
-                                 ? ERROR_REPARSE_TAG_INVALID
-                                 : nativeError));
+            "ReserveMoveTarget", reserved, static_cast<int>(nativeError));
+        return false;
+    }
+    if ((tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u) {
+        CloseHandle(handle);
+        detail = DurableNativeError(
+            "ReserveMoveTarget", reserved, ERROR_REPARSE_TAG_INVALID);
         return false;
     }
     const auto originalIdentity = WindowsIdentityFromHandle(
         handle, reserved, "ReserveMoveTarget", detail);
+    if (!originalIdentity.has_value()) {
+        CloseHandle(handle);
+        return false;
+    }
     DWORD written = 0u;
-    if (!originalIdentity.has_value() ||
-        !WriteFile(handle, record.data(), static_cast<DWORD>(record.size()),
-                   &written, nullptr) ||
-        written != static_cast<DWORD>(record.size()) ||
-        !FlushFileBuffers(handle)) {
+    if (!WriteFile(handle, record.data(), static_cast<DWORD>(record.size()),
+                   &written, nullptr)) {
         const DWORD nativeError = GetLastError();
         CloseHandle(handle);
-        if (detail.empty()) {
-            detail = DurableNativeError(
-                "ReserveMoveTarget", reserved,
-                static_cast<int>(nativeError == ERROR_SUCCESS
-                                     ? ERROR_WRITE_FAULT
-                                     : nativeError));
-        }
+        detail = DurableNativeError(
+            "ReserveMoveTarget", reserved, static_cast<int>(nativeError));
+        return false;
+    }
+    if (written != static_cast<DWORD>(record.size())) {
+        CloseHandle(handle);
+        detail = DurableNativeError(
+            "ReserveMoveTarget", reserved,
+            static_cast<int>(ERROR_WRITE_FAULT));
+        return false;
+    }
+    if (!FlushFileBuffers(handle)) {
+        const DWORD nativeError = GetLastError();
+        CloseHandle(handle);
+        detail = DurableNativeError(
+            "ReserveMoveTarget", reserved, static_cast<int>(nativeError));
         return false;
     }
     CloseHandle(handle);
@@ -2445,57 +2992,186 @@ bool ReserveMoveTargetWindows(
         handle, reserved, "ReserveMoveTarget", detail);
     std::string readback(record.size(), '\0');
     DWORD read = 0u;
-    const bool readOk = reopenedIdentity.has_value() &&
-        *reopenedIdentity == *originalIdentity &&
-        ReadFile(handle, readback.data(), static_cast<DWORD>(readback.size()),
-                 &read, nullptr) &&
-        read == static_cast<DWORD>(readback.size()) && readback == record;
-    const DWORD nativeError = readOk ? ERROR_SUCCESS : GetLastError();
+    bool readOk = false;
+    DWORD nativeError = ERROR_SUCCESS;
+    if (!reopenedIdentity.has_value()) {
+        nativeError = ERROR_INVALID_DATA;
+    }
+    else if (*reopenedIdentity != *originalIdentity) {
+        nativeError = ERROR_FILE_INVALID;
+    }
+    else if (!ReadFile(
+                 handle, readback.data(), static_cast<DWORD>(readback.size()),
+                 &read, nullptr)) {
+        nativeError = GetLastError();
+    }
+    else if (read != static_cast<DWORD>(readback.size()) ||
+             readback != record) {
+        nativeError = ERROR_INVALID_DATA;
+    }
+    else {
+        readOk = true;
+    }
     CloseHandle(handle);
     if (!readOk) {
         if (detail.empty()) {
             detail = DurableNativeError(
                 "ReserveMoveTarget", reserved,
-                static_cast<int>(nativeError == ERROR_SUCCESS
-                                     ? ERROR_INVALID_DATA
-                                     : nativeError));
+                static_cast<int>(nativeError));
         }
         return false;
     }
     return true;
 }
 
-bool FinalizeWindowsPhysicalEntry(
+bool VerifyWindowsFinalizationArtifact(
     const std::filesystem::path& path,
+    const PhysicalEntryToFinalize& entry,
     std::string& detail) {
+    const auto identity = PhysicalIdentityNoFollow(path, detail);
+    if (!identity.has_value() || entry.Identity.empty() ||
+        SerializePhysicalIdentity(*identity) != entry.Identity) {
+        detail = std::format(
+            "finalized Windows entry identity changed: {}",
+            path.generic_string());
+        return false;
+    }
+    const auto mode = PhysicalFileMode(path, detail);
+    if (!mode.has_value() || *mode != entry.Mode) {
+        detail = std::format(
+            "finalized Windows entry mode changed: {}",
+            path.generic_string());
+        return false;
+    }
     std::string hashDetail;
-    const auto sourceHash = Sha256File(path, hashDetail);
-    if (!sourceHash.has_value()) {
-        detail = hashDetail;
-        return false;
-    }
-    const std::filesystem::path reserved =
-        path.parent_path() /
-        std::format(".{}.finalize.{}", path.filename().generic_string(),
-                    sourceHash->substr(0u, 16u));
-    if (!ReserveMoveTargetWindows(
-            path, reserved, "finalize-run-entry",
-            path.parent_path().filename().generic_string(), *sourceHash,
-            detail) ||
-        !ReplacePhysicalFile(path, reserved, detail) ||
-        !ReplacePhysicalFile(reserved, path, detail) ||
-        !FlushPhysicalFile(path, detail)) {
-        return false;
-    }
-    std::string rehashDetail;
-    const auto rehash = Sha256File(path, rehashDetail);
-    if (!rehash.has_value() || *rehash != *sourceHash) {
-        detail = rehash.has_value()
-            ? "finalized Windows run entry changed"
-            : rehashDetail;
+    const auto hash = Sha256File(path, hashDetail);
+    if (!hash.has_value() || *hash != entry.Sha256) {
+        detail = hash.has_value()
+            ? std::format("finalized Windows entry hash changed: {}",
+                          path.generic_string())
+            : hashDetail;
         return false;
     }
     return true;
+}
+
+bool FinalizeWindowsPhysicalEntries(
+    std::span<const PhysicalEntryToFinalize> entries,
+    std::string& detail) {
+    const auto absent = [](const std::filesystem::path& path) {
+        std::error_code error;
+        const auto status = std::filesystem::symlink_status(path, error);
+        return status.type() == std::filesystem::file_type::not_found &&
+            (!error || error == std::errc::no_such_file_or_directory);
+    };
+    std::vector<TerrainWindowsDurableEntryState> states;
+    std::vector<std::string> reservationIdentities(entries.size());
+    std::vector<std::string> reservationHashes(entries.size());
+    std::vector<std::optional<std::uint32_t>> reservationModes(entries.size());
+    states.reserve(entries.size());
+    for (std::size_t entryIndex = 0u; entryIndex < entries.size(); ++entryIndex) {
+        const PhysicalEntryToFinalize& entry = entries[entryIndex];
+        TerrainWindowsDurableEntryState state;
+        state.SourcePresent = !absent(entry.Source);
+        state.ReservationPresent = !absent(entry.Reservation);
+        if (state.SourcePresent) {
+            state.SourceMatchesRecordedArtifact =
+                VerifyWindowsFinalizationArtifact(
+                    entry.Source, entry, detail);
+            if (!state.SourceMatchesRecordedArtifact) {
+                return false;
+            }
+        }
+        if (state.ReservationPresent) {
+            std::string bytes;
+            if (!ReadPhysicalText(entry.Reservation, bytes, detail)) {
+                return false;
+            }
+            state.ReservationIsExactRecord =
+                bytes == WindowsMoveReservationRecord(
+                    entry.Source, entry.Reservation, entry.Kind,
+                    entry.TransactionId, entry.Sha256);
+            std::string hashDetail;
+            const auto hash = Sha256File(entry.Reservation, hashDetail);
+            if (!hash.has_value()) {
+                detail = hashDetail;
+                return false;
+            }
+            const auto identity =
+                PhysicalIdentityNoFollow(entry.Reservation, detail);
+            const auto mode = PhysicalFileMode(entry.Reservation, detail);
+            if (!identity.has_value() || !mode.has_value()) {
+                return false;
+            }
+            reservationIdentities[entryIndex] =
+                SerializePhysicalIdentity(*identity);
+            reservationHashes[entryIndex] = *hash;
+            reservationModes[entryIndex] = *mode;
+            state.ReservationIsRecordedPayload = *hash == entry.Sha256;
+            if (state.ReservationIsExactRecord) {
+                state.ReservationRecordMatchesOwnedArtifact =
+                    *mode == PrivatePhysicalMode() &&
+                    *hash == Sha256Bytes(std::span{
+                        reinterpret_cast<const std::uint8_t*>(bytes.data()),
+                        bytes.size()});
+            }
+            if (state.ReservationIsRecordedPayload) {
+                state.ReservationMatchesRecordedArtifact =
+                    VerifyWindowsFinalizationArtifact(
+                        entry.Reservation, entry, detail);
+                if (!state.ReservationMatchesRecordedArtifact) {
+                    return false;
+                }
+            }
+        }
+        states.push_back(state);
+    }
+    const auto plan = PlanTerrainWindowsEntryFinalization(states, detail);
+    if (!plan.has_value()) {
+        return false;
+    }
+    return ExecuteTerrainWindowsDurableSteps(
+        *plan,
+        [&](const TerrainWindowsDurableStep& step,
+            std::string& stepDetail) {
+        const PhysicalEntryToFinalize& entry = entries[step.EntryIndex];
+        switch (step.Action) {
+        case TerrainWindowsDurableAction::REMOVE_RESERVATION:
+            return RemoveOwnedPhysical(
+                entry.Reservation, stepDetail,
+                reservationIdentities[step.EntryIndex],
+                reservationHashes[step.EntryIndex],
+                reservationModes[step.EntryIndex]);
+        case TerrainWindowsDurableAction::RESTORE_SOURCE:
+            return ReplacePhysicalFile(
+                       entry.Reservation, entry.Source, stepDetail) &&
+                VerifyWindowsFinalizationArtifact(
+                    entry.Source, entry, stepDetail);
+        case TerrainWindowsDurableAction::FLUSH_SOURCE:
+            return FlushPhysicalFile(entry.Source, stepDetail);
+        case TerrainWindowsDurableAction::RESERVE_TARGET:
+            return ReserveMoveTargetWindows(
+                entry.Source, entry.Reservation, entry.Kind,
+                entry.TransactionId, entry.Sha256, stepDetail);
+        case TerrainWindowsDurableAction::MOVE_TO_RESERVATION:
+            return ReplacePhysicalFile(
+                       entry.Source, entry.Reservation, stepDetail) &&
+                VerifyWindowsFinalizationArtifact(
+                    entry.Reservation, entry, stepDetail);
+        case TerrainWindowsDurableAction::MOVE_TO_SOURCE:
+            return ReplacePhysicalFile(
+                       entry.Reservation, entry.Source, stepDetail) &&
+                VerifyWindowsFinalizationArtifact(
+                    entry.Source, entry, stepDetail);
+        case TerrainWindowsDurableAction::VERIFY_SOURCE:
+            return VerifyWindowsFinalizationArtifact(
+                entry.Source, entry, stepDetail);
+        default:
+            stepDetail = "unexpected Windows entry-finalization action";
+            return false;
+        }
+        },
+        detail);
 }
 #endif
 
@@ -2503,19 +3179,146 @@ bool WriteExclusiveText(
     const std::filesystem::path& path,
     std::string_view bytes,
     std::uint32_t mode,
-    std::string& detail) {
-    if (!OpenExclusivePhysicalFile(path, detail)) {
+    std::string& detail,
+    const std::function<void()>& afterExclusiveCreate = {}) {
+#if defined(_WIN32)
+    HANDLE handle = CreateFileW(
+        path.c_str(), GENERIC_READ | GENERIC_WRITE, 0u, nullptr, CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        const DWORD nativeError = GetLastError();
+        detail = DurableNativeError(
+            "OpenExclusiveTemp", path, static_cast<int>(nativeError));
         return false;
     }
-    std::ofstream output{path, std::ios::binary | std::ios::trunc};
-    output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    output.flush();
-    if (!output) {
-        detail = std::format("cannot write owned file: {}", path.generic_string());
+    const auto originalIdentity = WindowsIdentityFromHandle(
+        handle, path, "OpenExclusiveTemp", detail);
+    if (!originalIdentity.has_value()) {
+        CloseHandle(handle);
         return false;
     }
-    output.close();
-    return RestorePhysicalMode(path, mode, detail);
+    if (afterExclusiveCreate) {
+        afterExclusiveCreate();
+    }
+    DWORD written = 0u;
+    FILE_BASIC_INFO basic{};
+    bool modeOk = false;
+    DWORD nativeError = ERROR_SUCCESS;
+    if (bytes.size() > static_cast<std::size_t>(UINT32_MAX)) {
+        nativeError = ERROR_FILE_TOO_LARGE;
+    }
+    else if (!WriteFile(
+                 handle, bytes.data(), static_cast<DWORD>(bytes.size()),
+                 &written, nullptr)) {
+        nativeError = GetLastError();
+    }
+    else if (written != static_cast<DWORD>(bytes.size())) {
+        nativeError = ERROR_WRITE_FAULT;
+    }
+    else if (!GetFileInformationByHandleEx(
+                 handle, FileBasicInfo, &basic, sizeof(basic))) {
+        nativeError = GetLastError();
+    }
+    else {
+        basic.FileAttributes = mode;
+        if (!SetFileInformationByHandle(
+                handle, FileBasicInfo, &basic, sizeof(basic))) {
+            nativeError = GetLastError();
+        }
+        else {
+            FILE_BASIC_INFO readback{};
+            if (!GetFileInformationByHandleEx(
+                    handle, FileBasicInfo, &readback, sizeof(readback))) {
+                nativeError = GetLastError();
+            }
+            else if (readback.FileAttributes != mode) {
+                nativeError = ERROR_INVALID_DATA;
+            }
+            else if (!FlushFileBuffers(handle)) {
+                nativeError = GetLastError();
+            }
+            else {
+                modeOk = true;
+            }
+        }
+    }
+    if (!modeOk) {
+        CloseHandle(handle);
+        detail = DurableNativeError(
+            "OpenExclusiveTemp", path,
+            static_cast<int>(nativeError == ERROR_SUCCESS
+                                 ? ERROR_WRITE_FAULT
+                                 : nativeError));
+        return false;
+    }
+    const auto finalIdentity = WindowsIdentityFromHandle(
+        handle, path, "OpenExclusiveTemp", detail);
+    const bool identityOk = finalIdentity.has_value() &&
+        *finalIdentity == *originalIdentity;
+    const bool closeOk = CloseHandle(handle) != 0;
+    if (!identityOk || !closeOk) {
+        if (detail.empty()) {
+            detail = "owned exclusive file identity changed before close";
+        }
+        return false;
+    }
+    return true;
+#else
+    const int descriptor = ::open(
+        path.c_str(), O_CREAT | O_EXCL | O_NOFOLLOW | O_RDWR | O_CLOEXEC,
+        S_IRUSR | S_IWUSR);
+    if (descriptor < 0) {
+        detail = DurableNativeError("OpenExclusiveTemp", path, errno);
+        return false;
+    }
+    struct stat openedStatus {};
+    if (::fstat(descriptor, &openedStatus) != 0 ||
+        !S_ISREG(openedStatus.st_mode) || openedStatus.st_nlink != 1) {
+        const int nativeError = errno == 0 ? EINVAL : errno;
+        ::close(descriptor);
+        detail = DurableNativeError("OpenExclusiveTemp", path, nativeError);
+        return false;
+    }
+    if (afterExclusiveCreate) {
+        afterExclusiveCreate();
+    }
+    std::size_t offset = 0u;
+    while (offset < bytes.size()) {
+        const ssize_t count = ::write(
+            descriptor, bytes.data() + offset, bytes.size() - offset);
+        if (count <= 0) {
+            const int nativeError = errno == 0 ? EIO : errno;
+            ::close(descriptor);
+            detail = DurableNativeError("OpenExclusiveTemp", path, nativeError);
+            return false;
+        }
+        offset += static_cast<std::size_t>(count);
+    }
+    struct stat finalStatus {};
+    struct stat pathStatus {};
+    const bool finished =
+        ::fchmod(descriptor, static_cast<mode_t>(mode)) == 0 &&
+        ::fsync(descriptor) == 0 &&
+        ::fstat(descriptor, &finalStatus) == 0 &&
+        ::lstat(path.c_str(), &pathStatus) == 0 &&
+        S_ISREG(finalStatus.st_mode) && finalStatus.st_nlink == 1 &&
+        S_ISREG(pathStatus.st_mode) && pathStatus.st_nlink == 1 &&
+        openedStatus.st_dev == finalStatus.st_dev &&
+        openedStatus.st_ino == finalStatus.st_ino &&
+        finalStatus.st_dev == pathStatus.st_dev &&
+        finalStatus.st_ino == pathStatus.st_ino;
+    const int nativeError = errno;
+    const bool closeOk = ::close(descriptor) == 0;
+    if (!finished || !closeOk) {
+        detail = !finished && nativeError == 0
+            ? "owned exclusive file identity changed before close"
+            : DurableNativeError(
+                  "OpenExclusiveTemp", path,
+                  nativeError == 0 ? EIO : nativeError);
+        return false;
+    }
+    return true;
+#endif
 }
 
 bool CopyExclusivePhysicalFile(
@@ -2535,11 +3338,15 @@ std::optional<std::uint32_t> PhysicalFileMode(
     std::string& detail) {
 #if defined(_WIN32)
     const DWORD attributes = GetFileAttributesW(path.c_str());
-    if (attributes == INVALID_FILE_ATTRIBUTES ||
-        (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u) {
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
         const DWORD nativeError = GetLastError();
         detail = DurableNativeError("ReadMode", path,
                                     static_cast<int>(nativeError));
+        return std::nullopt;
+    }
+    if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u) {
+        detail = DurableNativeError(
+            "ReadMode", path, ERROR_REPARSE_TAG_INVALID);
         return std::nullopt;
     }
     return static_cast<std::uint32_t>(attributes);
@@ -2627,11 +3434,24 @@ std::optional<PublicationLock> AcquirePublicationLock(
 #if defined(_WIN32)
     // A share-delete handle plus LockFileEx gives process-lifetime ownership.
     for (std::uint32_t attempt = 0u; attempt < 32u; ++attempt) {
+        bool created = true;
         HANDLE handle = CreateFileW(
-            canonical.c_str(), GENERIC_READ | GENERIC_WRITE,
+            canonical.c_str(), DELETE | GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL |
+            nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL |
                 FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        const DWORD createError =
+            handle == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+        if (handle == INVALID_HANDLE_VALUE &&
+            (createError == ERROR_FILE_EXISTS ||
+             createError == ERROR_ALREADY_EXISTS)) {
+            created = false;
+            handle = CreateFileW(
+                canonical.c_str(), DELETE | GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL |
+                    FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        }
         if (handle == INVALID_HANDLE_VALUE) {
             const DWORD nativeError = GetLastError();
             detail = DurableNativeError("LockExclusive", canonical,
@@ -2640,16 +3460,18 @@ std::optional<PublicationLock> AcquirePublicationLock(
         }
         FILE_ATTRIBUTE_TAG_INFO tag{};
         if (!GetFileInformationByHandleEx(
-                handle, FileAttributeTagInfo, &tag, sizeof(tag)) ||
-            (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u ||
-            (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0u) {
+                handle, FileAttributeTagInfo, &tag, sizeof(tag))) {
             const DWORD nativeError = GetLastError();
             CloseHandle(handle);
             detail = DurableNativeError(
-                "LockExclusive", canonical,
-                static_cast<int>(nativeError == ERROR_SUCCESS
-                                     ? ERROR_REPARSE_TAG_INVALID
-                                     : nativeError));
+                "LockExclusive", canonical, static_cast<int>(nativeError));
+            return std::nullopt;
+        }
+        if ((tag.FileAttributes &
+             (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0u) {
+            CloseHandle(handle);
+            detail = DurableNativeError(
+                "LockExclusive", canonical, ERROR_REPARSE_TAG_INVALID);
             return std::nullopt;
         }
         OVERLAPPED overlap{};
@@ -2670,11 +3492,29 @@ std::optional<PublicationLock> AcquirePublicationLock(
             return std::nullopt;
         }
         if (size.QuadPart == 0) {
+            if (!created) {
+                CloseHandle(handle);
+                detail = DurableNativeError(
+                    "LockExclusive", canonical, ERROR_FILE_EXISTS);
+                return std::nullopt;
+            }
             DWORD written = 0u;
             if (!WriteFile(handle, marker.data(),
                            static_cast<DWORD>(marker.size()), &written,
-                           nullptr) || written != marker.size() ||
-                !FlushFileBuffers(handle)) {
+                           nullptr)) {
+                const DWORD nativeError = GetLastError();
+                CloseHandle(handle);
+                detail = DurableNativeError("LockExclusive", canonical,
+                                            static_cast<int>(nativeError));
+                return std::nullopt;
+            }
+            if (written != static_cast<DWORD>(marker.size())) {
+                CloseHandle(handle);
+                detail = DurableNativeError(
+                    "LockExclusive", canonical, ERROR_WRITE_FAULT);
+                return std::nullopt;
+            }
+            if (!FlushFileBuffers(handle)) {
                 const DWORD nativeError = GetLastError();
                 CloseHandle(handle);
                 detail = DurableNativeError("LockExclusive", canonical,
@@ -2690,24 +3530,34 @@ std::optional<PublicationLock> AcquirePublicationLock(
             }
         }
         LARGE_INTEGER beginning{};
-        if (size.QuadPart != static_cast<LONGLONG>(marker.size()) ||
-            !SetFilePointerEx(handle, beginning, nullptr, FILE_BEGIN)) {
+        if (size.QuadPart != static_cast<LONGLONG>(marker.size())) {
+            CloseHandle(handle);
+            detail = DurableNativeError(
+                "LockExclusive", canonical, ERROR_INVALID_DATA);
+            return std::nullopt;
+        }
+        if (!SetFilePointerEx(handle, beginning, nullptr, FILE_BEGIN)) {
             const DWORD nativeError = GetLastError();
             CloseHandle(handle);
             detail = DurableNativeError(
-                "LockExclusive", canonical,
-                static_cast<int>(nativeError == ERROR_SUCCESS
-                                     ? ERROR_INVALID_DATA
-                                     : nativeError));
+                "LockExclusive", canonical, static_cast<int>(nativeError));
             return std::nullopt;
         }
         std::string readback(marker.size(), '\0');
         DWORD read = 0u;
         if (!ReadFile(handle, readback.data(),
-                      static_cast<DWORD>(readback.size()), &read, nullptr) ||
-            read != readback.size() || readback != marker) {
+                      static_cast<DWORD>(readback.size()), &read, nullptr)) {
+            const DWORD nativeError = GetLastError();
             CloseHandle(handle);
-            detail = "durable lock marker mismatch";
+            detail = DurableNativeError(
+                "LockExclusive", canonical, static_cast<int>(nativeError));
+            return std::nullopt;
+        }
+        if (read != static_cast<DWORD>(readback.size()) ||
+            readback != marker) {
+            CloseHandle(handle);
+            detail = DurableNativeError(
+                "LockExclusive", canonical, ERROR_INVALID_DATA);
             return std::nullopt;
         }
         const auto handleIdentity = WindowsIdentityFromHandle(
@@ -2758,6 +3608,17 @@ std::optional<PublicationLock> AcquirePublicationLock(
                 CloseHandle(handle);
                 return std::nullopt;
             }
+            const auto retiredPhysicalIdentity =
+                PhysicalIdentityNoFollow(retired, detail);
+            const auto retiredMode = PhysicalFileMode(retired, detail);
+            const std::string retiredHash = Sha256Bytes(std::span{
+                reinterpret_cast<const std::uint8_t*>(retiredBytes.data()),
+                retiredBytes.size()});
+            if (!retiredPhysicalIdentity.has_value() ||
+                !retiredMode.has_value()) {
+                CloseHandle(handle);
+                return std::nullopt;
+            }
             const std::string expectedReservation =
                 WindowsMoveReservationRecord(
                     canonical, retired, "retire-lock",
@@ -2766,7 +3627,10 @@ std::optional<PublicationLock> AcquirePublicationLock(
                         reinterpret_cast<const std::uint8_t*>(marker.data()),
                         marker.size()}));
             if (retiredBytes == expectedReservation) {
-                if (!RemoveOwnedPhysical(retired, detail)) {
+                if (!RemoveOwnedPhysical(
+                        retired, detail,
+                        SerializePhysicalIdentity(*retiredPhysicalIdentity),
+                        retiredHash, *retiredMode)) {
                     CloseHandle(handle);
                     return std::nullopt;
                 }
@@ -2790,7 +3654,10 @@ std::optional<PublicationLock> AcquirePublicationLock(
                 CloseHandle(old);
                 if (!oldIdentity.has_value() ||
                     *oldIdentity == *handleIdentity ||
-                    !RemoveOwnedPhysical(retired, detail)) {
+                    !RemoveOwnedPhysical(
+                        retired, detail,
+                        SerializePhysicalIdentity(*retiredPhysicalIdentity),
+                        retiredHash, *retiredMode)) {
                     CloseHandle(handle);
                     if (detail.empty()) {
                         detail = "foreign retired durable lock";
@@ -2823,9 +3690,15 @@ std::optional<PublicationLock> AcquirePublicationLock(
     }
 #else
     for (std::uint32_t attempt = 0u; attempt < 32u; ++attempt) {
-        const int descriptor = ::open(
-            canonical.c_str(), O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
+        bool created = true;
+        int descriptor = ::open(
+            canonical.c_str(), O_CREAT | O_EXCL | O_RDWR | O_NOFOLLOW | O_CLOEXEC,
             S_IRUSR | S_IWUSR);
+        if (descriptor < 0 && errno == EEXIST) {
+            created = false;
+            descriptor = ::open(
+                canonical.c_str(), O_RDWR | O_NOFOLLOW | O_CLOEXEC);
+        }
         if (descriptor < 0) {
             const int nativeError = errno;
             detail = DurableNativeError("LockExclusive", canonical,
@@ -2854,6 +3727,11 @@ std::optional<PublicationLock> AcquirePublicationLock(
             return std::nullopt;
         }
         if (handleStatus.st_size == 0) {
+            if (!created) {
+                ::close(descriptor);
+                detail = DurableNativeError("LockExclusive", canonical, EEXIST);
+                return std::nullopt;
+            }
             if (::ftruncate(descriptor, 0) != 0 ||
                 ::pwrite(descriptor, marker.data(), marker.size(), 0) !=
                     static_cast<ssize_t>(marker.size()) ||
@@ -2897,6 +3775,14 @@ std::optional<PublicationLock> AcquirePublicationLock(
              retiredError != std::errc::no_such_file_or_directory)) {
             std::string retiredBytes;
             struct stat retiredInfo {};
+            std::string retiredIdentity;
+            std::optional<std::uint32_t> retiredMode;
+            const auto physicalIdentity =
+                PhysicalIdentityNoFollow(retired, detail);
+            retiredMode = PhysicalFileMode(retired, detail);
+            if (physicalIdentity.has_value()) {
+                retiredIdentity = SerializePhysicalIdentity(*physicalIdentity);
+            }
             if (retiredError ||
                 retiredStatus.type() != std::filesystem::file_type::regular ||
                 ::lstat(retired.c_str(), &retiredInfo) != 0 ||
@@ -2905,7 +3791,14 @@ std::optional<PublicationLock> AcquirePublicationLock(
                  retiredInfo.st_ino == handleStatus.st_ino) ||
                 !ReadPhysicalText(retired, retiredBytes, detail) ||
                 retiredBytes != marker ||
-                !RemoveOwnedPhysical(retired, detail)) {
+                physicalIdentity == std::nullopt || !retiredMode.has_value() ||
+                !RemoveOwnedPhysical(
+                    retired, detail, retiredIdentity,
+                    Sha256Bytes(std::span{
+                        reinterpret_cast<const std::uint8_t*>(
+                            retiredBytes.data()),
+                        retiredBytes.size()}),
+                    *retiredMode)) {
                 ::close(descriptor);
                 if (detail.empty()) {
                     detail = "foreign retired durable lock";
@@ -2932,41 +3825,135 @@ bool RetirePublicationLock(
         return injectFault ? injectFault(point)
                            : TerrainReferenceFaultAction::NONE;
     };
-#if defined(_WIN32)
-    HANDLE fresh = CreateFileW(
-        lock.Canonical.c_str(), GENERIC_READ,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL |
-            FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-    if (fresh == INVALID_HANDLE_VALUE) {
-        const DWORD nativeError = GetLastError();
-        detail = DurableNativeError("RetireLock", lock.Canonical,
-                                    static_cast<int>(nativeError));
-        lock.Abandon();
-        return false;
-    }
-    const auto pathIdentity = WindowsIdentityFromHandle(
-        fresh, lock.Canonical, "RetireLock", detail);
-    CloseHandle(fresh);
-    const auto handleIdentity = WindowsIdentityFromHandle(
-        lock.Handle, lock.Canonical, "RetireLock", detail);
-    if (!pathIdentity.has_value() || !handleIdentity.has_value() ||
-        *pathIdentity != lock.Identity || *handleIdentity != lock.Identity) {
-        if (detail.empty()) {
-            detail = "durable lock identity changed before retirement";
-        }
-        lock.Abandon();
-        return false;
-    }
     const std::string marker = PublicationLockMarker(lock.Canonical);
+#if defined(_WIN32)
     const std::string markerHash = Sha256Bytes(std::span{
         reinterpret_cast<const std::uint8_t*>(marker.data()), marker.size()});
-    if (!ReserveMoveTargetWindows(
-            lock.Canonical, lock.Retired, "retire-lock",
-            WindowsLockGeneration(lock.Identity), markerHash, detail)) {
+    const std::vector steps = PlanTerrainWindowsLockRetirement();
+    bool handleClosed = false;
+    const bool executed = ExecuteTerrainWindowsDurableSteps(
+        steps,
+        [&](const TerrainWindowsDurableStep& step,
+            std::string& stepDetail) {
+            switch (step.Action) {
+            case TerrainWindowsDurableAction::VERIFY_LOCK_IDENTITIES: {
+                HANDLE fresh = CreateFileW(
+                    lock.Canonical.c_str(), GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL |
+                        FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                if (fresh == INVALID_HANDLE_VALUE) {
+                    const DWORD nativeError = GetLastError();
+                    stepDetail = DurableNativeError(
+                        "RetireLock", lock.Canonical,
+                        static_cast<int>(nativeError));
+                    return false;
+                }
+                const auto pathIdentity = WindowsIdentityFromHandle(
+                    fresh, lock.Canonical, "RetireLock", stepDetail);
+                const bool closeOk = CloseHandle(fresh) != 0;
+                const auto handleIdentity = WindowsIdentityFromHandle(
+                    lock.Handle, lock.Canonical, "RetireLock", stepDetail);
+                if (!closeOk || !pathIdentity.has_value() ||
+                    !handleIdentity.has_value() ||
+                    *pathIdentity != lock.Identity ||
+                    *handleIdentity != lock.Identity) {
+                    if (stepDetail.empty()) {
+                        stepDetail =
+                            "durable lock identity changed before retirement";
+                    }
+                    return false;
+                }
+                return true;
+            }
+            case TerrainWindowsDurableAction::RESERVE_TARGET:
+                if (!ReserveMoveTargetWindows(
+                        lock.Canonical, lock.Retired, "retire-lock",
+                        WindowsLockGeneration(lock.Identity), markerHash,
+                        stepDetail)) {
+                    return false;
+                }
+                if (fault("MANIFEST_AFTER_LOCK_RESERVATION_DURABLE") !=
+                    TerrainReferenceFaultAction::NONE) {
+                    stepDetail =
+                        "injected fault MANIFEST_AFTER_LOCK_RESERVATION_DURABLE";
+                    return false;
+                }
+                return true;
+            case TerrainWindowsDurableAction::MOVE_TO_RESERVATION:
+                return ReplacePhysicalFile(
+                           lock.Canonical, lock.Retired, stepDetail) &&
+                    SyncPhysicalDirectory(
+                        lock.Canonical.parent_path(), stepDetail);
+            case TerrainWindowsDurableAction::VERIFY_RESERVATION_PAYLOAD: {
+                const DWORD canonicalAttributes =
+                    GetFileAttributesW(lock.Canonical.c_str());
+                if (canonicalAttributes != INVALID_FILE_ATTRIBUTES) {
+                    stepDetail = DurableNativeError(
+                        "RetireLock", lock.Canonical, ERROR_INVALID_DATA);
+                    return false;
+                }
+                const DWORD absenceError = GetLastError();
+                if (absenceError != ERROR_FILE_NOT_FOUND &&
+                    absenceError != ERROR_PATH_NOT_FOUND) {
+                    stepDetail = DurableNativeError(
+                        "RetireLock", lock.Canonical,
+                        static_cast<int>(absenceError));
+                    return false;
+                }
+                const auto movedIdentity = WindowsIdentityFromHandle(
+                    lock.Handle, lock.Retired, "RetireLock", stepDetail);
+                if (!movedIdentity.has_value() ||
+                    *movedIdentity != lock.Identity) {
+                    if (stepDetail.empty()) {
+                        stepDetail =
+                            "durable lock identity changed after retirement move";
+                    }
+                    return false;
+                }
+                if (fault("MANIFEST_AFTER_LOCK_MOVE_TO_RETIRED") !=
+                    TerrainReferenceFaultAction::NONE) {
+                    stepDetail =
+                        "injected fault MANIFEST_AFTER_LOCK_MOVE_TO_RETIRED";
+                    return false;
+                }
+                return true;
+            }
+            case TerrainWindowsDurableAction::ACCEPT_DELETE_PENDING:
+                {
+                FILE_DISPOSITION_INFO disposition{};
+                disposition.DeleteFile = TRUE;
+                if (!SetFileInformationByHandle(
+                        lock.Handle, FileDispositionInfo, &disposition,
+                        sizeof(disposition))) {
+                    const DWORD nativeError = GetLastError();
+                    stepDetail = DurableNativeError(
+                        "RetireLock", lock.Retired,
+                        static_cast<int>(nativeError));
+                    return false;
+                }
+                if (fault("MANIFEST_AFTER_LOCK_DELETE_PENDING") !=
+                    TerrainReferenceFaultAction::NONE) {
+                    stepDetail =
+                        "injected fault MANIFEST_AFTER_LOCK_DELETE_PENDING";
+                    return false;
+                }
+                return true;
+                }
+            case TerrainWindowsDurableAction::CLOSE_LOCK_HANDLE:
+                lock.Abandon();
+                handleClosed = true;
+                return true;
+            default:
+                stepDetail = "unexpected Windows lock-retirement action";
+                return false;
+            }
+        },
+        detail);
+    if (!executed && !handleClosed) {
         lock.Abandon();
-        return false;
     }
+    return executed;
 #else
     struct stat handleStatus {};
     struct stat pathStatus {};
@@ -2980,7 +3967,6 @@ bool RetirePublicationLock(
         lock.Abandon();
         return false;
     }
-#endif
     if (fault("MANIFEST_AFTER_LOCK_RESERVATION_DURABLE") !=
         TerrainReferenceFaultAction::NONE) {
         detail = "injected fault MANIFEST_AFTER_LOCK_RESERVATION_DURABLE";
@@ -2998,46 +3984,19 @@ bool RetirePublicationLock(
         lock.Abandon();
         return false;
     }
-#if defined(_WIN32)
-    const DWORD canonicalAttributes =
-        GetFileAttributesW(lock.Canonical.c_str());
-    if (canonicalAttributes != INVALID_FILE_ATTRIBUTES) {
-        detail = DurableNativeError(
-            "RetireLock", lock.Canonical, ERROR_INVALID_DATA);
+    const PhysicalFileIdentity retainedIdentity{
+        static_cast<std::uint64_t>(handleStatus.st_dev), 0u,
+        static_cast<std::uint64_t>(handleStatus.st_ino)};
+    if (!RemoveOwnedPhysical(
+            lock.Retired, detail,
+            SerializePhysicalIdentity(retainedIdentity),
+            Sha256Bytes(std::span{
+                reinterpret_cast<const std::uint8_t*>(marker.data()),
+                marker.size()}),
+            static_cast<std::uint32_t>(handleStatus.st_mode & 07777))) {
         lock.Abandon();
         return false;
     }
-    const DWORD absenceError = GetLastError();
-    if (absenceError != ERROR_FILE_NOT_FOUND &&
-        absenceError != ERROR_PATH_NOT_FOUND) {
-        detail = DurableNativeError(
-            "RetireLock", lock.Canonical,
-            static_cast<int>(absenceError));
-        lock.Abandon();
-        return false;
-    }
-    const auto movedIdentity = WindowsIdentityFromHandle(
-        lock.Handle, lock.Retired, "RetireLock", detail);
-    if (!movedIdentity.has_value() || *movedIdentity != lock.Identity) {
-        if (detail.empty()) {
-            detail = "durable lock identity changed after retirement move";
-        }
-        lock.Abandon();
-        return false;
-    }
-    if (!DeleteFileW(lock.Retired.c_str())) {
-        const DWORD nativeError = GetLastError();
-        detail = DurableNativeError("RetireLock", lock.Retired,
-                                    static_cast<int>(nativeError));
-        lock.Abandon();
-        return false;
-    }
-#else
-    if (!RemoveOwnedPhysical(lock.Retired, detail)) {
-        lock.Abandon();
-        return false;
-    }
-#endif
     if (fault("MANIFEST_AFTER_LOCK_DELETE_PENDING") !=
         TerrainReferenceFaultAction::NONE) {
         detail = "injected fault MANIFEST_AFTER_LOCK_DELETE_PENDING";
@@ -3046,6 +4005,7 @@ bool RetirePublicationLock(
     }
     lock.Abandon();
     return true;
+#endif
 }
 
 struct ManifestPublicationJournal {
@@ -3054,10 +4014,23 @@ struct ManifestPublicationJournal {
     std::filesystem::path Destination;
     std::filesystem::path Temp;
     std::filesystem::path Backup;
+    std::filesystem::path TempReservation;
+    std::filesystem::path BackupReservation;
+    std::filesystem::path Rollback;
+    std::filesystem::path RollbackReservation;
+    std::filesystem::path TempTombstone;
+    std::filesystem::path BackupTombstone;
+    std::filesystem::path RollbackTombstone;
+    std::filesystem::path DestinationTombstone;
+    std::filesystem::path JournalRetired;
     bool PriorExists{false};
     std::string PriorSha256;
     std::uint32_t PriorMode{0u};
     std::string IntendedSha256;
+    std::uint32_t IntendedMode{0u};
+    std::string TempIdentity;
+    std::string BackupIdentity;
+    std::string RollbackIdentity;
     std::string RunId;
 };
 
@@ -3076,10 +4049,32 @@ std::string SerializeManifestJournal(
     json.String(journal.Backup.empty()
                     ? std::string_view{}
                     : journal.Backup.lexically_normal().generic_string());
+    json.Key("tempReservation");
+    json.String(journal.TempReservation.lexically_normal().generic_string());
+    json.Key("backupReservation");
+    json.String(journal.BackupReservation.lexically_normal().generic_string());
+    json.Key("rollback");
+    json.String(journal.Rollback.lexically_normal().generic_string());
+    json.Key("rollbackReservation");
+    json.String(journal.RollbackReservation.lexically_normal().generic_string());
+    json.Key("tempTombstone");
+    json.String(journal.TempTombstone.lexically_normal().generic_string());
+    json.Key("backupTombstone");
+    json.String(journal.BackupTombstone.lexically_normal().generic_string());
+    json.Key("rollbackTombstone");
+    json.String(journal.RollbackTombstone.lexically_normal().generic_string());
+    json.Key("destinationTombstone");
+    json.String(journal.DestinationTombstone.lexically_normal().generic_string());
+    json.Key("journalRetired");
+    json.String(journal.JournalRetired.lexically_normal().generic_string());
     json.Key("priorExists"); json.Uint(journal.PriorExists ? 1u : 0u);
     json.Key("priorSha256"); json.String(journal.PriorSha256);
     json.Key("priorMode"); json.Uint(journal.PriorMode);
     json.Key("intendedSha256"); json.String(journal.IntendedSha256);
+    json.Key("intendedMode"); json.Uint(journal.IntendedMode);
+    json.Key("tempIdentity"); json.String(journal.TempIdentity);
+    json.Key("backupIdentity"); json.String(journal.BackupIdentity);
+    json.Key("rollbackIdentity"); json.String(journal.RollbackIdentity);
     json.Key("runId"); json.String(journal.RunId);
     json.ObjectEnd();
     return std::move(json).Take();
@@ -3097,10 +4092,14 @@ std::optional<ManifestPublicationJournal> ParseManifestJournal(
         detail = "invalid publication journal JSON";
         return std::nullopt;
     }
-    constexpr std::array<std::string_view, 11> keys{
+    constexpr std::array<std::string_view, 24> keys{
         "version", "phase", "transactionId", "destination", "temp",
-        "backup", "priorExists", "priorSha256", "priorMode",
-        "intendedSha256", "runId"};
+        "backup", "tempReservation", "backupReservation", "rollback",
+        "rollbackReservation", "tempTombstone", "backupTombstone",
+        "rollbackTombstone",
+        "destinationTombstone", "journalRetired", "priorExists",
+        "priorSha256", "priorMode", "intendedSha256", "intendedMode",
+        "tempIdentity", "backupIdentity", "rollbackIdentity", "runId"};
     if (!RejectUnknownMembers(*root, keys, "", issues)) {
         detail = "invalid publication journal member set";
         return std::nullopt;
@@ -3114,16 +4113,46 @@ std::optional<ManifestPublicationJournal> ParseManifestJournal(
     const JsonValue* destination = member("destination", JsonType::STRING);
     const JsonValue* temp = member("temp", JsonType::STRING);
     const JsonValue* backup = member("backup", JsonType::STRING);
+    const JsonValue* tempReservation =
+        member("tempReservation", JsonType::STRING);
+    const JsonValue* backupReservation =
+        member("backupReservation", JsonType::STRING);
+    const JsonValue* rollback = member("rollback", JsonType::STRING);
+    const JsonValue* rollbackReservation =
+        member("rollbackReservation", JsonType::STRING);
+    const JsonValue* tempTombstone =
+        member("tempTombstone", JsonType::STRING);
+    const JsonValue* backupTombstone =
+        member("backupTombstone", JsonType::STRING);
+    const JsonValue* rollbackTombstone =
+        member("rollbackTombstone", JsonType::STRING);
+    const JsonValue* destinationTombstone =
+        member("destinationTombstone", JsonType::STRING);
+    const JsonValue* journalRetired =
+        member("journalRetired", JsonType::STRING);
     const JsonValue* priorExists = member("priorExists", JsonType::NUMBER);
     const JsonValue* priorSha256 = member("priorSha256", JsonType::STRING);
     const JsonValue* priorMode = member("priorMode", JsonType::NUMBER);
     const JsonValue* intendedSha256 =
         member("intendedSha256", JsonType::STRING);
+    const JsonValue* intendedMode = member("intendedMode", JsonType::NUMBER);
+    const JsonValue* tempIdentity = member("tempIdentity", JsonType::STRING);
+    const JsonValue* backupIdentity = member("backupIdentity", JsonType::STRING);
+    const JsonValue* rollbackIdentity =
+        member("rollbackIdentity", JsonType::STRING);
     const JsonValue* runId = member("runId", JsonType::STRING);
     if (version == nullptr || phase == nullptr || transactionId == nullptr ||
         destination == nullptr || temp == nullptr || backup == nullptr ||
+        tempReservation == nullptr || backupReservation == nullptr ||
+        rollback == nullptr || rollbackReservation == nullptr ||
+        tempTombstone == nullptr || backupTombstone == nullptr ||
+        rollbackTombstone == nullptr ||
+        destinationTombstone == nullptr || journalRetired == nullptr ||
         priorExists == nullptr || priorSha256 == nullptr ||
-        priorMode == nullptr || intendedSha256 == nullptr || runId == nullptr) {
+        priorMode == nullptr || intendedSha256 == nullptr ||
+        intendedMode == nullptr || tempIdentity == nullptr ||
+        backupIdentity == nullptr || rollbackIdentity == nullptr ||
+        runId == nullptr) {
         detail = "publication journal has missing member";
         return std::nullopt;
     }
@@ -3149,6 +4178,55 @@ std::optional<ManifestPublicationJournal> ParseManifestJournal(
         return std::nullopt;
     }
     journal.Backup = std::filesystem::path{pathText};
+    if (!ReadString(*tempReservation, "/tempReservation", pathText, issues)) {
+        detail = "publication journal has invalid temp reservation";
+        return std::nullopt;
+    }
+    journal.TempReservation = std::filesystem::path{pathText};
+    if (!ReadString(*backupReservation, "/backupReservation", pathText,
+                    issues)) {
+        detail = "publication journal has invalid backup reservation";
+        return std::nullopt;
+    }
+    journal.BackupReservation = std::filesystem::path{pathText};
+    if (!ReadString(*rollback, "/rollback", pathText, issues)) {
+        detail = "publication journal has invalid rollback";
+        return std::nullopt;
+    }
+    journal.Rollback = std::filesystem::path{pathText};
+    if (!ReadString(*rollbackReservation, "/rollbackReservation", pathText,
+                    issues)) {
+        detail = "publication journal has invalid rollback reservation";
+        return std::nullopt;
+    }
+    journal.RollbackReservation = std::filesystem::path{pathText};
+    if (!ReadString(*tempTombstone, "/tempTombstone", pathText, issues)) {
+        detail = "publication journal has invalid temp tombstone";
+        return std::nullopt;
+    }
+    journal.TempTombstone = std::filesystem::path{pathText};
+    if (!ReadString(*backupTombstone, "/backupTombstone", pathText, issues)) {
+        detail = "publication journal has invalid backup tombstone";
+        return std::nullopt;
+    }
+    journal.BackupTombstone = std::filesystem::path{pathText};
+    if (!ReadString(*rollbackTombstone, "/rollbackTombstone", pathText,
+                    issues)) {
+        detail = "publication journal has invalid rollback tombstone";
+        return std::nullopt;
+    }
+    journal.RollbackTombstone = std::filesystem::path{pathText};
+    if (!ReadString(*destinationTombstone, "/destinationTombstone",
+                    pathText, issues)) {
+        detail = "publication journal has invalid destination tombstone";
+        return std::nullopt;
+    }
+    journal.DestinationTombstone = std::filesystem::path{pathText};
+    if (!ReadString(*journalRetired, "/journalRetired", pathText, issues)) {
+        detail = "publication journal has invalid retired mapping";
+        return std::nullopt;
+    }
+    journal.JournalRetired = std::filesystem::path{pathText};
     if (!ReadUint(*priorExists, 1u, "/priorExists", integer, issues)) {
         detail = "publication journal has invalid priorExists";
         return std::nullopt;
@@ -3163,6 +4241,18 @@ std::optional<ManifestPublicationJournal> ParseManifestJournal(
     journal.PriorMode = static_cast<std::uint32_t>(integer);
     if (!ReadString(*intendedSha256, "/intendedSha256",
                     journal.IntendedSha256, issues) ||
+        !ReadUint(*intendedMode, UINT32_MAX, "/intendedMode",
+                  integer, issues)) {
+        detail = "publication journal has invalid intended metadata";
+        return std::nullopt;
+    }
+    journal.IntendedMode = static_cast<std::uint32_t>(integer);
+    if (!ReadString(*tempIdentity, "/tempIdentity",
+                    journal.TempIdentity, issues) ||
+        !ReadString(*backupIdentity, "/backupIdentity",
+                    journal.BackupIdentity, issues) ||
+        !ReadString(*rollbackIdentity, "/rollbackIdentity",
+                    journal.RollbackIdentity, issues) ||
         !ReadString(*runId, "/runId", journal.RunId, issues) ||
         !issues.empty()) {
         detail = "publication journal has invalid intended metadata";
@@ -3173,9 +4263,18 @@ std::optional<ManifestPublicationJournal> ParseManifestJournal(
     if (std::ranges::find(phases, journal.Phase) == phases.end() ||
         journal.TransactionId.empty() || journal.RunId.empty() ||
         !IsLowerHexSha256(journal.IntendedSha256) ||
+        journal.IntendedMode == 0u ||
+        journal.TempReservation.empty() || journal.BackupReservation.empty() ||
+        journal.Rollback.empty() || journal.RollbackReservation.empty() ||
+        journal.TempTombstone.empty() || journal.BackupTombstone.empty() ||
+        journal.RollbackTombstone.empty() ||
+        journal.DestinationTombstone.empty() || journal.JournalRetired.empty() ||
         (journal.PriorExists && !IsLowerHexSha256(journal.PriorSha256)) ||
         (!journal.PriorExists &&
          (!journal.PriorSha256.empty() || journal.PriorMode != 0u)) ||
+        (journal.Phase != "SNAPSHOT" && journal.TempIdentity.empty()) ||
+        (journal.Phase != "SNAPSHOT" && journal.PriorExists &&
+         journal.BackupIdentity.empty()) ||
         journal.Destination.empty() || journal.Temp.empty() ||
         (journal.PriorExists && journal.Backup.empty())) {
         detail = "publication journal violates invariant";
@@ -3212,12 +4311,38 @@ bool WriteManifestJournal(
                     journal.TransactionId,
                     updateSequence.fetch_add(1u, std::memory_order_relaxed));
     const std::string bytes = SerializeManifestJournal(journal);
-    if (!WriteExclusiveText(update, bytes, PrivatePhysicalMode(), detail)) {
+    const auto failWithCheckedUpdateCleanup = [&](std::string primaryDetail) {
+        std::error_code statusError;
+        const auto status = std::filesystem::symlink_status(update, statusError);
+        if (status.type() == std::filesystem::file_type::not_found &&
+            (!statusError ||
+             statusError == std::errc::no_such_file_or_directory)) {
+            detail = std::move(primaryDetail);
+            return false;
+        }
+        std::string cleanupDetail;
+        const auto identity = PhysicalIdentityNoFollow(update, cleanupDetail);
+        const auto hash = Sha256File(update, cleanupDetail);
+        const auto mode = PhysicalFileMode(update, cleanupDetail);
+        if (!identity.has_value() || !hash.has_value() || !mode.has_value() ||
+            !RemoveOwnedPhysical(
+                update, cleanupDetail, SerializePhysicalIdentity(*identity),
+                *hash, *mode)) {
+            detail = std::format(
+                "RECOVERY_REQUIRED journal update retained path={} cause={} "
+                "cleanup={}",
+                update.generic_string(), primaryDetail, cleanupDetail);
+            return false;
+        }
+        detail = std::move(primaryDetail);
         return false;
+    };
+    if (!WriteExclusiveText(update, bytes, PrivatePhysicalMode(), detail)) {
+        return failWithCheckedUpdateCleanup(detail);
     }
     std::string readback;
     if (!ReadPhysicalText(update, readback, detail)) {
-        return false;
+        return failWithCheckedUpdateCleanup(detail);
     }
     const auto parsed = ParseManifestJournal(readback, detail);
     if (!parsed.has_value() ||
@@ -3225,10 +4350,54 @@ bool WriteManifestJournal(
         if (detail.empty()) {
             detail = "publication journal readback mismatch";
         }
-        return false;
+        return failWithCheckedUpdateCleanup(detail);
     }
     if (!ReplacePhysicalFile(update, canonicalJournal, detail) ||
         !SyncPhysicalDirectory(canonicalJournal.parent_path(), detail)) {
+        return failWithCheckedUpdateCleanup(detail);
+    }
+    return true;
+}
+
+bool RetireManifestJournal(
+    const ManifestPublicationJournal& journal,
+    const std::filesystem::path& canonicalJournal,
+    const std::filesystem::path& retiredJournal,
+    std::string_view expectedIdentity,
+    const TerrainReferenceFaultInjector& injectFault,
+    std::string& detail) {
+    std::string journalBytes;
+    const auto identity = PhysicalIdentityNoFollow(canonicalJournal, detail);
+    const auto mode = PhysicalFileMode(canonicalJournal, detail);
+    if (!ReadPhysicalText(canonicalJournal, journalBytes, detail) ||
+        SerializeManifestJournal(journal) != journalBytes ||
+        !identity.has_value() ||
+        SerializePhysicalIdentity(*identity) != expectedIdentity ||
+        !mode.has_value() || *mode != PrivatePhysicalMode()) {
+        if (detail.empty()) {
+            detail = "canonical publication journal changed before retirement";
+        }
+        return false;
+    }
+#if defined(_WIN32)
+    if (!ReserveMoveTargetWindows(
+            canonicalJournal, retiredJournal, "retire-journal",
+            journal.TransactionId,
+            Sha256Bytes(std::span{
+                reinterpret_cast<const std::uint8_t*>(journalBytes.data()),
+                journalBytes.size()}),
+            detail)) {
+        return false;
+    }
+#endif
+    if (!ReplacePhysicalFile(canonicalJournal, retiredJournal, detail) ||
+        !SyncPhysicalDirectory(canonicalJournal.parent_path(), detail)) {
+        return false;
+    }
+    if (injectFault &&
+        injectFault("MANIFEST_AFTER_JOURNAL_RETIRE") !=
+            TerrainReferenceFaultAction::NONE) {
+        detail = "injected fault MANIFEST_AFTER_JOURNAL_RETIRE";
         return false;
     }
     return true;
@@ -3291,6 +4460,251 @@ bool VerifyHashAndMode(
     }
     const auto mode = PhysicalFileMode(path, detail);
     return mode.has_value() && *mode == expectedMode;
+}
+
+bool VerifyRecordedOwnedArtifact(
+    const std::filesystem::path& path,
+    std::string_view expectedHash,
+    std::uint32_t expectedMode,
+    std::string_view expectedIdentity,
+    std::string& detail) {
+    const auto identity = PhysicalIdentityNoFollow(path, detail);
+    if (!identity.has_value() || expectedIdentity.empty() ||
+        SerializePhysicalIdentity(*identity) != expectedIdentity ||
+        !VerifyHashAndMode(path, expectedHash, expectedMode, detail)) {
+        detail = std::format(
+            "owned artifact identity/hash/mode mismatch: {}",
+            path.generic_string());
+        return false;
+    }
+    return true;
+}
+
+bool RemoveRecordedOwnedArtifact(
+    const std::filesystem::path& path,
+    const std::filesystem::path& tombstone,
+    std::string_view kind,
+    std::string_view transactionId,
+    std::string_view expectedHash,
+    std::uint32_t expectedMode,
+    std::string_view expectedIdentity,
+    const TerrainReferenceFaultInjector& injectFault,
+    std::string_view reservationFaultPoint,
+    std::string& detail) {
+    const bool pathAbsent = PhysicalPathAbsent(path);
+    const bool tombstoneAbsent = PhysicalPathAbsent(tombstone);
+#if defined(_WIN32)
+    const std::string reservation = WindowsMoveReservationRecord(
+        path, tombstone, kind, transactionId, expectedHash);
+    TerrainWindowsRemoveOwnedState state;
+    state.SourcePresent = !pathAbsent;
+    state.TombstonePresent = !tombstoneAbsent;
+    state.SourceMatchesRecordedArtifact = pathAbsent ||
+        VerifyRecordedOwnedArtifact(
+            path, expectedHash, expectedMode, expectedIdentity, detail);
+    std::string reservationIdentity;
+    const std::string reservationHash = Sha256Text(reservation);
+    if (!tombstoneAbsent) {
+        const auto identity = PhysicalIdentityNoFollow(tombstone, detail);
+        std::string tombstoneBytes;
+        if (!identity.has_value() ||
+            !ReadPhysicalText(tombstone, tombstoneBytes, detail)) {
+            return false;
+        }
+        reservationIdentity = SerializePhysicalIdentity(*identity);
+        state.TombstoneIsExactReservation = tombstoneBytes == reservation;
+        state.TombstoneMatchesRecordedArtifact =
+            state.TombstoneIsExactReservation ||
+            VerifyRecordedOwnedArtifact(
+                tombstone, expectedHash, expectedMode, expectedIdentity,
+                detail);
+    }
+    const auto plan = PlanTerrainWindowsOwnedRemoval(state, detail);
+    if (!plan.has_value()) {
+        return false;
+    }
+    DWORD originalAttributes = 0u;
+    std::uint32_t deleteMode = expectedMode;
+    bool attributesChanged = false;
+    const auto restoreAttributes = [&] {
+        if (!attributesChanged || PhysicalPathAbsent(tombstone)) {
+            return true;
+        }
+        const auto identity = PhysicalIdentityNoFollow(tombstone, detail);
+        if (!identity.has_value() ||
+            SerializePhysicalIdentity(*identity) != expectedIdentity) {
+            return true;
+        }
+        if (!SetFileAttributesW(tombstone.c_str(), originalAttributes)) {
+            const DWORD nativeError = GetLastError();
+            detail = DurableNativeError(
+                "RemoveOwned", tombstone, static_cast<int>(nativeError));
+            return false;
+        }
+        const DWORD readback = GetFileAttributesW(tombstone.c_str());
+        if (readback == INVALID_FILE_ATTRIBUTES) {
+            const DWORD nativeError = GetLastError();
+            detail = DurableNativeError(
+                "RemoveOwned", tombstone, static_cast<int>(nativeError));
+            return false;
+        }
+        if (readback != originalAttributes) {
+            detail = DurableNativeError(
+                "RemoveOwned", tombstone, ERROR_INVALID_DATA);
+            return false;
+        }
+        attributesChanged = false;
+        return true;
+    };
+    const bool executed = ExecuteTerrainWindowsDurableSteps(
+        *plan,
+        [&](const TerrainWindowsDurableStep& step,
+            std::string& stepDetail) {
+            switch (step.Action) {
+            case TerrainWindowsDurableAction::REMOVE_RESERVATION:
+                return RemoveOwnedPhysical(
+                    tombstone, stepDetail, reservationIdentity,
+                    reservationHash, PrivatePhysicalMode());
+            case TerrainWindowsDurableAction::VERIFY_SOURCE:
+                return VerifyRecordedOwnedArtifact(
+                    path, expectedHash, expectedMode, expectedIdentity,
+                    stepDetail);
+            case TerrainWindowsDurableAction::RESERVE_TARGET:
+                if (!ReserveMoveTargetWindows(
+                        path, tombstone, kind, transactionId, expectedHash,
+                        stepDetail)) {
+                    return false;
+                }
+                if (!reservationFaultPoint.empty() && injectFault &&
+                    injectFault(reservationFaultPoint) !=
+                        TerrainReferenceFaultAction::NONE) {
+                    stepDetail = std::format(
+                        "injected fault {}", reservationFaultPoint);
+                    return false;
+                }
+                return VerifyRecordedOwnedArtifact(
+                    path, expectedHash, expectedMode, expectedIdentity,
+                    stepDetail);
+            case TerrainWindowsDurableAction::MOVE_TO_RESERVATION:
+                return ReplacePhysicalFile(path, tombstone, stepDetail);
+            case TerrainWindowsDurableAction::VERIFY_RESERVATION_PAYLOAD:
+                if (injectFault &&
+                    injectFault("MANIFEST_BEFORE_TOMBSTONE_DELETE") !=
+                        TerrainReferenceFaultAction::NONE) {
+                    stepDetail =
+                        "injected fault MANIFEST_BEFORE_TOMBSTONE_DELETE";
+                    return false;
+                }
+                return VerifyRecordedOwnedArtifact(
+                    tombstone, expectedHash, expectedMode, expectedIdentity,
+                    stepDetail);
+            case TerrainWindowsDurableAction::CLEAR_READONLY: {
+                originalAttributes = GetFileAttributesW(tombstone.c_str());
+                if (originalAttributes == INVALID_FILE_ATTRIBUTES) {
+                    const DWORD nativeError = GetLastError();
+                    stepDetail = DurableNativeError(
+                        "RemoveOwned", tombstone,
+                        static_cast<int>(nativeError));
+                    return false;
+                }
+                if ((originalAttributes & FILE_ATTRIBUTE_READONLY) == 0u) {
+                    return true;
+                }
+                DWORD updated =
+                    originalAttributes & ~FILE_ATTRIBUTE_READONLY;
+                if (updated == 0u) {
+                    updated = FILE_ATTRIBUTE_NORMAL;
+                }
+                deleteMode = updated;
+                if (!SetFileAttributesW(tombstone.c_str(), updated)) {
+                    const DWORD nativeError = GetLastError();
+                    stepDetail = DurableNativeError(
+                        "RemoveOwned", tombstone,
+                        static_cast<int>(nativeError));
+                    return false;
+                }
+                attributesChanged = true;
+                const DWORD readback = GetFileAttributesW(tombstone.c_str());
+                if (readback == INVALID_FILE_ATTRIBUTES) {
+                    const DWORD nativeError = GetLastError();
+                    stepDetail = DurableNativeError(
+                        "RemoveOwned", tombstone,
+                        static_cast<int>(nativeError));
+                    return false;
+                }
+                if (readback != updated) {
+                    stepDetail = DurableNativeError(
+                        "RemoveOwned", tombstone, ERROR_INVALID_DATA);
+                    return false;
+                }
+                return true;
+            }
+            case TerrainWindowsDurableAction::DELETE_RESERVATION: {
+                return RemoveOwnedPhysical(
+                    tombstone, stepDetail, expectedIdentity,
+                    expectedHash, deleteMode);
+            }
+            case TerrainWindowsDurableAction::VERIFY_ABSENCE:
+                if (!PhysicalPathAbsent(tombstone)) {
+                    stepDetail = DurableNativeError(
+                        "RemoveOwned", tombstone, ERROR_INVALID_DATA);
+                    return false;
+                }
+                return true;
+            default:
+                stepDetail = "unexpected Windows remove-owned action";
+                return false;
+            }
+        },
+        detail);
+    if (!executed) {
+        const std::string actionDetail = detail;
+        if (!restoreAttributes()) {
+            return false;
+        }
+        detail = actionDetail;
+    }
+    return executed;
+#else
+    (void)kind;
+    (void)transactionId;
+    if (!tombstoneAbsent) {
+        detail = std::format("unexpected POSIX tombstone: {}",
+                             tombstone.generic_string());
+        return false;
+    }
+    if (pathAbsent) {
+        return true;
+    }
+    if (!VerifyRecordedOwnedArtifact(
+            path, expectedHash, expectedMode, expectedIdentity, detail)) {
+        return false;
+    }
+    if (!reservationFaultPoint.empty() && injectFault &&
+        injectFault(reservationFaultPoint) !=
+            TerrainReferenceFaultAction::NONE) {
+        detail = std::format("injected fault {}", reservationFaultPoint);
+        return false;
+    }
+    if (!VerifyRecordedOwnedArtifact(
+            path, expectedHash, expectedMode, expectedIdentity, detail)) {
+        return false;
+    }
+    if (injectFault) {
+        const TerrainReferenceFaultAction deleteFault =
+            injectFault("MANIFEST_BEFORE_TOMBSTONE_DELETE");
+        if (deleteFault != TerrainReferenceFaultAction::NONE) {
+            detail = "injected fault MANIFEST_BEFORE_TOMBSTONE_DELETE";
+            return false;
+        }
+    }
+    if (!VerifyRecordedOwnedArtifact(
+            path, expectedHash, expectedMode, expectedIdentity, detail)) {
+        return false;
+    }
+    return RemoveOwnedPhysical(
+        path, detail, expectedIdentity, expectedHash, expectedMode);
+#endif
 }
 
 std::optional<std::string> ValidatePublicationManifest(
@@ -3364,13 +4778,52 @@ ManifestRecoveryResult RecoverManifestPublication(
         std::filesystem::symlink_status(canonicalJournal, canonicalError);
     const std::filesystem::file_status retiredStatus =
         std::filesystem::symlink_status(retiredJournal, retiredError);
-    const bool canonicalAbsent =
+    bool canonicalAbsent =
         canonicalStatus.type() == std::filesystem::file_type::not_found &&
         (!canonicalError ||
          canonicalError == std::errc::no_such_file_or_directory);
-    const bool retiredAbsent =
+    bool retiredAbsent =
         retiredStatus.type() == std::filesystem::file_type::not_found &&
         (!retiredError || retiredError == std::errc::no_such_file_or_directory);
+#if defined(_WIN32)
+    if (!canonicalAbsent && !retiredAbsent) {
+        std::string canonicalBytes;
+        std::string retiredBytes;
+        std::string stateDetail;
+        const auto canonicalParsed =
+            ReadPhysicalText(canonicalJournal, canonicalBytes, stateDetail)
+            ? ParseManifestJournal(canonicalBytes, stateDetail)
+            : std::nullopt;
+        const std::string expectedReservation = canonicalParsed.has_value()
+            ? WindowsMoveReservationRecord(
+                  canonicalJournal, retiredJournal, "retire-journal",
+                  canonicalParsed->TransactionId,
+                  Sha256Bytes(std::span{
+                      reinterpret_cast<const std::uint8_t*>(canonicalBytes.data()),
+                      canonicalBytes.size()}))
+            : std::string{};
+        const auto retiredIdentity =
+            PhysicalIdentityNoFollow(retiredJournal, stateDetail);
+        const auto retiredMode = PhysicalFileMode(retiredJournal, stateDetail);
+        if (!canonicalParsed.has_value() ||
+            canonicalParsed->JournalRetired.lexically_normal() !=
+                retiredJournal.lexically_normal() ||
+            !ReadPhysicalText(retiredJournal, retiredBytes, stateDetail) ||
+            retiredBytes != expectedReservation ||
+            !retiredIdentity.has_value() || !retiredMode.has_value() ||
+            !RemoveOwnedPhysical(
+                retiredJournal, stateDetail,
+                SerializePhysicalIdentity(*retiredIdentity),
+                Sha256Text(expectedReservation), *retiredMode)) {
+            result.Detail = stateDetail.empty()
+                ? "both canonical and retired publication journals exist"
+                : stateDetail;
+            result.Evidence = canonicalJournal;
+            return result;
+        }
+        retiredAbsent = true;
+    }
+#endif
     if (canonicalAbsent && retiredAbsent) {
         result.Ok = true;
         return result;
@@ -3397,8 +4850,13 @@ ManifestRecoveryResult RecoverManifestPublication(
         result.Evidence = journalPath;
         return result;
     }
-    const auto journal = ParseManifestJournal(bytes, result.Detail);
+    auto journal = ParseManifestJournal(bytes, result.Detail);
     if (!journal.has_value()) {
+        result.Evidence = journalPath;
+        return result;
+    }
+    auto journalIdentity = PhysicalIdentityNoFollow(journalPath, result.Detail);
+    if (!journalIdentity.has_value()) {
         result.Evidence = journalPath;
         return result;
     }
@@ -3412,10 +4870,69 @@ ManifestRecoveryResult RecoverManifestPublication(
         outputRoot /
         std::format(".garner.reference-albedo.backup.{}",
                     journal->TransactionId);
+    const std::filesystem::path expectedTempReservation =
+        outputRoot /
+        std::format(".garner.reference-albedo.finalize.{}.temp",
+                    journal->TransactionId);
+    const std::filesystem::path expectedBackupReservation =
+        outputRoot /
+        std::format(".garner.reference-albedo.finalize.{}.backup",
+                    journal->TransactionId);
+    const std::filesystem::path expectedRollback =
+        outputRoot /
+        std::format(".garner.reference-albedo.rollback.{}",
+                    journal->TransactionId);
+    const std::filesystem::path expectedRollbackReservation =
+        outputRoot /
+        std::format(".garner.reference-albedo.finalize.{}.rollback",
+                    journal->TransactionId);
+    const std::filesystem::path expectedTempTombstone =
+        outputRoot /
+        std::format(".garner.reference-albedo.tombstone.{}.temp",
+                    journal->TransactionId);
+    const std::filesystem::path expectedBackupTombstone =
+        outputRoot /
+        std::format(".garner.reference-albedo.tombstone.{}.backup",
+                    journal->TransactionId);
+    const std::filesystem::path expectedRollbackTombstone =
+        outputRoot /
+        std::format(".garner.reference-albedo.tombstone.{}.rollback",
+                    journal->TransactionId);
+    const std::filesystem::path expectedDestinationTombstone =
+        outputRoot /
+        std::format(".garner.reference-albedo.tombstone.{}.destination",
+                    journal->TransactionId);
     if (journal->Destination.lexically_normal() !=
             expectedDestination.lexically_normal() ||
         journal->Temp.lexically_normal() != expectedTemp.lexically_normal() ||
         !IsDirectOwnedChild(outputRoot, journal->Temp) ||
+        journal->TempReservation.lexically_normal() !=
+            expectedTempReservation.lexically_normal() ||
+        journal->BackupReservation.lexically_normal() !=
+            expectedBackupReservation.lexically_normal() ||
+        journal->Rollback.lexically_normal() !=
+            expectedRollback.lexically_normal() ||
+        journal->RollbackReservation.lexically_normal() !=
+            expectedRollbackReservation.lexically_normal() ||
+        journal->TempTombstone.lexically_normal() !=
+            expectedTempTombstone.lexically_normal() ||
+        journal->BackupTombstone.lexically_normal() !=
+            expectedBackupTombstone.lexically_normal() ||
+        journal->RollbackTombstone.lexically_normal() !=
+            expectedRollbackTombstone.lexically_normal() ||
+        journal->DestinationTombstone.lexically_normal() !=
+            expectedDestinationTombstone.lexically_normal() ||
+        journal->JournalRetired.lexically_normal() !=
+            retiredJournal.lexically_normal() ||
+        !IsDirectOwnedChild(outputRoot, journal->TempTombstone) ||
+        !IsDirectOwnedChild(outputRoot, journal->BackupTombstone) ||
+        !IsDirectOwnedChild(outputRoot, journal->TempReservation) ||
+        !IsDirectOwnedChild(outputRoot, journal->BackupReservation) ||
+        !IsDirectOwnedChild(outputRoot, journal->Rollback) ||
+        !IsDirectOwnedChild(outputRoot, journal->RollbackReservation) ||
+        !IsDirectOwnedChild(outputRoot, journal->RollbackTombstone) ||
+        !IsDirectOwnedChild(outputRoot, journal->DestinationTombstone) ||
+        !IsDirectOwnedChild(outputRoot, journal->JournalRetired) ||
         (journal->PriorExists &&
          (journal->Backup.lexically_normal() !=
               expectedBackup.lexically_normal() ||
@@ -3438,6 +4955,39 @@ ManifestRecoveryResult RecoverManifestPublication(
             : journal->Backup;
         return true;
     };
+
+    std::vector<PhysicalEntryToFinalize> recoveryEntries;
+    if (!journal->TempIdentity.empty() &&
+        (!PhysicalPathAbsent(journal->Temp) ||
+         !PhysicalPathAbsent(journal->TempReservation))) {
+        recoveryEntries.push_back(PhysicalEntryToFinalize{
+            journal->Temp, journal->TempReservation,
+            "finalize-manifest-temp", journal->TransactionId,
+            journal->IntendedSha256, journal->TempIdentity,
+            journal->IntendedMode});
+    }
+    if (journal->PriorExists && !journal->BackupIdentity.empty() &&
+        (!PhysicalPathAbsent(journal->Backup) ||
+         !PhysicalPathAbsent(journal->BackupReservation))) {
+        recoveryEntries.push_back(PhysicalEntryToFinalize{
+            journal->Backup, journal->BackupReservation,
+            "finalize-manifest-backup", journal->TransactionId,
+            journal->PriorSha256, journal->BackupIdentity,
+            journal->PriorMode});
+    }
+    if (!recoveryEntries.empty() &&
+        !SyncPhysicalDirectory(outputRoot, result.Detail, recoveryEntries)) {
+        result.Evidence = journalPath;
+        return result;
+    }
+    if (std::ranges::any_of(
+            recoveryEntries, [](const PhysicalEntryToFinalize& entry) {
+                return !PhysicalPathAbsent(entry.Reservation);
+            })) {
+        result.Detail = "finalization reservation remains after recovery";
+        result.Evidence = journalPath;
+        return result;
+    }
 
     const auto destinationHash = [&]() -> std::optional<std::string> {
         if (PhysicalPathAbsent(journal->Destination)) {
@@ -3463,6 +5013,15 @@ ManifestRecoveryResult RecoverManifestPublication(
             result.Evidence = journalPath;
             return result;
         }
+        const auto destinationMode =
+            PhysicalFileMode(journal->Destination, result.Detail);
+        if (!destinationMode.has_value() ||
+            *destinationMode != journal->IntendedMode) {
+            result.Detail =
+                "committed publication target mode differs from journal";
+            result.Evidence = journalPath;
+            return result;
+        }
         std::string manifestBytes;
         if (!ReadPhysicalText(journal->Destination, manifestBytes,
                               result.Detail) ||
@@ -3485,8 +5044,10 @@ ManifestRecoveryResult RecoverManifestPublication(
             }
             if (!destinationHash.has_value() ||
                 *destinationHash != journal->IntendedSha256 ||
-                !VerifyHashAndMode(journal->Backup, journal->PriorSha256,
-                                   journal->PriorMode, result.Detail)) {
+                !VerifyRecordedOwnedArtifact(
+                    journal->Backup, journal->PriorSha256,
+                    journal->PriorMode, journal->BackupIdentity,
+                    result.Detail)) {
                 if (result.Detail.empty()) {
                     result.Detail =
                         "pre-commit target matches neither prior nor intended state";
@@ -3494,12 +5055,78 @@ ManifestRecoveryResult RecoverManifestPublication(
                 result.Evidence = journalPath;
                 return result;
             }
-            const std::filesystem::path rollback =
-                outputRoot /
-                std::format(".garner.reference-albedo.rollback.{}",
-                            journal->TransactionId);
-            if (!CopyExclusivePhysicalFile(journal->Backup, rollback,
-                                           journal->PriorMode, result.Detail)) {
+            const std::filesystem::path rollback = journal->Rollback;
+            const std::array initialRollbackEntries{
+                PhysicalEntryToFinalize{
+                    rollback, journal->RollbackReservation,
+                    "finalize-manifest-rollback", journal->TransactionId,
+                    journal->PriorSha256, journal->RollbackIdentity,
+                    journal->PriorMode}};
+            if (PhysicalPathAbsent(rollback) &&
+                !PhysicalPathAbsent(journal->RollbackReservation) &&
+                !SyncPhysicalDirectory(
+                    outputRoot, result.Detail, initialRollbackEntries)) {
+                result.Evidence = journalPath;
+                return result;
+            }
+            if (PhysicalPathAbsent(rollback) &&
+                !PhysicalPathAbsent(journal->RollbackReservation)) {
+                result.Detail = "invalid rollback finalization reservation";
+                result.Evidence = journalPath;
+                return result;
+            }
+            if (!PhysicalPathAbsent(rollback)) {
+                if (!VerifyRecordedOwnedArtifact(
+                        rollback, journal->PriorSha256, journal->PriorMode,
+                        journal->RollbackIdentity, result.Detail)) {
+                    result.Evidence = journalPath;
+                    return result;
+                }
+            }
+            else {
+                if (!CopyExclusivePhysicalFile(
+                        journal->Backup, rollback, journal->PriorMode,
+                        result.Detail)) {
+                    result.Evidence = journalPath;
+                    return result;
+                }
+                const auto rollbackIdentity =
+                    PhysicalIdentityNoFollow(rollback, result.Detail);
+                if (!rollbackIdentity.has_value()) {
+                    result.Evidence = journalPath;
+                    return result;
+                }
+                const auto reconciledIdentity =
+                    ReconcileTerrainWindowsFinalizationIdentity(
+                        journal->RollbackIdentity,
+                        SerializePhysicalIdentity(*rollbackIdentity),
+                        result.Detail);
+                if (!reconciledIdentity.has_value()) {
+                    result.Evidence = rollback;
+                    return result;
+                }
+                journal->RollbackIdentity = *reconciledIdentity;
+                if (!WriteManifestJournal(*journal, journalPath,
+                                          result.Detail)) {
+                    result.Evidence = journalPath;
+                    return result;
+                }
+                bytes = SerializeManifestJournal(*journal);
+                journalIdentity =
+                    PhysicalIdentityNoFollow(journalPath, result.Detail);
+                if (!journalIdentity.has_value()) {
+                    result.Evidence = journalPath;
+                    return result;
+                }
+            }
+            const std::array durableRollbackEntries{
+                PhysicalEntryToFinalize{
+                    rollback, journal->RollbackReservation,
+                    "finalize-manifest-rollback", journal->TransactionId,
+                    journal->PriorSha256, journal->RollbackIdentity,
+                    journal->PriorMode}};
+            if (!SyncPhysicalDirectory(
+                    outputRoot, result.Detail, durableRollbackEntries)) {
                 result.Evidence = journalPath;
                 return result;
             }
@@ -3533,7 +5160,13 @@ ManifestRecoveryResult RecoverManifestPublication(
     else if (destinationHash.has_value()) {
         if (*destinationHash != journal->IntendedSha256 ||
             recoveryFault("MANIFEST_ROLLBACK_REPLACE") ||
-            !RemoveOwnedPhysical(journal->Destination, result.Detail)) {
+            !RemoveRecordedOwnedArtifact(
+                journal->Destination, journal->DestinationTombstone,
+                "remove-owned-destination", journal->TransactionId,
+                journal->IntendedSha256, journal->IntendedMode,
+                journal->TempIdentity, injectFault,
+                "MANIFEST_AFTER_TOMBSTONE_RESERVATION_DURABLE",
+                result.Detail)) {
             if (result.Detail.empty()) {
                 result.Detail = "unexpected target during absent-prior recovery";
             }
@@ -3546,34 +5179,68 @@ ManifestRecoveryResult RecoverManifestPublication(
         }
     }
 
-    for (const std::filesystem::path& owned :
-         std::array{journal->Temp, journal->Backup}) {
-        if (!owned.empty() && !PhysicalPathAbsent(owned) &&
-            !RemoveOwnedPhysical(owned, result.Detail)) {
-            result.Evidence = journalPath;
-            return result;
-        }
+    if (!journal->Temp.empty() &&
+        (!PhysicalPathAbsent(journal->Temp) ||
+         !PhysicalPathAbsent(journal->TempTombstone)) &&
+        !RemoveRecordedOwnedArtifact(
+            journal->Temp, journal->TempTombstone,
+            "remove-owned-temp", journal->TransactionId,
+            journal->IntendedSha256, journal->IntendedMode,
+            journal->TempIdentity, injectFault,
+            "MANIFEST_AFTER_TOMBSTONE_RESERVATION_DURABLE",
+            result.Detail)) {
+        result.Evidence = journalPath;
+        return result;
+    }
+    if (!journal->Backup.empty() &&
+        (!PhysicalPathAbsent(journal->Backup) ||
+         !PhysicalPathAbsent(journal->BackupTombstone)) &&
+        !RemoveRecordedOwnedArtifact(
+            journal->Backup, journal->BackupTombstone,
+            "remove-owned-backup", journal->TransactionId,
+            journal->PriorSha256, journal->PriorMode,
+            journal->BackupIdentity, injectFault,
+            "MANIFEST_AFTER_TOMBSTONE_RESERVATION_DURABLE",
+            result.Detail)) {
+        result.Evidence = journalPath;
+        return result;
+    }
+    if ((!PhysicalPathAbsent(journal->Rollback) ||
+         !PhysicalPathAbsent(journal->RollbackTombstone)) &&
+        !RemoveRecordedOwnedArtifact(
+            journal->Rollback, journal->RollbackTombstone,
+            "remove-owned-rollback", journal->TransactionId,
+            journal->PriorSha256, journal->PriorMode,
+            journal->RollbackIdentity, injectFault,
+            "MANIFEST_AFTER_TOMBSTONE_RESERVATION_DURABLE",
+            result.Detail)) {
+        result.Evidence = journalPath;
+        return result;
     }
     std::filesystem::path cleanupJournal = journalPath;
     if (journalPath == canonicalJournal) {
-        if (!ReplacePhysicalFile(canonicalJournal, retiredJournal,
-                                 result.Detail) ||
-            !SyncPhysicalDirectory(outputRoot, result.Detail)) {
+        if (!RetireManifestJournal(
+                *journal, canonicalJournal, retiredJournal,
+                SerializePhysicalIdentity(*journalIdentity),
+                injectFault, result.Detail)) {
             result.Evidence = canonicalJournal;
             return result;
         }
         cleanupJournal = retiredJournal;
-        const TerrainReferenceFaultAction action = injectFault
-            ? injectFault("MANIFEST_AFTER_JOURNAL_RETIRE")
-            : TerrainReferenceFaultAction::NONE;
-        if (action != TerrainReferenceFaultAction::NONE) {
-            result.Detail =
-                "injected fault MANIFEST_AFTER_JOURNAL_RETIRE during recovery";
-            result.Evidence = retiredJournal;
-            return result;
-        }
     }
-    if (!RemoveOwnedPhysical(cleanupJournal, result.Detail)) {
+    std::string cleanupJournalBytes;
+    if (!ReadPhysicalText(cleanupJournal, cleanupJournalBytes, result.Detail) ||
+        cleanupJournalBytes != bytes ||
+        !VerifyRecordedOwnedArtifact(
+            cleanupJournal, Sha256Text(bytes), PrivatePhysicalMode(),
+            SerializePhysicalIdentity(*journalIdentity), result.Detail) ||
+        !RemoveOwnedPhysical(
+            cleanupJournal, result.Detail,
+            SerializePhysicalIdentity(*journalIdentity), Sha256Text(bytes),
+            PrivatePhysicalMode())) {
+        if (result.Detail.empty()) {
+            result.Detail = "publication journal changed before cleanup";
+        }
         result.Evidence = cleanupJournal;
         return result;
     }
@@ -3840,7 +5507,26 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
         std::format(".garner.reference-albedo.temp.{}", transactionId);
     journal.Backup = outputRoot /
         std::format(".garner.reference-albedo.backup.{}", transactionId);
+    journal.TempReservation = outputRoot /
+        std::format(".garner.reference-albedo.finalize.{}.temp", transactionId);
+    journal.BackupReservation = outputRoot /
+        std::format(".garner.reference-albedo.finalize.{}.backup", transactionId);
+    journal.Rollback = outputRoot /
+        std::format(".garner.reference-albedo.rollback.{}", transactionId);
+    journal.RollbackReservation = outputRoot /
+        std::format(".garner.reference-albedo.finalize.{}.rollback", transactionId);
+    journal.TempTombstone = outputRoot /
+        std::format(".garner.reference-albedo.tombstone.{}.temp", transactionId);
+    journal.BackupTombstone = outputRoot /
+        std::format(".garner.reference-albedo.tombstone.{}.backup", transactionId);
+    journal.RollbackTombstone = outputRoot /
+        std::format(".garner.reference-albedo.tombstone.{}.rollback", transactionId);
+    journal.DestinationTombstone = outputRoot /
+        std::format(".garner.reference-albedo.tombstone.{}.destination",
+                    transactionId);
+    journal.JournalRetired = retiredJournalPath;
     journal.IntendedSha256 = Sha256Text(json);
+    journal.IntendedMode = PrivatePhysicalMode();
     journal.RunId = *runId;
 
     std::error_code destinationError;
@@ -3942,9 +5628,29 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
     journalDurable = true;
+    TerrainReferenceFaultAction exclusiveCreateAction =
+        TerrainReferenceFaultAction::NONE;
     if (!WriteExclusiveText(
-            journal.Temp, json, PrivatePhysicalMode(), detail)) {
+            journal.Temp, json, PrivatePhysicalMode(), detail,
+            [&] {
+                exclusiveCreateAction = injectFault
+                    ? injectFault("MANIFEST_TEMP_AFTER_EXCLUSIVE_CREATE")
+                    : TerrainReferenceFaultAction::NONE;
+            })) {
         return failure(detail, TerrainReferenceFaultAction::FAIL);
+    }
+    const auto tempIdentity = PhysicalIdentityNoFollow(journal.Temp, detail);
+    if (!tempIdentity.has_value()) {
+        return failure(detail, TerrainReferenceFaultAction::FAIL);
+    }
+    journal.TempIdentity = SerializePhysicalIdentity(*tempIdentity);
+    if (!WriteManifestJournal(journal, journalPath, detail)) {
+        return failure(detail, TerrainReferenceFaultAction::FAIL);
+    }
+    if (exclusiveCreateAction != TerrainReferenceFaultAction::NONE) {
+        return failure(
+            "injected fault MANIFEST_TEMP_AFTER_EXCLUSIVE_CREATE",
+            exclusiveCreateAction);
     }
     std::string tempBytes;
     if (!ReadPhysicalText(journal.Temp, tempBytes, detail) ||
@@ -3964,8 +5670,29 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
                                journal.PriorMode, detail)) {
             return failure(detail, TerrainReferenceFaultAction::FAIL);
         }
+        const auto backupIdentity =
+            PhysicalIdentityNoFollow(journal.Backup, detail);
+        if (!backupIdentity.has_value()) {
+            return failure(detail, TerrainReferenceFaultAction::FAIL);
+        }
+        journal.BackupIdentity = SerializePhysicalIdentity(*backupIdentity);
+        if (!WriteManifestJournal(journal, journalPath, detail)) {
+            return failure(detail, TerrainReferenceFaultAction::FAIL);
+        }
     }
-    if (!SyncPhysicalDirectory(outputRoot, detail)) {
+    std::vector<PhysicalEntryToFinalize> publicationEntries{
+        PhysicalEntryToFinalize{
+            journal.Temp, journal.TempReservation, "finalize-manifest-temp",
+            journal.TransactionId, journal.IntendedSha256,
+            journal.TempIdentity, journal.IntendedMode}};
+    if (journal.PriorExists) {
+        publicationEntries.push_back(PhysicalEntryToFinalize{
+            journal.Backup, journal.BackupReservation,
+            "finalize-manifest-backup", journal.TransactionId,
+            journal.PriorSha256, journal.BackupIdentity,
+            journal.PriorMode});
+    }
+    if (!SyncPhysicalDirectory(outputRoot, detail, publicationEntries)) {
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
     if (auto injected = inject("MANIFEST_AFTER_BACKUP_FLUSH")) {
@@ -4022,22 +5749,40 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
             inject("MANIFEST_AFTER_COMMITTED_JOURNAL_DURABLE")) {
         return *injected;
     }
-    if (auto injected =
-            inject("MANIFEST_AFTER_TOMBSTONE_RESERVATION_DURABLE")) {
-        return *injected;
-    }
-    if (journal.PriorExists && !PhysicalPathAbsent(journal.Backup) &&
-        !RemoveOwnedPhysical(journal.Backup, detail)) {
+    if (journal.PriorExists &&
+        (!PhysicalPathAbsent(journal.Backup) ||
+         !PhysicalPathAbsent(journal.BackupTombstone)) &&
+        !RemoveRecordedOwnedArtifact(
+            journal.Backup, journal.BackupTombstone,
+            "remove-owned-backup", journal.TransactionId,
+            journal.PriorSha256, journal.PriorMode,
+            journal.BackupIdentity, injectFault,
+            "MANIFEST_AFTER_TOMBSTONE_RESERVATION_DURABLE", detail)) {
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
-    if (!ReplacePhysicalFile(journalPath, retiredJournalPath, detail) ||
-        !SyncPhysicalDirectory(outputRoot, detail)) {
+    const auto journalIdentity = PhysicalIdentityNoFollow(journalPath, detail);
+    if (!journalIdentity.has_value()) {
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
-    if (auto injected = inject("MANIFEST_AFTER_JOURNAL_RETIRE")) {
-        return *injected;
+    if (!RetireManifestJournal(
+            journal, journalPath, retiredJournalPath,
+            SerializePhysicalIdentity(*journalIdentity), injectFault, detail)) {
+        return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
-    if (!RemoveOwnedPhysical(retiredJournalPath, detail)) {
+    std::string retiredJournalBytes;
+    if (!ReadPhysicalText(retiredJournalPath, retiredJournalBytes, detail) ||
+        retiredJournalBytes != SerializeManifestJournal(journal) ||
+        !VerifyRecordedOwnedArtifact(
+            retiredJournalPath, Sha256Text(retiredJournalBytes),
+            PrivatePhysicalMode(), SerializePhysicalIdentity(*journalIdentity),
+            detail) ||
+        !RemoveOwnedPhysical(
+            retiredJournalPath, detail,
+            SerializePhysicalIdentity(*journalIdentity),
+            Sha256Text(retiredJournalBytes), PrivatePhysicalMode())) {
+        if (detail.empty()) {
+            detail = "publication journal changed before cleanup";
+        }
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
     if (!RetirePublicationLock(*lock, injectFault, detail)) {
@@ -4183,6 +5928,8 @@ int RunTerrainReference(
         &manifest.Files.MeshBin,
     };
     std::array<std::filesystem::path, 7> physicalPaths{};
+    std::array<PhysicalFileIdentity, 7> physicalIdentities{};
+    std::set<PhysicalFileIdentity> distinctPhysicalIdentities;
     std::uint64_t totalOutputBytes = 0u;
     for (std::size_t index = 0u; index < builtFiles.size(); ++index) {
         const std::filesystem::path expected =
@@ -4203,6 +5950,15 @@ int RunTerrainReference(
                   << kTerrainReferenceLeaves[index] << '\n';
             return 1;
         }
+        std::string identityDetail;
+        const auto identity = PhysicalIdentityNoFollow(expected, identityDetail);
+        if (!identity.has_value() ||
+            !distinctPhysicalIdentities.insert(*identity).second) {
+            error << "terrain-reference products must have seven distinct "
+                     "physical identities\n";
+            return 1;
+        }
+        physicalIdentities[index] = *identity;
         const std::uintmax_t size =
             std::filesystem::file_size(expected, filesystemError);
         if (filesystemError || size == 0u || size > UINT64_MAX ||
@@ -4248,6 +6004,7 @@ int RunTerrainReference(
         error << "terrain-reference run durability failed: " << detail << '\n';
         return 1;
     }
+    distinctPhysicalIdentities.clear();
     for (std::size_t index = 0u; index < physicalPaths.size(); ++index) {
         std::error_code filesystemError;
         const std::filesystem::file_status physical =
@@ -4259,12 +6016,25 @@ int RunTerrainReference(
         const auto hash = filesystemError
             ? std::optional<std::string>{}
             : Sha256File(physicalPaths[index], hashDetail);
+        std::string identityDetail;
+        const auto identity = filesystemError
+            ? std::optional<PhysicalFileIdentity>{}
+            : PhysicalIdentityNoFollow(physicalPaths[index], identityDetail);
         if (filesystemError ||
             physical.type() != std::filesystem::file_type::regular ||
             !hash.has_value() || size != outputFiles[index]->SizeBytes ||
-            *hash != outputFiles[index]->Sha256) {
+            *hash != outputFiles[index]->Sha256 || !identity.has_value() ||
+            *identity != physicalIdentities[index] ||
+            !distinctPhysicalIdentities.insert(*identity).second) {
             error << "terrain-reference product changed during durability: "
                   << kTerrainReferenceLeaves[index] << '\n';
+            if (!identity.has_value() ||
+                (identity.has_value() &&
+                 *identity != physicalIdentities[index]) ||
+                distinctPhysicalIdentities.size() != index + 1u) {
+                error << "terrain-reference physical identity changed during "
+                         "durability\n";
+            }
             return 1;
         }
     }

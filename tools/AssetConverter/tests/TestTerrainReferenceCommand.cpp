@@ -8,11 +8,14 @@
 #include <filesystem>
 #include <fstream>
 #include <format>
+#include <iostream>
 #include <iterator>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -23,6 +26,23 @@ constexpr std::string_view kHash =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 constexpr std::string_view kHashOfX =
     "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881";
+
+bool SkipWindowsPrivilegeOrAccessDenied(
+    const std::error_code& error,
+    std::string_view operation) {
+#if defined(_WIN32)
+    if (error == std::errc::permission_denied) {
+        std::cout << "SKIP: Windows " << operation
+                  << " privilege/access unavailable: "
+                  << error.message() << '\n';
+        return true;
+    }
+#else
+    (void)error;
+    (void)operation;
+#endif
+    return false;
+}
 
 std::string ShellQuote(const std::filesystem::path& path) {
     const std::string value = path.string();
@@ -72,6 +92,81 @@ bool WriteText(const std::filesystem::path& path, std::string_view text) {
     output.write(text.data(), static_cast<std::streamsize>(text.size()));
     output.flush();
     return static_cast<bool>(output);
+}
+
+std::optional<std::pair<std::size_t, std::size_t>> JsonMemberValueRange(
+    std::string_view json,
+    std::string_view key) {
+    const std::string needle = std::format("\"{}\":", key);
+    const std::size_t member = json.find(needle);
+    if (member == std::string_view::npos) {
+        return std::nullopt;
+    }
+    const std::size_t begin = member + needle.size();
+    std::size_t end = begin;
+    if (json[begin] == '"') {
+        ++end;
+        bool escaped = false;
+        while (end < json.size()) {
+            const char character = json[end++];
+            if (!escaped && character == '"') break;
+            if (!escaped && character == '\\') escaped = true;
+            else escaped = false;
+        }
+    }
+    else if (json[begin] == '{' || json[begin] == '[') {
+        const char opening = json[begin];
+        const char closing = opening == '{' ? '}' : ']';
+        std::size_t depth = 0u;
+        bool quoted = false;
+        bool escaped = false;
+        for (end = begin; end < json.size(); ++end) {
+            const char character = json[end];
+            if (quoted) {
+                if (!escaped && character == '"') quoted = false;
+                if (!escaped && character == '\\') escaped = true;
+                else escaped = false;
+                continue;
+            }
+            if (character == '"') quoted = true;
+            else if (character == opening) ++depth;
+            else if (character == closing && --depth == 0u) {
+                ++end;
+                break;
+            }
+        }
+    }
+    else {
+        while (end < json.size() && json[end] != ',' && json[end] != '}' &&
+               json[end] != ']') {
+            ++end;
+        }
+    }
+    if (end <= begin || end > json.size()) {
+        return std::nullopt;
+    }
+    return std::pair{begin, end};
+}
+
+std::optional<std::string> RemoveFirstJsonMember(
+    std::string json,
+    std::string_view key) {
+    const std::string needle = std::format("\"{}\":", key);
+    const std::size_t member = json.find(needle);
+    const auto value = JsonMemberValueRange(json, key);
+    if (member == std::string::npos || !value.has_value()) {
+        return std::nullopt;
+    }
+    std::size_t eraseBegin = member;
+    std::size_t eraseEnd = value->second;
+    if (eraseEnd < json.size() && json[eraseEnd] == ',') {
+        ++eraseEnd;
+    }
+    else if (eraseBegin > 0u && json[eraseBegin - 1u] == ',') {
+        --eraseBegin;
+    }
+    json.erase(eraseBegin, eraseEnd - eraseBegin);
+    return json;
 }
 
 AC::TerrainReferenceManifestDto MinimalManifest();
@@ -346,6 +441,48 @@ CORSAIRS_TEST(TerrainReferenceManifest_RejectsMalformedDuplicateUnknownAndTypes)
     }
 }
 
+CORSAIRS_TEST(TerrainReferenceManifest_RequiredKeyAndTypeBehaviorMatrix) {
+    const std::string complete =
+        AC::SerializeTerrainReferenceManifest(MinimalManifest());
+    constexpr std::array keys{
+        "schemaVersion", "algorithmVersion", "source", "page",
+        "requiredPresentRect", "usedTextureIds", "sectionPresence", "files",
+        "metrics", "map", "database", "clientRoot", "alphaAtlas",
+        "usedTextures", "path", "sha256", "textureId", "x", "y",
+        "sourceCellBounds", "pixelsPerCell", "pixelWidth", "pixelHeight",
+        "ambient", "dwTColor", "width", "height", "originX", "originY",
+        "rowMajorMask", "block", "region", "terrainMetadata", "albedo",
+        "meshGltf", "meshBin", "sizeBytes", "peakRssBytes",
+        "peakTextureCacheBytes", "peakRgbaRowBytes", "pngBytes",
+        "totalOutputBytes", "maxHeightErrorCm", "rmsHeightErrorCm",
+        "sharedBoundaryMaxCm", "absentSectionCount", "unresolvedLayerCount",
+    };
+    for (const std::string_view key : keys) {
+        const auto missing = RemoveFirstJsonMember(complete, key);
+        REQUIRE(missing.has_value());
+        std::vector<AC::TerrainManifestIssue> issues;
+        REQUIRE(!AC::ParseTerrainReferenceManifest(
+                     *missing, issues).has_value());
+        REQUIRE(!issues.empty());
+        REQUIRE(issues[0].Code == AC::TerrainManifestIssueCode::INVALID_SCHEMA);
+
+        std::string wrongType = complete;
+        const auto value = JsonMemberValueRange(wrongType, key);
+        REQUIRE(value.has_value());
+        const char first = wrongType[value->first];
+        const std::string replacement = first == '{'
+            ? "[]"
+            : first == '[' ? "{}" : first == '"' ? "0" : "\"invalid\"";
+        wrongType.replace(
+            value->first, value->second - value->first, replacement);
+        issues.clear();
+        REQUIRE(!AC::ParseTerrainReferenceManifest(
+                     wrongType, issues).has_value());
+        REQUIRE(!issues.empty());
+        REQUIRE(issues[0].Code == AC::TerrainManifestIssueCode::INVALID_SCHEMA);
+    }
+}
+
 CORSAIRS_TEST(TerrainReferenceManifest_RejectsInvalidUtf8String) {
     std::string json = AC::SerializeTerrainReferenceManifest(MinimalManifest());
     const std::size_t offset = json.find("Client/map/garner.map");
@@ -509,6 +646,62 @@ CORSAIRS_TEST(TerrainManifest_RejectsProvenancePathMismatchAndTextureEscape) {
     REQUIRE_EQ(issues.size(), 1u);
     REQUIRE(issues[0].Code == AC::TerrainManifestIssueCode::INVALID_PROVENANCE);
     REQUIRE_EQ(issues[0].Field, std::string{"/source/usedTextures/0/path"});
+}
+
+CORSAIRS_TEST(TerrainManifest_RejectsTextureLexicalAliasResolvingIntoClientRoot) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    const std::filesystem::path alias = fixture.Absolute("AliasClient");
+    std::error_code linkError;
+    std::filesystem::create_directory_symlink(
+        fixture.Absolute("Client"), alias, linkError);
+#if defined(_WIN32)
+    if (linkError == std::errc::permission_denied) {
+        std::cout << "SKIP: Windows directory symlink privilege unavailable\n";
+        return;
+    }
+#endif
+    REQUIRE(!linkError);
+
+    AC::TerrainReferenceManifestDto manifest = fixture.Manifest();
+    manifest.Source.UsedTextures[0].Path =
+        fixture.Absolute("AliasClient/texture/terrain/brick05.png")
+            .lexically_relative(std::filesystem::current_path());
+    const auto issues = AC::ValidateTerrainReferenceManifest(
+        manifest, options.Output, options);
+    REQUIRE_EQ(issues.size(), 1u);
+    REQUIRE(issues[0].Code == AC::TerrainManifestIssueCode::INVALID_PROVENANCE);
+    REQUIRE_EQ(issues[0].Field,
+               std::string{"/source/usedTextures/0/path"});
+    REQUIRE_EQ(issues[0].Detail,
+               std::string{"texture path is not lexically beneath client root"});
+}
+
+CORSAIRS_TEST(TerrainManifest_RejectsHardLinkedRunProducts) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    const std::filesystem::path height = fixture.Absolute(
+        "maps/runs/run-001/garner.height.r16");
+    const std::filesystem::path block = fixture.Absolute(
+        "maps/runs/run-001/garner.block.raw");
+    std::error_code error;
+    REQUIRE(std::filesystem::remove(block, error));
+    REQUIRE(!error);
+    std::filesystem::create_hard_link(height, block, error);
+    if (SkipWindowsPrivilegeOrAccessDenied(error, "hard-link")) {
+        return;
+    }
+    REQUIRE(!error);
+
+    const auto issues = AC::ValidateTerrainReferenceManifest(
+        fixture.Manifest(), options.Output, options);
+    REQUIRE_EQ(issues.size(), 1u);
+    REQUIRE(issues[0].Code == AC::TerrainManifestIssueCode::INVALID_FILE);
+    REQUIRE_EQ(issues[0].Field, std::string{"/files/height/path"});
+    REQUIRE_EQ(issues[0].Detail,
+               std::string{"outputs must have seven distinct physical identities"});
 }
 
 CORSAIRS_TEST(TerrainDeterministicProjection_AllowsDifferentValidPeakRss) {
@@ -775,6 +968,179 @@ CORSAIRS_TEST(TerrainReferenceCommand_RejectsMutationDuringRunDurability) {
     REQUIRE(error.str().contains("changed during durability"));
 }
 
+CORSAIRS_TEST(TerrainReferenceCommand_RejectsHardLinkedProductsBeforeDurability) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    std::size_t durabilityCalls = 0u;
+    std::size_t publishCalls = 0u;
+    bool hardLinkPermissionUnavailable = false;
+    AC::TerrainReferenceDependencies dependencies;
+    dependencies.BuildProducts =
+        [&](const AC::TerrainReferenceOptions&,
+            const std::filesystem::path& run,
+            std::string& detail) {
+            auto products = fixture.BuildProducts(run, detail);
+            if (!products.has_value()) {
+                return products;
+            }
+            std::error_code error;
+            std::filesystem::remove(run / "garner.block.raw", error);
+            if (!error) {
+                std::filesystem::create_hard_link(
+                    run / "garner.height.r16", run / "garner.block.raw", error);
+            }
+            if (SkipWindowsPrivilegeOrAccessDenied(error, "hard-link")) {
+                hardLinkPermissionUnavailable = true;
+            }
+            if (error) {
+                detail = error.message();
+                return std::optional<AC::TerrainReferenceBuildProducts>{};
+            }
+            return products;
+        };
+    dependencies.DurabilizeRunProducts =
+        [&](std::span<const std::filesystem::path>, std::string&) {
+            ++durabilityCalls;
+            return true;
+        };
+    dependencies.AtomicPublish =
+        [&](const std::filesystem::path&, std::string_view) {
+            ++publishCalls;
+            return AC::TerrainPublicationResult{
+                AC::TerrainPublicationStatus::OK, {}, {}, {}};
+        };
+    std::ostringstream output;
+    std::ostringstream error;
+    const int exitCode = AC::RunTerrainReference(
+        options, dependencies, output, error);
+    if (hardLinkPermissionUnavailable) {
+        return;
+    }
+    REQUIRE_EQ(exitCode, 1);
+    REQUIRE_EQ(durabilityCalls, 0u);
+    REQUIRE_EQ(publishCalls, 0u);
+    REQUIRE(error.str().contains("distinct physical identities"));
+}
+
+CORSAIRS_TEST(TerrainReferenceCommand_RejectsHardLinkSwapDuringDurability) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    std::size_t publishCalls = 0u;
+    bool hardLinkPermissionUnavailable = false;
+    AC::TerrainReferenceDependencies dependencies;
+    dependencies.BuildProducts =
+        [&](const AC::TerrainReferenceOptions&,
+            const std::filesystem::path& run,
+            std::string& detail) {
+            return fixture.BuildProducts(run, detail);
+        };
+    dependencies.DurabilizeRunProducts =
+        [&](std::span<const std::filesystem::path> paths,
+           std::string& detail) {
+            std::error_code error;
+            std::filesystem::remove(paths[1], error);
+            if (!error) {
+                std::filesystem::create_hard_link(paths[0], paths[1], error);
+            }
+            if (SkipWindowsPrivilegeOrAccessDenied(error, "hard-link")) {
+                hardLinkPermissionUnavailable = true;
+            }
+            detail = error.message();
+            return !error;
+        };
+    dependencies.AtomicPublish =
+        [&](const std::filesystem::path&, std::string_view) {
+            ++publishCalls;
+            return AC::TerrainPublicationResult{
+                AC::TerrainPublicationStatus::OK, {}, {}, {}};
+        };
+    std::ostringstream output;
+    std::ostringstream error;
+    const int exitCode = AC::RunTerrainReference(
+        options, dependencies, output, error);
+    if (hardLinkPermissionUnavailable) {
+        return;
+    }
+    REQUIRE_EQ(exitCode, 1);
+    REQUIRE_EQ(publishCalls, 0u);
+    REQUIRE(error.str().contains("physical identity changed during durability"));
+}
+
+CORSAIRS_TEST(TerrainReferenceCommand_EachProductFlushFailureBlocksPublication) {
+    for (std::size_t failedIndex = 0u; failedIndex < 7u; ++failedIndex) {
+        ReferenceFixture fixture;
+        REQUIRE(fixture.Ready());
+        const AC::TerrainReferenceOptions options = fixture.Options();
+        std::size_t publishCalls = 0u;
+        bool pathsSizeCorrect = false;
+        AC::TerrainReferenceDependencies dependencies;
+        dependencies.BuildProducts =
+            [&](const AC::TerrainReferenceOptions&,
+                const std::filesystem::path& run,
+                std::string& detail) {
+                return fixture.BuildProducts(run, detail);
+            };
+        dependencies.DurabilizeRunProducts =
+            [failedIndex, &pathsSizeCorrect](
+                std::span<const std::filesystem::path> paths,
+                std::string& detail) {
+                pathsSizeCorrect = paths.size() == 7u;
+                detail = std::format("injected FlushFile index {}", failedIndex);
+                return false;
+            };
+        dependencies.AtomicPublish =
+            [&](const std::filesystem::path&, std::string_view) {
+                ++publishCalls;
+                return AC::TerrainPublicationResult{
+                    AC::TerrainPublicationStatus::OK, {}, {}, {}};
+            };
+        std::ostringstream output;
+        std::ostringstream error;
+        REQUIRE_EQ(AC::RunTerrainReference(
+                       options, dependencies, output, error), 1);
+        REQUIRE(pathsSizeCorrect);
+        REQUIRE_EQ(publishCalls, 0u);
+        REQUIRE(error.str().contains(
+            std::format("injected FlushFile index {}", failedIndex)));
+    }
+}
+
+CORSAIRS_TEST(TerrainRunDurability_SharedPlanCoversEveryFileAndBarrierFailure) {
+    using Action = AC::TerrainRunDurabilityAction;
+    const auto plan = AC::PlanTerrainRunDurability(7u);
+    REQUIRE_EQ(plan.size(), 8u);
+    for (std::size_t index = 0u; index < 7u; ++index) {
+        REQUIRE(plan[index].Action == Action::FLUSH_FILE);
+        REQUIRE_EQ(plan[index].ProductIndex, index);
+    }
+    REQUIRE(plan.back().Action == Action::SYNC_DIRECTORY_OR_EQUIVALENT);
+
+    for (std::size_t failedStep = 0u; failedStep < plan.size(); ++failedStep) {
+        std::size_t calls = 0u;
+        std::string detail;
+        REQUIRE(!AC::ExecuteTerrainRunDurabilitySteps(
+            plan,
+            [&](const AC::TerrainRunDurabilityStep& step,
+                std::string& stepDetail) {
+                if (calls++ == failedStep) {
+                    stepDetail = std::format(
+                        "injected run durability step {} product {}",
+                        failedStep, step.ProductIndex);
+                    return false;
+                }
+                return true;
+            },
+            detail));
+        REQUIRE_EQ(calls, failedStep + 1u);
+        REQUIRE_EQ(detail,
+                   std::format(
+                       "injected run durability step {} product {}",
+                       failedStep, plan[failedStep].ProductIndex));
+    }
+}
+
 CORSAIRS_TEST(TerrainReferencePublisher_ReplacesOnlyTopManifestAndCleansOwnedState) {
     ReferenceFixture fixture;
     REQUIRE(fixture.Ready());
@@ -800,6 +1166,73 @@ CORSAIRS_TEST(TerrainReferencePublisher_ReplacesOnlyTopManifestAndCleansOwnedSta
     REQUIRE_EQ(ReadText(options.Output /
                         "runs/run-001/garner.height.r16").value_or(""),
                std::string{"x"});
+}
+
+CORSAIRS_TEST(TerrainReferencePublisher_RetainedExclusiveHandleProtectsForeignFile) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    const std::filesystem::path destination =
+        options.Output / "garner.reference-albedo.json";
+    REQUIRE(WriteText(destination, "prior-top"));
+    const std::filesystem::path foreign = options.Output / "foreign-sentinel";
+    REQUIRE(WriteText(foreign, "must-survive"));
+    bool swapped = false;
+    std::filesystem::path displaced;
+    std::string swapError;
+
+    const AC::TerrainPublicationResult result =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination,
+            AC::SerializeTerrainReferenceManifest(fixture.Manifest()),
+            options,
+            [&](std::string_view point)
+                -> AC::TerrainReferenceFaultAction {
+                if (!swapped &&
+                    point == "MANIFEST_TEMP_AFTER_EXCLUSIVE_CREATE") {
+                    for (const auto& entry :
+                         std::filesystem::directory_iterator(options.Output)) {
+                        const std::string leaf =
+                            entry.path().filename().generic_string();
+                        if (leaf.starts_with(
+                                ".garner.reference-albedo.temp.")) {
+                            displaced = entry.path();
+                            displaced += ".opened";
+                            std::error_code error;
+                            std::filesystem::rename(entry.path(), displaced, error);
+                            if (!error) {
+                                std::filesystem::create_symlink(
+                                    foreign, entry.path(), error);
+                            }
+                            if (error) {
+                                swapError = error.message();
+                            }
+                            else {
+                                swapped = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+                return AC::TerrainReferenceFaultAction::NONE;
+            });
+
+#if defined(_WIN32)
+    REQUIRE(!swapped);
+    REQUIRE(!swapError.empty());
+    REQUIRE(result.Status == AC::TerrainPublicationStatus::OK);
+#else
+    REQUIRE(swapped);
+    REQUIRE(swapError.empty());
+    REQUIRE(result.Status != AC::TerrainPublicationStatus::OK);
+#endif
+    REQUIRE_EQ(ReadText(foreign).value_or(""), std::string{"must-survive"});
+#if defined(_WIN32)
+    REQUIRE_EQ(ReadText(destination).value_or(""),
+               AC::SerializeTerrainReferenceManifest(fixture.Manifest()));
+#else
+    REQUIRE_EQ(ReadText(destination).value_or(""), std::string{"prior-top"});
+#endif
 }
 
 CORSAIRS_TEST(TerrainReferencePublisher_PreCommitFailureRestoresPriorBytes) {
@@ -832,7 +1265,8 @@ CORSAIRS_TEST(TerrainReferencePublisher_PreCommitFailureRestoresPriorBytes) {
 }
 
 CORSAIRS_TEST(TerrainReferencePublisher_PreCommitFaultMatrixRestoresPriorOrAbsence) {
-    constexpr std::array<std::string_view, 7> points{
+    constexpr std::array<std::string_view, 8> points{
+        "MANIFEST_TEMP_AFTER_EXCLUSIVE_CREATE",
         "MANIFEST_AFTER_TEMP_FLUSH",
         "MANIFEST_AFTER_BACKUP_FLUSH",
         "MANIFEST_AFTER_PREPARED_JOURNAL_DURABLE",
@@ -953,6 +1387,197 @@ CORSAIRS_TEST(TerrainReferencePublisher_CommittedCrashRetainsNewManifest) {
     REQUIRE_EQ(ReadText(destination).value_or(""), json);
 }
 
+CORSAIRS_TEST(TerrainReferencePublisher_CommittedRecoveryRejectsModeMutation) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    const std::filesystem::path destination =
+        options.Output / "garner.reference-albedo.json";
+    REQUIRE(WriteText(destination, "prior-top"));
+    const std::string json =
+        AC::SerializeTerrainReferenceManifest(fixture.Manifest());
+    bool injected = false;
+    const AC::TerrainPublicationResult crashed =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options,
+            [&](std::string_view point) {
+                if (!injected &&
+                    point == "MANIFEST_AFTER_COMMITTED_JOURNAL_DURABLE") {
+                    injected = true;
+                    return AC::TerrainReferenceFaultAction::CRASH;
+                }
+                return AC::TerrainReferenceFaultAction::NONE;
+            });
+    REQUIRE(injected);
+    REQUIRE(crashed.Status == AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
+    std::error_code modeError;
+    std::filesystem::permissions(
+        destination, std::filesystem::perms::owner_read,
+        std::filesystem::perm_options::replace, modeError);
+    REQUIRE(!modeError);
+
+    const AC::TerrainPublicationResult recovered =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options, {});
+    REQUIRE(recovered.Status == AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
+    REQUIRE_EQ(recovered.Detail,
+               std::string{"committed publication target mode differs from journal"});
+    REQUIRE(std::filesystem::exists(
+        options.Output / ".garner.reference-albedo.publish.json"));
+    std::filesystem::permissions(
+        destination, std::filesystem::perms::owner_all,
+        std::filesystem::perm_options::replace, modeError);
+}
+
+CORSAIRS_TEST(TerrainReferencePublisher_FullLiteralFaultMatrixIsReachable) {
+    constexpr std::array<std::string_view, 18> points{
+        "MANIFEST_TEMP_AFTER_EXCLUSIVE_CREATE",
+        "MANIFEST_AFTER_TEMP_FLUSH",
+        "MANIFEST_AFTER_BACKUP_FLUSH",
+        "MANIFEST_AFTER_PREPARED_JOURNAL_DURABLE",
+        "MANIFEST_AFTER_REPLACE",
+        "MANIFEST_AFTER_REPLACE_DURABILITY_BARRIER",
+        "MANIFEST_AFTER_REPLACED_JOURNAL_DURABLE",
+        "MANIFEST_AFTER_READBACK_VERIFY",
+        "MANIFEST_AFTER_COMMITTED_JOURNAL_DURABLE",
+        "MANIFEST_AFTER_TOMBSTONE_RESERVATION_DURABLE",
+        "MANIFEST_AFTER_JOURNAL_RETIRE",
+        "MANIFEST_ROLLBACK_REPLACE",
+        "MANIFEST_ROLLBACK_AFTER_MODE_STAGE_FLUSH",
+        "MANIFEST_ROLLBACK_DURABILITY_BARRIER",
+        "MANIFEST_ROLLBACK_VERIFY",
+        "MANIFEST_AFTER_LOCK_RESERVATION_DURABLE",
+        "MANIFEST_AFTER_LOCK_MOVE_TO_RETIRED",
+        "MANIFEST_AFTER_LOCK_DELETE_PENDING",
+    };
+    const std::set<std::string_view> rollbackPoints{
+        "MANIFEST_ROLLBACK_REPLACE",
+        "MANIFEST_ROLLBACK_AFTER_MODE_STAGE_FLUSH",
+        "MANIFEST_ROLLBACK_DURABILITY_BARRIER",
+        "MANIFEST_ROLLBACK_VERIFY",
+    };
+    const std::set<std::string_view> committedPoints{
+        "MANIFEST_AFTER_COMMITTED_JOURNAL_DURABLE",
+        "MANIFEST_AFTER_TOMBSTONE_RESERVATION_DURABLE",
+        "MANIFEST_AFTER_JOURNAL_RETIRE",
+        "MANIFEST_AFTER_LOCK_RESERVATION_DURABLE",
+        "MANIFEST_AFTER_LOCK_MOVE_TO_RETIRED",
+        "MANIFEST_AFTER_LOCK_DELETE_PENDING",
+    };
+    for (const std::string_view point : points) {
+        ReferenceFixture fixture;
+        REQUIRE(fixture.Ready());
+        const AC::TerrainReferenceOptions options = fixture.Options();
+        const std::filesystem::path destination =
+            options.Output / "garner.reference-albedo.json";
+        REQUIRE(WriteText(destination, "prior-top"));
+        const std::string json =
+            AC::SerializeTerrainReferenceManifest(fixture.Manifest());
+        bool publicationTrigger = false;
+        bool targetInjected = false;
+        const AC::TerrainPublicationResult result =
+            AC::PublishTerrainReferenceManifestForTesting(
+                destination, json, options,
+                [&](std::string_view candidate) {
+                    if (rollbackPoints.contains(point) &&
+                        !publicationTrigger &&
+                        candidate == "MANIFEST_AFTER_REPLACE") {
+                        publicationTrigger = true;
+                        return AC::TerrainReferenceFaultAction::FAIL;
+                    }
+                    if (!targetInjected && candidate == point) {
+                        targetInjected = true;
+                        return committedPoints.contains(point)
+                            ? AC::TerrainReferenceFaultAction::CRASH
+                            : AC::TerrainReferenceFaultAction::FAIL;
+                    }
+                    return AC::TerrainReferenceFaultAction::NONE;
+                });
+        REQUIRE(targetInjected);
+        REQUIRE(result.Status != AC::TerrainPublicationStatus::OK);
+        if (committedPoints.contains(point)) {
+            REQUIRE_EQ(ReadText(destination).value_or(""), json);
+        }
+        else if (!rollbackPoints.contains(point)) {
+            REQUIRE_EQ(ReadText(destination).value_or(""),
+                       std::string{"prior-top"});
+        }
+        else {
+            REQUIRE(std::filesystem::exists(
+                options.Output / ".garner.reference-albedo.publish.json"));
+        }
+        const AC::TerrainPublicationResult freshRecovery =
+            AC::PublishTerrainReferenceManifestForTesting(
+                destination, json, options, {});
+        REQUIRE(freshRecovery.Status == AC::TerrainPublicationStatus::OK);
+        REQUIRE_EQ(ReadText(destination).value_or(""), json);
+    }
+}
+
+CORSAIRS_TEST(TerrainReferencePublisher_FullLiteralCrashMatrixRecoversFreshProcess) {
+    constexpr std::array<std::string_view, 18> points{
+        "MANIFEST_TEMP_AFTER_EXCLUSIVE_CREATE",
+        "MANIFEST_AFTER_TEMP_FLUSH",
+        "MANIFEST_AFTER_BACKUP_FLUSH",
+        "MANIFEST_AFTER_PREPARED_JOURNAL_DURABLE",
+        "MANIFEST_AFTER_REPLACE",
+        "MANIFEST_AFTER_REPLACE_DURABILITY_BARRIER",
+        "MANIFEST_AFTER_REPLACED_JOURNAL_DURABLE",
+        "MANIFEST_AFTER_READBACK_VERIFY",
+        "MANIFEST_AFTER_COMMITTED_JOURNAL_DURABLE",
+        "MANIFEST_AFTER_TOMBSTONE_RESERVATION_DURABLE",
+        "MANIFEST_AFTER_JOURNAL_RETIRE",
+        "MANIFEST_ROLLBACK_REPLACE",
+        "MANIFEST_ROLLBACK_AFTER_MODE_STAGE_FLUSH",
+        "MANIFEST_ROLLBACK_DURABILITY_BARRIER",
+        "MANIFEST_ROLLBACK_VERIFY",
+        "MANIFEST_AFTER_LOCK_RESERVATION_DURABLE",
+        "MANIFEST_AFTER_LOCK_MOVE_TO_RETIRED",
+        "MANIFEST_AFTER_LOCK_DELETE_PENDING",
+    };
+    const std::set<std::string_view> rollbackPoints{
+        "MANIFEST_ROLLBACK_REPLACE",
+        "MANIFEST_ROLLBACK_AFTER_MODE_STAGE_FLUSH",
+        "MANIFEST_ROLLBACK_DURABILITY_BARRIER",
+        "MANIFEST_ROLLBACK_VERIFY",
+    };
+    for (const std::string_view point : points) {
+        ReferenceFixture fixture;
+        REQUIRE(fixture.Ready());
+        const AC::TerrainReferenceOptions options = fixture.Options();
+        const std::filesystem::path destination =
+            options.Output / "garner.reference-albedo.json";
+        REQUIRE(WriteText(destination, "prior-top"));
+        const std::string json =
+            AC::SerializeTerrainReferenceManifest(fixture.Manifest());
+        bool publicationTrigger = false;
+        bool targetInjected = false;
+        const AC::TerrainPublicationResult crashed =
+            AC::PublishTerrainReferenceManifestForTesting(
+                destination, json, options,
+                [&](std::string_view candidate) {
+                    if (rollbackPoints.contains(point) &&
+                        !publicationTrigger &&
+                        candidate == "MANIFEST_AFTER_REPLACE") {
+                        publicationTrigger = true;
+                        return AC::TerrainReferenceFaultAction::FAIL;
+                    }
+                    if (!targetInjected && candidate == point) {
+                        targetInjected = true;
+                        return AC::TerrainReferenceFaultAction::CRASH;
+                    }
+                    return AC::TerrainReferenceFaultAction::NONE;
+                });
+        REQUIRE(targetInjected);
+        REQUIRE(crashed.Status != AC::TerrainPublicationStatus::OK);
+        const AC::TerrainPublicationResult recovered =
+            AC::PublishTerrainReferenceManifestForTesting(
+                destination, json, options, {});
+        REQUIRE(recovered.Status == AC::TerrainPublicationStatus::OK);
+        REQUIRE_EQ(ReadText(destination).value_or(""), json);
+    }
+}
+
 CORSAIRS_TEST(TerrainReferencePublisher_StartupRecoveryRetiresJournalBeforeRemoval) {
     ReferenceFixture fixture;
     REQUIRE(fixture.Ready());
@@ -997,7 +1622,176 @@ CORSAIRS_TEST(TerrainReferencePublisher_StartupRecoveryRetiresJournalBeforeRemov
             AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
     const std::filesystem::path retired =
         options.Output / ".garner.reference-albedo.publish.json.retired";
-    REQUIRE_EQ(ReadText(retired).value_or(""), originalJournal);
+    const std::string retiredBytes = ReadText(retired).value_or("");
+    REQUIRE(!retiredBytes.empty());
+    REQUIRE(retiredBytes != originalJournal);
+    REQUIRE(!retiredBytes.contains("\"rollbackIdentity\":\"\""));
+    REQUIRE(retiredBytes.contains("\"phase\":\"REPLACED\""));
+}
+
+CORSAIRS_TEST(TerrainReferencePublisher_CleanupRejectsForeignBackupReplacement) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    const std::filesystem::path destination =
+        options.Output / "garner.reference-albedo.json";
+    REQUIRE(WriteText(destination, "prior-top"));
+    const std::string json =
+        AC::SerializeTerrainReferenceManifest(fixture.Manifest());
+    bool injected = false;
+    const AC::TerrainPublicationResult crashed =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options,
+            [&](std::string_view point) {
+                if (!injected &&
+                    point == "MANIFEST_AFTER_COMMITTED_JOURNAL_DURABLE") {
+                    injected = true;
+                    return AC::TerrainReferenceFaultAction::CRASH;
+                }
+                return AC::TerrainReferenceFaultAction::NONE;
+            });
+    REQUIRE(injected);
+    REQUIRE(crashed.Status == AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
+
+    std::filesystem::path backup;
+    for (const auto& entry : std::filesystem::directory_iterator(options.Output)) {
+        if (entry.path().filename().generic_string().starts_with(
+                ".garner.reference-albedo.backup.")) {
+            backup = entry.path();
+            break;
+        }
+    }
+    REQUIRE(!backup.empty());
+    std::error_code error;
+    REQUIRE(std::filesystem::remove(backup, error));
+    REQUIRE(!error);
+    REQUIRE(WriteText(backup, "foreign-sentinel"));
+
+    const AC::TerrainPublicationResult recovered =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options, {});
+    REQUIRE(recovered.Status == AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
+    REQUIRE(recovered.Detail.contains("owned artifact identity/hash/mode mismatch"));
+    REQUIRE_EQ(ReadText(backup).value_or(""),
+               std::string{"foreign-sentinel"});
+    REQUIRE_EQ(ReadText(destination).value_or(""), json);
+}
+
+CORSAIRS_TEST(TerrainReferencePublisher_CleanupRechecksAfterReservationHook) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    const std::filesystem::path destination =
+        options.Output / "garner.reference-albedo.json";
+    REQUIRE(WriteText(destination, "prior-top"));
+    const std::string json =
+        AC::SerializeTerrainReferenceManifest(fixture.Manifest());
+    bool committed = false;
+    const AC::TerrainPublicationResult crashed =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options,
+            [&](std::string_view point) {
+                if (!committed &&
+                    point == "MANIFEST_AFTER_COMMITTED_JOURNAL_DURABLE") {
+                    committed = true;
+                    return AC::TerrainReferenceFaultAction::CRASH;
+                }
+                return AC::TerrainReferenceFaultAction::NONE;
+            });
+    REQUIRE(committed);
+    REQUIRE(crashed.Status == AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
+    std::filesystem::path backup;
+    for (const auto& entry :
+         std::filesystem::directory_iterator{options.Output}) {
+        if (entry.path().filename().generic_string().starts_with(
+                ".garner.reference-albedo.backup.")) {
+            backup = entry.path();
+        }
+    }
+    REQUIRE(!backup.empty());
+    bool swapped = false;
+    bool swapSucceeded = false;
+    const AC::TerrainPublicationResult recovery =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options,
+            [&](std::string_view point) {
+                if (!swapped &&
+                    point ==
+                        "MANIFEST_AFTER_TOMBSTONE_RESERVATION_DURABLE") {
+                    std::error_code removeError;
+                    const bool removed =
+                        std::filesystem::remove(backup, removeError);
+                    swapSucceeded = removed && !removeError &&
+                        WriteText(backup, "foreign-sentinel");
+                    swapped = true;
+                }
+                return AC::TerrainReferenceFaultAction::NONE;
+            });
+    REQUIRE(swapped);
+    REQUIRE(swapSucceeded);
+    REQUIRE(recovery.Status == AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
+    REQUIRE(recovery.Detail.contains("identity/hash/mode mismatch"));
+    REQUIRE_EQ(ReadText(backup).value_or(""), std::string{"foreign-sentinel"});
+}
+
+CORSAIRS_TEST(TerrainReferencePublisher_CleanupRejectsSameBytesNewIdentityAtDelete) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    const std::filesystem::path destination =
+        options.Output / "garner.reference-albedo.json";
+    REQUIRE(WriteText(destination, "prior-top"));
+    const std::string json =
+        AC::SerializeTerrainReferenceManifest(fixture.Manifest());
+    bool committed = false;
+    const AC::TerrainPublicationResult crashed =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options,
+            [&](std::string_view point) {
+                if (!committed &&
+                    point == "MANIFEST_AFTER_COMMITTED_JOURNAL_DURABLE") {
+                    committed = true;
+                    return AC::TerrainReferenceFaultAction::CRASH;
+                }
+                return AC::TerrainReferenceFaultAction::NONE;
+            });
+    REQUIRE(committed);
+    REQUIRE(crashed.Status == AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
+
+    bool swapped = false;
+    bool swapSucceeded = false;
+    std::filesystem::path replacement;
+    const AC::TerrainPublicationResult recovery =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options,
+            [&](std::string_view point)
+                -> AC::TerrainReferenceFaultAction {
+                if (!swapped &&
+                    point == "MANIFEST_BEFORE_TOMBSTONE_DELETE") {
+                    for (const auto& entry :
+                         std::filesystem::directory_iterator{options.Output}) {
+                        if (entry.path().filename().generic_string().contains(
+                                ".backup.")) {
+                            replacement = entry.path();
+                            break;
+                        }
+                    }
+                    if (!replacement.empty()) {
+                        std::error_code error;
+                        const bool removed =
+                            std::filesystem::remove(replacement, error);
+                        swapSucceeded = removed && !error &&
+                            WriteText(replacement, "prior-top");
+                    }
+                    swapped = true;
+                }
+                return AC::TerrainReferenceFaultAction::NONE;
+            });
+    REQUIRE(swapped);
+    REQUIRE(swapSucceeded);
+    REQUIRE(recovery.Status == AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
+    REQUIRE(recovery.Detail.contains("identity/hash/mode mismatch"));
+    REQUIRE_EQ(ReadText(replacement).value_or(""), std::string{"prior-top"});
 }
 
 CORSAIRS_TEST(TerrainReferencePublisher_PersistentRollbackFailureRetainsEvidence) {
@@ -1097,12 +1891,379 @@ CORSAIRS_TEST(DurableFsWindows_ProductionSourceBindsTypedMoveReservation) {
     REQUIRE(!source->contains("WriteExclusiveText(journal.Temp, json, 0600u"));
 }
 
+CORSAIRS_TEST(DurableFsWindows_SharedPlannerOrdersRecoveryFlushAndMoves) {
+    using State = AC::TerrainWindowsDurableEntryState;
+    using Action = AC::TerrainWindowsDurableAction;
+    std::string detail;
+    const std::array states{
+        State{true, false, false, false},
+        State{true, true, true, false},
+    };
+    const auto plan =
+        AC::PlanTerrainWindowsEntryFinalization(states, detail);
+    REQUIRE(plan.has_value());
+    REQUIRE(detail.empty());
+    const std::vector<AC::TerrainWindowsDurableStep> expected{
+        {1u, Action::REMOVE_RESERVATION},
+        {0u, Action::FLUSH_SOURCE},
+        {1u, Action::FLUSH_SOURCE},
+        {0u, Action::RESERVE_TARGET},
+        {0u, Action::MOVE_TO_RESERVATION},
+        {0u, Action::MOVE_TO_SOURCE},
+        {0u, Action::VERIFY_SOURCE},
+        {1u, Action::RESERVE_TARGET},
+        {1u, Action::MOVE_TO_RESERVATION},
+        {1u, Action::MOVE_TO_SOURCE},
+        {1u, Action::VERIFY_SOURCE},
+    };
+    REQUIRE_EQ(plan->size(), expected.size());
+    for (std::size_t index = 0u; index < expected.size(); ++index) {
+        REQUIRE_EQ((*plan)[index].EntryIndex, expected[index].EntryIndex);
+        REQUIRE((*plan)[index].Action == expected[index].Action);
+    }
+
+    const std::array postMove{
+        State{false, true, false, true},
+    };
+    const auto recoveryPlan =
+        AC::PlanTerrainWindowsEntryFinalization(postMove, detail);
+    REQUIRE(recoveryPlan.has_value());
+    REQUIRE(recoveryPlan->front().Action == Action::RESTORE_SOURCE);
+    REQUIRE((*recoveryPlan)[1].Action == Action::FLUSH_SOURCE);
+
+    constexpr std::array invalidStates{
+        State{false, false, false, false},
+        State{false, true, true, false},
+        State{true, true, false, true},
+        State{true, false, false, false, false, true},
+        State{false, true, false, true, true, false},
+    };
+    for (const State& state : invalidStates) {
+        const std::array one{state};
+        REQUIRE(!AC::PlanTerrainWindowsEntryFinalization(one, detail).has_value());
+        REQUIRE(!detail.empty());
+    }
+
+    const State foreignReservationRecord{
+        true, true, true, false, true, true, false};
+    const std::array foreignReservationRecords{foreignReservationRecord};
+    REQUIRE(!AC::PlanTerrainWindowsEntryFinalization(
+        foreignReservationRecords, detail).has_value());
+    REQUIRE_EQ(detail,
+               std::string{"Windows finalization reservation record changed"});
+}
+
+CORSAIRS_TEST(DurableFsWindows_ReconcilesCreatedRollbackIdentityBeforeBarrier) {
+    std::string detail;
+    const auto adopted = AC::ReconcileTerrainWindowsFinalizationIdentity(
+        "", "volume:created-file", detail);
+    REQUIRE(adopted.has_value());
+    REQUIRE_EQ(*adopted, std::string{"volume:created-file"});
+    REQUIRE(detail.empty());
+
+    const auto stable = AC::ReconcileTerrainWindowsFinalizationIdentity(
+        "volume:created-file", "volume:created-file", detail);
+    REQUIRE(stable.has_value());
+    REQUIRE_EQ(*stable, std::string{"volume:created-file"});
+
+    REQUIRE(!AC::ReconcileTerrainWindowsFinalizationIdentity(
+        "volume:recorded", "volume:foreign", detail).has_value());
+    REQUIRE_EQ(detail,
+               std::string{"Windows finalization identity changed"});
+}
+
+CORSAIRS_TEST(DurableFsWindows_RemoveOwnedRecoversJournalTombstone) {
+    using Action = AC::TerrainWindowsDurableAction;
+    using State = AC::TerrainWindowsRemoveOwnedState;
+    std::string detail;
+    const auto postMove = AC::PlanTerrainWindowsOwnedRemoval(
+        State{false, true, false, true, true}, detail);
+    REQUIRE(postMove.has_value());
+    bool payloadVerified = false;
+    bool readonly = true;
+    bool deleted = false;
+    std::vector<Action> calls;
+    REQUIRE(AC::ExecuteTerrainWindowsDurableSteps(
+        *postMove,
+        [&](const AC::TerrainWindowsDurableStep& step,
+            std::string& stepDetail) {
+            calls.push_back(step.Action);
+            switch (step.Action) {
+            case Action::VERIFY_RESERVATION_PAYLOAD:
+                payloadVerified = true;
+                return true;
+            case Action::CLEAR_READONLY:
+                if (!payloadVerified) {
+                    stepDetail = "attributes cleared before payload verify";
+                    return false;
+                }
+                readonly = false;
+                return true;
+            case Action::DELETE_RESERVATION:
+                if (readonly) {
+                    stepDetail = "delete attempted while readonly";
+                    return false;
+                }
+                deleted = true;
+                return true;
+            case Action::VERIFY_ABSENCE:
+                return deleted;
+            default:
+                stepDetail = "unexpected mocked remove action";
+                return false;
+            }
+        },
+        detail));
+    REQUIRE(deleted);
+    const std::vector expected{
+        Action::VERIFY_RESERVATION_PAYLOAD,
+        Action::CLEAR_READONLY,
+        Action::DELETE_RESERVATION,
+        Action::VERIFY_ABSENCE};
+    REQUIRE(calls == expected);
+
+    const auto preMove = AC::PlanTerrainWindowsOwnedRemoval(
+        State{true, true, true, true, true}, detail);
+    REQUIRE(preMove.has_value());
+    REQUIRE(preMove->front().Action == Action::REMOVE_RESERVATION);
+    REQUIRE((*preMove)[1].Action == Action::VERIFY_SOURCE);
+    REQUIRE(!AC::PlanTerrainWindowsOwnedRemoval(
+        State{true, true, false, true, true}, detail).has_value());
+    REQUIRE(!AC::PlanTerrainWindowsOwnedRemoval(
+        State{false, true, false, true, false}, detail).has_value());
+}
+
+CORSAIRS_TEST(DurableFsWindows_StagesAttributesBeforeReplace) {
+    using Action = AC::TerrainWindowsDurableAction;
+    using State = AC::TerrainWindowsDurableEntryState;
+    std::string detail;
+    const std::array states{
+        State{true, false, false, false, true, true},
+        State{true, false, false, false, true, true},
+        State{true, false, false, false, true, true},
+        State{true, false, false, false, true, true},
+        State{true, false, false, false, true, true},
+        State{true, false, false, false, true, true},
+        State{true, false, false, false, true, true},
+    };
+    const auto plan = AC::PlanTerrainWindowsEntryFinalization(states, detail);
+    REQUIRE(plan.has_value());
+    std::size_t flushed = 0u;
+    std::size_t executed = 0u;
+    REQUIRE(AC::ExecuteTerrainWindowsDurableSteps(
+        *plan,
+        [&](const AC::TerrainWindowsDurableStep& step,
+            std::string& stepDetail) {
+            ++executed;
+            if (step.Action == Action::FLUSH_SOURCE) {
+                ++flushed;
+                return true;
+            }
+            if (step.Action == Action::RESERVE_TARGET && flushed != 7u) {
+                stepDetail = "reservation preceded all-file flush barrier";
+                return false;
+            }
+            return true;
+        },
+        detail));
+    REQUIRE_EQ(flushed, 7u);
+    REQUIRE_EQ(executed, plan->size());
+
+    for (std::size_t failedStep = 0u; failedStep < plan->size(); ++failedStep) {
+        std::size_t attempts = 0u;
+        REQUIRE(!AC::ExecuteTerrainWindowsDurableSteps(
+            *plan,
+            [&](const AC::TerrainWindowsDurableStep& step,
+                std::string& stepDetail) {
+                if (attempts++ == failedStep) {
+                    stepDetail = std::format(
+                        "DURABLE_FS_ERROR op=MockWin32Action path=\"entry-{}\" "
+                        "native=win32:5:",
+                        step.EntryIndex);
+                    return false;
+                }
+                return true;
+            },
+            detail));
+        REQUIRE_EQ(attempts, failedStep + 1u);
+        REQUIRE_EQ(
+            detail,
+            std::format(
+                "DURABLE_FS_ERROR op=MockWin32Action path=\"entry-{}\" "
+                "native=win32:5:",
+                (*plan)[failedStep].EntryIndex));
+    }
+}
+
+CORSAIRS_TEST(DurableFsWindows_RecoversTypedMoveReservation) {
+    using Action = AC::TerrainWindowsDurableAction;
+    using State = AC::TerrainWindowsDurableEntryState;
+    std::string detail;
+    const std::array state{
+        State{false, true, false, true, true, true}};
+    const auto plan = AC::PlanTerrainWindowsEntryFinalization(state, detail);
+    REQUIRE(plan.has_value());
+    enum class Location { RESERVATION, SOURCE };
+    Location payload = Location::RESERVATION;
+    bool exactReservation = false;
+    REQUIRE(AC::ExecuteTerrainWindowsDurableSteps(
+        *plan,
+        [&](const AC::TerrainWindowsDurableStep& step,
+            std::string& stepDetail) {
+            switch (step.Action) {
+            case Action::RESTORE_SOURCE:
+                payload = Location::SOURCE;
+                return true;
+            case Action::FLUSH_SOURCE:
+                return payload == Location::SOURCE;
+            case Action::RESERVE_TARGET:
+                exactReservation = true;
+                return true;
+            case Action::MOVE_TO_RESERVATION:
+                if (!exactReservation || payload != Location::SOURCE) {
+                    stepDetail = "typed reservation missing before move";
+                    return false;
+                }
+                payload = Location::RESERVATION;
+                exactReservation = false;
+                return true;
+            case Action::MOVE_TO_SOURCE:
+                payload = Location::SOURCE;
+                return true;
+            case Action::VERIFY_SOURCE:
+                return payload == Location::SOURCE;
+            default:
+                stepDetail = "unexpected typed recovery action";
+                return false;
+            }
+        },
+        detail));
+    REQUIRE(payload == Location::SOURCE);
+
+    const std::array sameBytesForeignIdentity{
+        State{false, true, false, true, true, false}};
+    REQUIRE(!AC::PlanTerrainWindowsEntryFinalization(
+        sameBytesForeignIdentity, detail).has_value());
+
+    enum class PayloadLocation { SOURCE, RESERVATION_RECORD, RESERVATION_PAYLOAD };
+    const std::array cleanState{
+        State{true, false, false, false, true, true, true}};
+    const auto cleanPlan =
+        AC::PlanTerrainWindowsEntryFinalization(cleanState, detail);
+    REQUIRE(cleanPlan.has_value());
+    for (std::size_t crashAfter = 0u; crashAfter < cleanPlan->size();
+         ++crashAfter) {
+        PayloadLocation location = PayloadLocation::SOURCE;
+        for (std::size_t index = 0u; index <= crashAfter; ++index) {
+            switch ((*cleanPlan)[index].Action) {
+            case Action::FLUSH_SOURCE:
+            case Action::VERIFY_SOURCE:
+                REQUIRE(location == PayloadLocation::SOURCE);
+                break;
+            case Action::RESERVE_TARGET:
+                REQUIRE(location == PayloadLocation::SOURCE);
+                location = PayloadLocation::RESERVATION_RECORD;
+                break;
+            case Action::MOVE_TO_RESERVATION:
+                REQUIRE(location == PayloadLocation::RESERVATION_RECORD);
+                location = PayloadLocation::RESERVATION_PAYLOAD;
+                break;
+            case Action::MOVE_TO_SOURCE:
+                REQUIRE(location == PayloadLocation::RESERVATION_PAYLOAD);
+                location = PayloadLocation::SOURCE;
+                break;
+            default:
+                REQUIRE(false);
+            }
+        }
+        State restarted;
+        restarted.SourcePresent = location == PayloadLocation::SOURCE ||
+            location == PayloadLocation::RESERVATION_RECORD;
+        restarted.ReservationPresent =
+            location != PayloadLocation::SOURCE;
+        restarted.ReservationIsExactRecord =
+            location == PayloadLocation::RESERVATION_RECORD;
+        restarted.ReservationIsRecordedPayload =
+            location == PayloadLocation::RESERVATION_PAYLOAD;
+        restarted.SourceMatchesRecordedArtifact = true;
+        restarted.ReservationMatchesRecordedArtifact = true;
+        restarted.ReservationRecordMatchesOwnedArtifact = true;
+        const std::array restartedStates{restarted};
+        const auto replay = AC::PlanTerrainWindowsEntryFinalization(
+            restartedStates, detail);
+        REQUIRE(replay.has_value());
+        if (location == PayloadLocation::RESERVATION_RECORD) {
+            REQUIRE(replay->front().Action == Action::REMOVE_RESERVATION);
+        }
+        else if (location == PayloadLocation::RESERVATION_PAYLOAD) {
+            REQUIRE(replay->front().Action == Action::RESTORE_SOURCE);
+        }
+        else {
+            REQUIRE(replay->front().Action == Action::FLUSH_SOURCE);
+        }
+    }
+}
+
+CORSAIRS_TEST(DurableFsWindows_RetireLockUsesDeleteOnClose) {
+    using Action = AC::TerrainWindowsDurableAction;
+    std::string detail;
+    const auto plan = AC::PlanTerrainWindowsLockRetirement();
+    bool identitiesVerified = false;
+    bool reserved = false;
+    bool moved = false;
+    bool deletePending = false;
+    bool closed = false;
+    std::vector<Action> calls;
+    REQUIRE(AC::ExecuteTerrainWindowsDurableSteps(
+        plan,
+        [&](const AC::TerrainWindowsDurableStep& step,
+            std::string& stepDetail) {
+            calls.push_back(step.Action);
+            switch (step.Action) {
+            case Action::VERIFY_LOCK_IDENTITIES:
+                identitiesVerified = true;
+                return true;
+            case Action::RESERVE_TARGET:
+                reserved = identitiesVerified;
+                return reserved;
+            case Action::MOVE_TO_RESERVATION:
+                moved = reserved;
+                return moved;
+            case Action::VERIFY_RESERVATION_PAYLOAD:
+                return moved;
+            case Action::ACCEPT_DELETE_PENDING:
+                deletePending = moved;
+                return deletePending;
+            case Action::CLOSE_LOCK_HANDLE:
+                closed = deletePending;
+                return closed;
+            default:
+                stepDetail = "unexpected mocked lock action";
+                return false;
+            }
+        },
+        detail));
+    REQUIRE(closed);
+    REQUIRE(calls.back() == Action::CLOSE_LOCK_HANDLE);
+
+    std::size_t attempts = 0u;
+    REQUIRE(!AC::ExecuteTerrainWindowsDurableSteps(
+        plan,
+        [&](const AC::TerrainWindowsDurableStep& step,
+            std::string& stepDetail) {
+            ++attempts;
+            if (step.Action == Action::ACCEPT_DELETE_PENDING) {
+                stepDetail = "win32:5 delete-pending rejected";
+                return false;
+            }
+            return true;
+        },
+        detail));
+    REQUIRE_EQ(attempts, plan.size() - 1u);
+    REQUIRE_EQ(detail, std::string{"win32:5 delete-pending rejected"});
+}
+
 CORSAIRS_TEST(DurableFsLock_RejectsStaleHandleAfterRetirement) {
-#if defined(_WIN32)
-    // The Win32 stale-handle branch is covered by the static/mock contract;
-    // creating a hard link requires platform privileges unrelated to locking.
-    REQUIRE(true);
-#else
     ReferenceFixture fixture;
     REQUIRE(fixture.Ready());
     const AC::TerrainReferenceOptions options = fixture.Options();
@@ -1118,6 +2279,9 @@ CORSAIRS_TEST(DurableFsLock_RejectsStaleHandleAfterRetirement) {
                           lock.lexically_normal().generic_string())));
     std::error_code linkError;
     std::filesystem::create_hard_link(lock, retired, linkError);
+    if (SkipWindowsPrivilegeOrAccessDenied(linkError, "hard-link")) {
+        return;
+    }
     REQUIRE(!linkError);
 
     const AC::TerrainPublicationResult result =
@@ -1132,7 +2296,111 @@ CORSAIRS_TEST(DurableFsLock_RejectsStaleHandleAfterRetirement) {
     REQUIRE_EQ(ReadText(destination).value_or(""), std::string{"prior-top"});
     REQUIRE(std::filesystem::exists(lock));
     REQUIRE(std::filesystem::exists(retired));
-#endif
+}
+
+CORSAIRS_TEST(DurableFsLock_RejectsPreexistingEmptyForeignFile) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    const std::filesystem::path destination =
+        options.Output / "garner.reference-albedo.json";
+    const std::filesystem::path lock =
+        options.Output / ".garner.reference-albedo.publish.lock";
+    REQUIRE(WriteText(destination, "prior-top"));
+    REQUIRE(WriteText(lock, ""));
+
+    const AC::TerrainPublicationResult result =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination,
+            AC::SerializeTerrainReferenceManifest(fixture.Manifest()),
+            options, {});
+    const AC::TerrainPublicationResult repeated =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination,
+            AC::SerializeTerrainReferenceManifest(fixture.Manifest()),
+            options, {});
+
+    REQUIRE(result.Status == AC::TerrainPublicationStatus::WRITE_FAILED);
+    REQUIRE(repeated.Status == result.Status);
+    REQUIRE_EQ(repeated.Detail, result.Detail);
+    REQUIRE_EQ(ReadText(lock).value_or("missing"), std::string{});
+    REQUIRE_EQ(ReadText(destination).value_or(""), std::string{"prior-top"});
+}
+
+CORSAIRS_TEST(DurableFsLock_DurableMarkerBeforeRecovery) {
+    {
+        ReferenceFixture foreignFixture;
+        REQUIRE(foreignFixture.Ready());
+        const AC::TerrainReferenceOptions options = foreignFixture.Options();
+        const std::filesystem::path destination =
+            options.Output / "garner.reference-albedo.json";
+        const std::filesystem::path lock =
+            options.Output / ".garner.reference-albedo.publish.lock";
+        const std::filesystem::path journal =
+            options.Output / ".garner.reference-albedo.publish.json";
+        REQUIRE(WriteText(destination, "prior-top"));
+        REQUIRE(WriteText(lock, ""));
+        bool transactionWorkReached = false;
+        const AC::TerrainPublicationResult rejected =
+            AC::PublishTerrainReferenceManifestForTesting(
+                destination,
+                AC::SerializeTerrainReferenceManifest(
+                    foreignFixture.Manifest()),
+                options,
+                [&](std::string_view) {
+                    transactionWorkReached = true;
+                    return AC::TerrainReferenceFaultAction::NONE;
+                });
+        REQUIRE(rejected.Status == AC::TerrainPublicationStatus::WRITE_FAILED);
+        REQUIRE(!transactionWorkReached);
+        REQUIRE_EQ(ReadText(lock).value_or("missing"), std::string{});
+        REQUIRE(!std::filesystem::exists(journal));
+        REQUIRE_EQ(ReadText(destination).value_or(""),
+                   std::string{"prior-top"});
+    }
+
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    const std::filesystem::path destination =
+        options.Output / "garner.reference-albedo.json";
+    const std::filesystem::path lock =
+        options.Output / ".garner.reference-albedo.publish.lock";
+    const std::filesystem::path journal =
+        options.Output / ".garner.reference-albedo.publish.json";
+    REQUIRE(WriteText(destination, "prior-top"));
+    const std::string json =
+        AC::SerializeTerrainReferenceManifest(fixture.Manifest());
+    const std::string expectedMarker = std::format(
+        "corsairs-durable-lock-v1\npath={}\n",
+        lock.lexically_normal().generic_string());
+    bool observedDurableMarker = false;
+    const AC::TerrainPublicationResult crashed =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options,
+            [&](std::string_view point) {
+                if (!observedDurableMarker &&
+                    point == "MANIFEST_TEMP_AFTER_EXCLUSIVE_CREATE") {
+                    observedDurableMarker =
+                        ReadText(lock).value_or("") == expectedMarker &&
+                        std::filesystem::file_size(lock) ==
+                            expectedMarker.size();
+                    return AC::TerrainReferenceFaultAction::CRASH;
+                }
+                return AC::TerrainReferenceFaultAction::NONE;
+            });
+    REQUIRE(observedDurableMarker);
+    REQUIRE(crashed.Status == AC::TerrainPublicationStatus::WRITE_FAILED);
+    REQUIRE_EQ(ReadText(lock).value_or(""), expectedMarker);
+    REQUIRE(std::filesystem::is_regular_file(journal));
+
+    const AC::TerrainPublicationResult recovered =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options, {});
+    REQUIRE(recovered.Status == AC::TerrainPublicationStatus::OK);
+    REQUIRE_EQ(ReadText(destination).value_or(""), json);
+    REQUIRE(!std::filesystem::exists(lock));
+    REQUIRE(!std::filesystem::exists(journal));
 }
 
 CORSAIRS_TEST(TerrainReferencePublisher_RejectsJournalOwnedPathAlias) {
