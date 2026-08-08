@@ -51,6 +51,17 @@
 **Interfaces:**
 
 ```cpp
+// Existing values keep their numeric identity; append the overflow status.
+enum class SceneObjStatus : std::uint32_t {
+    OK = 0,
+    HEADER_TRUNCATED,
+    BAD_MAGIC,
+    VERSION_UNSUPPORTED,
+    SECTION_TABLE_TRUNCATED,
+    BODY_TRUNCATED,
+    INTEGER_OVERFLOW,
+};
+
 struct SceneSourceKey {
     std::uint32_t SectionIndex{0};
     std::uint32_t SlotIndex{0};
@@ -76,14 +87,15 @@ struct SceneSelection {
     std::vector<SceneSourceKey> ReferenceKeys;
 };
 
-enum class SceneRecordDisposition {
+enum class SceneRecordDisposition : std::uint8_t {
     SceneModel,
     DeferredEffect,
 };
 
-enum class SceneSelectionStatus {
-    OK,
+enum class SceneSelectionStatus : std::uint32_t {
+    OK = 0,
     UNKNOWN_OBJECT_TYPE,
+    INVALID_SOURCE_KEY,
 };
 
 struct ReferenceZone {
@@ -101,38 +113,147 @@ SceneSelectionStatus BuildSceneSelection(
 
 - [ ] **Step 1: Add RED parser/type tests**
 
-Create a synthetic `.obj` with section 1 `ObjInfoPos=100`, non-default `SectionCntX`, `SectionCntY`, `SectionWidth`, `SectionHeight`, `Version`, `FileSize`, and `SectionObjNum`, and two records sharing `modelId=1`, first type 0 and second type 1. Require keys `(1,0,100)` and `(1,1,120)`, one model, one deferred effect, exact per-record section dimensions, and field-for-field preservation of the independently parsed `SceneFileHeader` in `SceneSelection::SourceHeader`. Model resolution is not part of this task; the catalog test in Task 5 proves that a type-1 record never reaches lookup.
+Create a synthetic `.obj` with section 1 `ObjInfoPos=100`, non-default
+`SectionCntX`, `SectionCntY`, `SectionWidth`, `SectionHeight`, `Version`,
+`FileSize`, and `SectionObjNum`, and two records sharing `modelId=1`, first
+type 0 and second type 1. Set `FileSize` to the fixture's exact byte length.
+Require keys `(1,0,100)` and `(1,1,120)`, one model, one deferred effect,
+exact per-record section dimensions, and field-for-field preservation of the
+independently parsed `SceneFileHeader`, including all 16 title bytes, in
+`SceneSelection::SourceHeader`. Model resolution is not part of this task;
+the catalog test in Task 5 proves that a type-1 record never reaches lookup.
+Place both records inside the reference radius and require only the type-0
+key in `ReferenceKeys`.
 
-Require type 2 to return `UNKNOWN_OBJECT_TYPE` and publish no output, including no partially copied `SourceHeader`. Anchors at radii 7999, 8000, and 8001 cm have membership true, true, false. Mutating only one header field in the later Task 4 context must be detectable by comparison with this preserved header.
+Add parser fixtures for every arithmetic boundary before any allocation or
+`span::subspan`: negative `ObjInfoPos=-1`, a non-empty block beginning one
+byte before the checked section-table prefix, a fixed-capacity object block
+ending one byte beyond `FileSize`, and
+`SectionCntX=SectionCntY=INT32_MAX`, whose
+`sectionCount * sizeof(SectionIndex)` exceeds `UINT64_MAX`. Each returns a
+deterministic parser failure, publishes no `SceneObjects`, and never attempts
+an allocation or read derived from the wrapped value. The near-`UINT64_MAX`
+fixture is required even on a 64-bit host; an exception, crash, sanitizer
+finding, or apparent success is RED. Arithmetic overflow returns
+`INTEGER_OVERFLOW` with detail `scene integer overflow: <operation>`, where
+the literal operation is one of `section-count`, `section-table-bytes`,
+`section-prefix`, `object-block-bytes`, `object-block-end`, `record-delta`, or
+`record-end`. The max-dimension fixture requires exact detail
+`scene integer overflow: section-table-bytes`. Prefix/table truncation uses
+`SECTION_TABLE_TRUNCATED`; negative, cross-prefix, or truncated object ranges
+use `BODY_TRUNCATED`. `ToString(SceneObjStatus::INTEGER_OVERFLOW)` is the
+literal `"INTEGER_OVERFLOW"`.
+
+Pre-seed `SceneSelection output` with a non-default header and sentinel
+entries, then place valid type-0 and type-1 records before a final type-2
+record. Require `UNKNOWN_OBJECT_TYPE`, a stable diagnostic naming the final
+source key/type, and byte-for-field equality of the complete pre-seeded
+output before and after the call. A duplicate, out-of-order, impossible
+section/slot, or out-of-file source key similarly returns
+`INVALID_SOURCE_KEY` and leaves output unchanged. Anchors at radii 7999,
+8000, and 8001 cm have membership true, true, false. Include
+`ByteOffset=UINT64_MAX-7` so validating the complete 20-byte record range must
+detect addition overflow. Mutating only one header field in the later Task 4
+context must be detectable by comparison with this preserved header.
+
+Add a real Garner test over `Client/map/garner.obj`. It independently opens
+the tracked bytes, calls the parser once and the selector once, and requires
+literal totals `scene.Objects=50017`, `Models=46991`,
+`DeferredEffects=3026`, and `ReferenceKeys=1634`. The 1634 keys are strictly
+source-ordered and unique; their literal endpoints are
+`(173333,0,9554196)` and `(183575,4,10915776)`. A second independent parse
+and selection of the same bytes must produce the identical header, ordered
+partitions, and reference-key vector. The test computes neither expected
+counts nor endpoint keys through production helpers.
 
 - [ ] **Step 2: Verify RED**
 
 ```bash
-cmake -S tools/AssetConverter -B tools/AssetConverter/build \
+nice -n 10 cmake -S tools/AssetConverter -B tools/AssetConverter/build \
   -DCMAKE_BUILD_TYPE=Debug
-cmake --build tools/AssetConverter/build \
+nice -n 10 cmake --build tools/AssetConverter/build \
   --target AssetConverterTests -j2
-ctest --test-dir tools/AssetConverter/build -j1 --output-on-failure
 ```
 
-Expected compile failure for missing `SceneParity.h` and `PlacedObject::Source`.
+Expected nonzero compile result for missing `SceneParity.h`,
+`PlacedObject::Source`, `INTEGER_OVERFLOW`, and `INVALID_SOURCE_KEY`. This is
+the genuine RED; do not create production declarations before recording it,
+and do not run a stale pre-existing test executable as evidence. Wait for
+configure to exit before build and for build to exit before any later command.
+No other CMake, AssetConverter, Unreal, or client process may overlap this
+sequence.
 
 - [ ] **Step 3: Implement source keys and selection**
 
-During parse:
+Before reading or allocating the section table, perform checked `uint64_t`
+arithmetic in this order:
+
+```text
+sectionCount = checked_mul(SectionCntX, SectionCntY)
+tableBytes   = checked_mul(sectionCount, sizeof(SectionIndex))
+prefixBytes  = checked_add(sizeof(SceneFileHeader), tableBytes)
+```
+
+All header dimensions and `FileSize` are positive, `FileSize` equals the input
+span length, `prefixBytes <= FileSize`, and every value is representable as
+`size_t` before it reaches a container or `subspan`. Overflow or an
+unrepresentable result is a deterministic parser failure before allocation.
+Every section index requires `0 <= ObjNum <= SectionObjNum`; zero is empty.
+For every non-empty section reject a negative `ObjInfoPos`, then compute only
+with checked `uint64_t` values:
+
+```text
+blockBegin  = uint64(ObjInfoPos)              # only after the sign check
+blockBytes  = checked_mul(SectionObjNum, sizeof(SceneObjInfo))
+blockEnd    = checked_add(blockBegin, blockBytes)
+recordDelta = checked_mul(slotIndex, sizeof(SceneObjInfo))
+recordBegin = checked_add(blockBegin, recordDelta)
+recordEnd   = checked_add(recordBegin, sizeof(SceneObjInfo))
+```
+
+Require `blockBegin >= prefixBytes`, `blockEnd <= FileSize`,
+`recordEnd <= blockEnd`, and `slotIndex < ObjNum`. Cast to `size_t` only after
+all checks pass. This replaces the current wrap-prone `offset + needed`
+predicate; no failing value may reach pointer arithmetic. During parse assign:
 
 ```cpp
 placed.Source.SectionIndex = sectionIndex;
 placed.Source.SlotIndex = slotIndex;
-placed.Source.ByteOffset =
-    section.ObjInfoPos + slotIndex * sizeof(SceneObjInfo);
+placed.Source.ByteOffset = recordBegin;
 ```
 
-Build a temporary selection in source order, copy `scene.Header` into its `SourceHeader`, and publish the entire temporary only after every record has a known type and stable key. Record source scale only as a diagnostic field; never use it in a transform. Task 4 receives its context through a separate CLI data path and compares that context against this parser-owned header; it never reconstructs section metadata from the selected records.
+Build a temporary selection in source order, copy `scene.Header` into its
+`SourceHeader`, and publish the entire temporary only after every record has a
+known type and a valid unique key. Validate that full `SceneSourceKey` values
+are strictly source-ordered and unique, fit the source header's section/slot
+bounds, name the same section as `SectionX/SectionY`, begin at or after the
+checked source prefix, and have a complete record range inside
+`SourceHeader.FileSize`. Failure preserves the caller's complete prior
+`output`; success replaces it once and clears `detail`. Record source scale
+only as a diagnostic field; never use it in a transform. Task 4 receives its
+context through a separate CLI data path and compares that context against
+this parser-owned header; it never reconstructs section metadata from the
+selected records.
+
+Reference membership uses checked integer math, not `float`, `sqrt`, or
+32-bit squaring. Reject a negative radius; compute `dx`/`dy` in `int64_t`,
+early-reject when either absolute delta exceeds the non-negative `RadiusCm`,
+then compare `dx*dx + dy*dy <= radius*radius`. After the early reject all
+three products and the sum fit `int64_t` for the complete `int32_t` input
+domain. World-coordinate construction likewise uses checked `int64_t`
+intermediates and rejects a result not representable as `int32_t`.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
 ```bash
+nice -n 10 cmake -S tools/AssetConverter -B tools/AssetConverter/build \
+  -DCMAKE_BUILD_TYPE=Debug
+nice -n 10 cmake --build tools/AssetConverter/build \
+  --target AssetConverterTests -j2
+nice -n 10 ./tools/AssetConverter/build/AssetConverterTests
+nice -n 10 ctest --test-dir tools/AssetConverter/build \
+  -j1 --output-on-failure
+
 git add \
   tools/AssetConverter/CMakeLists.txt \
   tools/AssetConverter/include/Corsairs/Tools/AssetConverter/SceneObjParser.h \
@@ -142,6 +263,13 @@ git add \
   tools/AssetConverter/tests/TestSceneParity.cpp
 git commit -m "feat(converter): classify scene source records"
 ```
+
+Run configure, build, the direct test executable, and CTest strictly in that
+order, waiting for each process tree to exit. Before every heavy command,
+require no competing build/AssetConverter/Unreal/client process and no
+`pmset -g therm` warning. Compilation stays at `-j2`, CTest at `-j1`, and all
+four commands stay under `nice -n 10`. The direct run and CTest must both be
+fresh GREEN with nonzero test counts before the scoped commit.
 
 ---
 
