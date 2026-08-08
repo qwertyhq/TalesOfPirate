@@ -557,6 +557,14 @@ git commit -m "feat(converter): stream compressed png rows"
 `TerrainPageId` comes from Task 1 `TerrainPage.h`; do not redeclare it in this task. `Sha256Bytes` and `Sha256File` come from Task 4 `Sha256.h`; do not create or duplicate their implementation here.
 
 ```cpp
+struct LegacyTerrainCornerSample {
+    std::array<std::uint8_t, 4> Diffuse;
+    double HeightCm;
+};
+
+[[nodiscard]] LegacyTerrainCornerSample ResolveLegacyTerrainCornerSample(
+    const MapTile& tile, bool present) noexcept;
+
 struct TerrainBakeOptions {
     std::uint32_t CellsPerPage{128};
     std::uint32_t PixelsPerCell{32};
@@ -604,6 +612,14 @@ TerrainBakeResult BakeTerrainPage(
 
 Assert:
 
+- `ResolveLegacyTerrainCornerSample(tile, true)` decodes `Color` with the exact
+  legacy shifts below and signed `Height*10.0` centimetres. With
+  `present=false`, two radically different `MapTile` payloads (one all-zero,
+  one with every field nonzero/extreme) and controlled mutations of
+  `TileInfo`, `BaseTex`, `Color`, `Height`, `Region`, `Island`, and all four
+  `Block` bytes all return exactly `Diffuse={255,255,255,255}` and
+  `HeightCm=-200.0`. Presence is the only selector; the absent path must not
+  inspect any tile field;
 - texture UV at source cell 0 equals cell 4;
 - legacy `LW_RGB565TODWORD` shift/BGRA semantics are preserved exactly:
   `0xf800 -> {0,0,248,255}`, `0x07e0 -> {0,252,0,255}`,
@@ -638,12 +654,12 @@ final = roundUnorm8(composite * interpolatedLegacyDiffuse / 255)
 
 `SampleTerrainImageLinear` has already rounded each sampled RGBA channel by
 the Task 3 rule. Blend upper RGB channels in source order and quantize after
-every overlay. Expand the four RGB565 corners to the literal legacy RGBA8
-values above, barycentrically interpolate each diffuse RGB channel in double
-on the selected source triangle, and do not quantize that interpolation until
-the final multiply. Final alpha is 255 for a present textured land cell and 0
-for an absent/untextured cell; atlas alpha controls the RGB overlay and never
-turns an opaque base cell translucent.
+every overlay. Obtain every corner's diffuse from
+`ResolveLegacyTerrainCornerSample`, barycentrically interpolate each diffuse
+RGB channel in double on the selected source triangle, and do not quantize
+that interpolation until the final multiply. Final alpha is 255 for a present
+textured land cell and 0 for an absent/untextured cell; atlas alpha controls
+the RGB overlay and never turns an opaque base cell translucent.
 
 Add dimension and page-math RED cases. `CellsPerPage` and `PixelsPerCell` must
 be nonzero. Compute in checked 64-bit arithmetic:
@@ -696,10 +712,10 @@ Assert:
   table byte `717972`; `TilePresent` has exactly eight zeros at local
   `(x=128,y=112..119)`, source `(2304,2800..2807)`, and every owned sample is
   present;
-- those eight absent halo samples contribute literal full-white diffuse; two
-  otherwise identical bakes whose absent `MapTile` slots contain different
-  stale `Color`, `Height`, `BaseTex`, and `TileInfo` bytes produce identical
-  PNG bytes/hash and identical `UsedTextureIds`;
+- those eight absent halo samples contribute literal full-white diffuse in the
+  real Garner PNG, while the pure resolver test above—not an impossible attempt
+  to mutate value-initialized slots inside a concrete `MapSectionReader`—proves
+  stale `MapTile` bytes cannot affect the absent result;
 - in `TL,TR,BL,BR` order, the right-edge cells at local `(127,y)` have
   diffuse-presence arrays `[present,default-white,present,default-white]` for
   `y=112..118` and `[present,default-white,present,present]` for `y=119`.
@@ -724,8 +740,8 @@ grid page math, missing owned sample/section, missing required-present sample,
 missing used catalog ID, unreadable resolved source texture,
 unreadable/malformed alpha atlas, RSS limit, PNG-size limit, texture-cache
 limit, and RGBA-row limit. Pair the missing-owned mutation with an otherwise
-identical missing-halo case which must pass, and mutate the absent halo slot's
-stale bytes to prove they are ignored. Drive each budget comparison through
+identical missing-halo case which must pass; stale-byte invariance belongs to
+the pure resolver test above. Drive each budget comparison through
 the same production gate used by `BakeTerrainPage`, not a copied test
 predicate. Every fatal case requires `Ok=false`, a nonempty stable `detail`,
 no successful hash/path, and no PNG owned by that attempt after return. A used
@@ -783,8 +799,9 @@ Before rendering, validate every checked dimension and call
 `ReadWindow(SourceCellBounds, 1, 1)`. Validate presence before catalog/decode
 or output creation: all owned/required-present samples are mandatory, while
 right/bottom halo absence is legal and maps to the literal runtime default
-corner diffuse. `TilePresent` is authoritative, so never read the corresponding
-`MapTile` bytes when it is zero. Derive the page-only section origin/grid from
+corner diffuse. Call `ResolveLegacyTerrainCornerSample(tile, present)` for
+each corner and use its `Diffuse`; do not add a second RGB565/default branch.
+`TilePresent` is authoritative. Derive the page-only section origin/grid from
 the half-open source bounds; do not forward Task 1's halo-inclusive
 `SectionPresent` vector as the result mask.
 
@@ -793,9 +810,9 @@ For each output pixel:
 1. derive source cell and pixel-center coordinates `localU=(pixelInCellX+0.5)/PixelsPerCell`, `localV=(pixelInCellY+0.5)/PixelsPerCell`;
 2. sample base texture with `u=((cellX mod 4)+localU)/4`, `v=((cellY mod 4)+localV)/4`, level-0 linear filtering, top-row V orientation, and WRAP on both axes;
 3. for each upper layer, sample its terrain texture with the same coordinates/WRAP; sample the alpha atlas with `u=rectU0+0.01+localU*(0.25-0.02)`, `v=rectV0+0.01+localV*(0.25-0.02)`, linear filtering, and MIRROR on both axes; overlay in source order with the sampled atlas alpha;
-4. expand each present corner's RGB565 with the exact legacy shifts; substitute
-   literal `{255,255,255,255}` for any absent halo corner; select triangle
-   `0-1-2` or `3-2-1`, and barycentrically interpolate its diffuse RGB;
+4. take each corner diffuse from `ResolveLegacyTerrainCornerSample`, select
+   triangle `0-1-2` or `3-2-1`, and barycentrically interpolate its diffuse
+   RGB;
 5. compute the fixed ambient contribution with ambient bytes `{255,255,255}`
    and `dwTColor={0,0,0}`; never apply the scene-object factor 0.6;
 6. apply the specified UNORM quantization order, multiply composite by
@@ -862,10 +879,11 @@ git commit -m "feat(converter): bake Garner terrain page"
 ### Task 6: Generate an adaptive reference-page mesh with error gates
 
 Task 6 is executed in the current serial plan only after Tasks 1–5 are GREEN,
-reviewed, and committed. Its production API depends directly only on Task 1
-`TerrainPage.h`; the GREEN command also builds the Task 5
+reviewed, and committed. It consumes Task 1 `TerrainPage.h` and the shared
+Task 5 `ResolveLegacyTerrainCornerSample` declaration from
+`TerrainPageBaker.h`; the GREEN command also builds the Task 5
 `TerrainPageBudgetProbe` as a regression gate. Do not copy/redeclare
-`MapPageTiles`, `MapCellRect`, or `TerrainPageId`.
+`MapPageTiles`, `MapCellRect`, `TerrainPageId`, or the corner resolver.
 
 **Files:**
 
@@ -969,10 +987,11 @@ Add focused tests for:
    `y=112..118` and `[-60,-200,-100,-100]` cm for `y=119`. Decode the
    corresponding boundary/corner indices and require those literal heights;
    interpolating through fabricated zero-height tiles is a failure.
-   Change all stale `Height`, `Color`, `BaseTex`, and `TileInfo` bytes in those
-   eight absent slots and require byte-identical `.gltf` and `.bin`. This
-   proves presence, not zero/stale `MapTile` storage, selects the original
-   client's shared default tile.
+   Clone the returned `MapPageTiles`, change all stale `Height`, `Color`,
+   `BaseTex`, and `TileInfo` bytes in those eight absent slots, and require
+   byte-identical `.gltf` and `.bin`. Unlike the baker's concrete-reader path,
+   this in-memory mesh input is directly mutable. Together with the pure Task 5
+   resolver test, it proves presence selects the original shared default tile.
 7. Two writes into separate temporary directories produce byte-identical
    `.gltf` and `.bin`.
 8. Malformed page shape/vector sizes, a zero `TilePresent` sample inside the
@@ -1007,12 +1026,14 @@ Validate before writing:
   sample with local `x<128 && y<128` is present;
 - a missing sample is allowed only on the right/bottom halo
   (`x==128 || y==128`) and is the original runtime default height `-200` cm;
-  do not consult its zero/stale `MapTile` bytes;
+  obtain the height through `ResolveLegacyTerrainCornerSample`;
 - every limit is finite and nonnegative.
 
-Interpret signed present `MapTile::Height` as `raw * 10.0` centimetres
-(`raw * 0.1` metres). Candidate steps are tested, inclusively, in the literal
-order `{4,2,1}`. Preserve all 129 samples on every outer edge as actual
+For every present or absent source sample, use
+`ResolveLegacyTerrainCornerSample(tile, present).HeightCm`; do not duplicate
+the signed-height conversion or absent default in Task 6. Candidate steps are
+tested, inclusively, in the literal order `{4,2,1}`. Preserve all 129 samples
+on every outer edge as actual
 vertices. Interior vertices for step 4/2 are at step multiples. Step 1 uses
 all `129x129` vertices and the literal legacy two-triangle topology for every
 cell, making it an exact fallback rather than merely a dense alternate
@@ -1066,8 +1087,8 @@ The vertex set and index stream are canonical:
 Build the triangles once per candidate and use those exact triangles for both
 evaluation and final output. For every one of the 16641 original grid samples,
 evaluate the generated piecewise-linear height in double-precision
-centimetres. Presence-aware source height is `raw*10 cm` for present samples
-and literal `-200 cm` for absent halo samples. Set:
+centimetres. Both evaluator and final mesh obtain every source height from the
+shared resolver; no local raw/default branch is permitted. Set:
 
 ```text
 MaxAbsCm = max(abs(sourceCm - generatedCm))

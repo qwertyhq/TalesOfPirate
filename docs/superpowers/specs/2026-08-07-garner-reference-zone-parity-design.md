@@ -152,6 +152,25 @@ reference/full-map команда попала в `ReadWholeFile`, создал�
   `alpha/total.png`, а не scalar opacity; ID 0 является отдельным no-op и не
   семплирует atlas.
 
+Один shared production resolver в Task 5 `TerrainPageBaker.h`
+владеет corner color/height semantics для baker и mesh:
+
+```cpp
+struct LegacyTerrainCornerSample {
+    std::array<std::uint8_t, 4> Diffuse;
+    double HeightCm;
+};
+
+[[nodiscard]] LegacyTerrainCornerSample ResolveLegacyTerrainCornerSample(
+    const MapTile& tile, bool present) noexcept;
+```
+
+При `present=true` он декодирует `Color` точными legacy shifts и
+возвращает signed `Height*10 cm`. При `present=false` он возвращает
+literal `{255,255,255,255}` и `-200 cm`, не читая ни одного поля
+`tile`. Это не test-only seam: Task 5 обязан брать из него corner
+diffuse, а Task 6 — height, не дублируя presence/default logic.
+
 `MapSectionReader` передаёт per-section presence mask в page manifest. Она
 нужна для отчёта и будущего sea pass. Owned и required-present
 absent section фатальна; generic absent owned cell давала бы прозрачные
@@ -180,8 +199,9 @@ diffuse/height, а texture layers и UV берутся из owned cell. Аним
 5. вычисляет static vertex diffuse по исходной формуле;
 6. умножает texture composite на vertex diffuse.
 
-Все четыре corner samples читаются presence-aware. Для present tile
-RGB565 декодируется по legacy shifts. Для absent halo corner нет
+Все четыре corner samples читаются через
+`ResolveLegacyTerrainCornerSample`. Для present tile RGB565 декодируется
+по legacy shifts. Для absent halo corner нет
 raw RGB565: берётся literal runtime `dwColor=0xffffffff`, то есть
 diffuse `{255,255,255,255}`, и `dwTColor=0`. Подставить сюда raw
 `0xffff` нельзя: legacy decode дал бы `{248,252,248,255}`. Texture и
@@ -228,7 +248,8 @@ Manifest содержит:
 
 Terrain mesh режется по тем же границам 128×128 клеток. UV0 каждой страницы
 нормализован в `[0,1]`.
-Все 129×129 source vertices читаются через тот же presence contract:
+Все 129×129 source vertices читаются через тот же
+`ResolveLegacyTerrainCornerSample`:
 present `Height` означает `raw*10 cm`, absent right/bottom halo означает
 literal runtime height `-200 cm`, а bytes absent `MapTile` игнорируются.
 Absent owned sample остаётся fatal.
@@ -676,8 +697,10 @@ Editor не является входом.
   `H(127,120)=H(128,120)=-100`; поэтому corner arrays
   `TL,TR,BL,BR` равны `[-60,-200,-60,-200]` для
   `y=112..118` и `[-60,-200,-100,-100]` для `y=119`;
-- изменение stale bytes в этих восьми slots не меняет PNG/glTF/bin,
-  а missing owned sample делает bake/mesh невалидным;
+- pure resolver test подаёт два радикально разных `MapTile` и
+  controlled mutations всех полей при `present=false`: все вызовы
+  дают literal white/-200 cm; cloned absent slots не меняют
+  glTF/bin, а missing owned sample делает bake/mesh невалидным;
 - reference output укладывается в 128 MiB RSS и 96 MiB file budget;
 - max/RMS geometry errors проходят пороги 5/2 см.
 
