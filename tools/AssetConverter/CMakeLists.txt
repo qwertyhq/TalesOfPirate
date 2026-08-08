@@ -54,6 +54,7 @@ add_library(AssetConverterLib STATIC
     src/TerrainTextureSampling.cpp
     src/TerrainPageBaker.cpp
     src/TerrainPageMeshWriter.cpp
+    src/TerrainReferenceCommand.cpp
     src/ProcessMetrics.cpp
     src/StbImageDecoder.cpp
     ${CORSAIRS_REPO_ROOT}/sources/Libraries/sqlite3/sqlite3.c
@@ -101,6 +102,7 @@ add_executable(AssetConverterTests
     tests/TestTerrainTextureSampling.cpp
     tests/TestTerrainPageBaker.cpp
     tests/TestTerrainPageMeshWriter.cpp
+    tests/TestTerrainReferenceCommand.cpp
 )
 target_link_libraries(AssetConverterTests PRIVATE AssetConverterLib)
 target_include_directories(AssetConverterTests PRIVATE tests)
@@ -113,6 +115,19 @@ target_compile_definitions(AssetConverterTests
 
 add_test(NAME AssetConverterTests COMMAND AssetConverterTests)
 
+add_executable(TerrainReferenceCommandTests
+    tests/TestMain.cpp
+    tests/TestTerrainReferenceCommand.cpp
+)
+target_link_libraries(TerrainReferenceCommandTests PRIVATE AssetConverterLib)
+target_include_directories(TerrainReferenceCommandTests PRIVATE tests)
+corsairs_set_target_options(TerrainReferenceCommandTests)
+target_compile_definitions(TerrainReferenceCommandTests
+    PRIVATE
+        ASSET_CONVERTER_PATH="$<TARGET_FILE:AssetConverter>"
+        CORSAIRS_REPO_ROOT="${CORSAIRS_REPO_ROOT}")
+add_dependencies(TerrainReferenceCommandTests AssetConverter)
+
 add_executable(
     TerrainPageBudgetProbe
     tests/TerrainPageBudgetProbe.cpp)
@@ -120,10 +135,12 @@ target_link_libraries(
     TerrainPageBudgetProbe
     PRIVATE AssetConverterLib)
 corsairs_set_target_options(TerrainPageBudgetProbe)
-add_dependencies(AssetConverterTests TerrainPageBudgetProbe)
+add_dependencies(AssetConverterTests AssetConverter TerrainPageBudgetProbe)
 target_compile_definitions(
     AssetConverterTests
-    PRIVATE TERRAIN_PAGE_BUDGET_PROBE_PATH="$<TARGET_FILE:TerrainPageBudgetProbe>")
+    PRIVATE
+        ASSET_CONVERTER_PATH="$<TARGET_FILE:AssetConverter>"
+        TERRAIN_PAGE_BUDGET_PROBE_PATH="$<TARGET_FILE:TerrainPageBudgetProbe>")
 add_test(
     NAME TerrainPageBudget
     COMMAND TerrainPageBudgetProbe

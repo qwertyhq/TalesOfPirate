@@ -27,6 +27,10 @@ sources/Server/GameServer/build-posix/
 
 # Промежуточные результаты конвертации ассетов (пересоздаются AssetConverter)
 /artifacts/
+*.block.raw
+*.region.raw
+*.terrain.json
+CorsairsUE/Data/Heights/.garner-runtime-install.*
 
 # Отчёты скриптов редактора — результат прогона, не исходник
 CorsairsUE/Scripts/reports/

@@ -9,6 +9,7 @@
 #include "Corsairs/Tools/AssetConverter/MapWriter.h"
 #include "Corsairs/Tools/AssetConverter/TerrainMeshWriter.h"
 #include "Corsairs/Tools/AssetConverter/SceneObjParser.h"
+#include "Corsairs/Tools/AssetConverter/TerrainReferenceCommand.h"
 #include "Corsairs/Tools/AssetConverter/TextureResolver.h"
 
 #include <algorithm>
@@ -20,6 +21,7 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -348,6 +350,17 @@ bool ConvertOne(const std::filesystem::path& input, const std::filesystem::path&
 } // namespace
 
 int main(int argc, char** argv) {
+    std::vector<std::string_view> arguments;
+    arguments.reserve(static_cast<std::size_t>(argc));
+    for (int index = 0; index < argc; ++index) {
+        arguments.emplace_back(argv[index]);
+    }
+    if (const auto terrainReference =
+            AC::TryRunTerrainReferenceSubcommand(arguments, std::cout, std::cerr);
+        terrainReference.has_value()) {
+        return *terrainReference;
+    }
+
     if (argc < 3) {
         PrintUsage();
         return 2;
