@@ -95,6 +95,9 @@ private:
 	bool bDiagnosticLogged = false;
 	bool bHasValidMovementSpeed = false;
 	bool bSessionMovementAuthorityLocked = false;
+	/** Explicit detach is fail-closed; an unattached test pawn keeps the
+	 *  characterized legacy-input behavior until a session is assigned. */
+	bool bPredictionDisabledWithoutSession = false;
 	bool bPredictionLocked = false;
 	bool bMovementSpeedProtocolErrorReported = false;
 	int64 LastMovementAuthorityEpoch = 0;

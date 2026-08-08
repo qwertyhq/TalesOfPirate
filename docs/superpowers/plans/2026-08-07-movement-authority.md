@@ -841,6 +841,16 @@ world tick. The test must use the new attachment path, not call the legacy
 protects the two settings currently applied inside `UseTerrainHeights` from
 being lost when that API is removed.
 
+Also require fail-closed activation. An unloaded sampler may neither move or
+attach the local pawn nor spawn a remote actor. A missing production metadata
+or block file sets `ACorsairsGameMode::StartupError` to the exact failing path
+and load reason, does not bind the local pawn to Session, blocks later
+`ActorSeen`, and defers `Session::Logout` until the next world tick so the
+`OnStageChanged(InWorld)` callback cannot mutate Session reentrantly.
+The same failure after an earlier successful activation must detach the old
+Session and character-ground sampler, restore non-flying movement, stop
+velocity, and consume pending prediction input before scheduling logout.
+
 - [ ] **Step 3: Verify RED**
 
 Expected compile failures because the sampler does not exist; existing remote center also lacks the capsule half-height.
@@ -863,6 +873,13 @@ blocked = (byte & 128) != 0
 
 Do not clamp. Out of bounds returns sea-height zero and unblocked. `ActorCenter` returns `(X,-Y,height+halfHeight)`.
 
+Both JSON dimensions must be actual `EJson::Number` values, finite, positive,
+integral, and within `int32`; booleans, strings, fractions, and out-of-range
+numbers are errors. Compute the byte count with checked unsigned arithmetic and
+reject an excessive raster before multiplication can overflow. Missing,
+malformed, or wrong-sized runtime artifacts are a startup failure, never a
+sea-height fallback.
+
 GameMode owns one runtime sampler and attaches it to the local pawn and every
 remote `ACorsairsCharacter`. Local and remote use the same `ActorCenter`;
 remote spawn sets `SpawnCollisionHandlingOverride=AlwaysSpawn`.
@@ -874,6 +891,10 @@ switches back to walking. Remove `UseTerrainHeights`, all
 editor-only `CorsairsImport` dependency from `CorsairsGame.Build.cs`.
 Offline scene placement continues to own the separate terrain-surface
 sampler.
+
+Task 6 only implements and validates the runtime consumer. Publishing
+`<map>.terrain.json` and `<map>.block.raw` into `CorsairsUE/Data/Heights` stays
+owned by Garner terrain Task 7, with the packaged/live gate in terrain Task 8.
 
 - [ ] **Step 5: Verify GREEN and commit**
 

@@ -30,6 +30,41 @@ namespace
 			TEXT("Data/Heights") /
 			(MapName + TEXT(".block.raw"));
 	}
+
+	bool ReadPositiveDimension(
+		const TSharedPtr<FJsonObject>& Root,
+		const FString& JsonPath,
+		const TCHAR* Field,
+		int32& OutValue,
+		FString& OutError)
+	{
+		const TSharedPtr<FJsonValue>* Value = Root->Values.Find(Field);
+		if (Value == nullptr || !Value->IsValid() ||
+			(*Value)->Type != EJson::Number)
+		{
+			OutError = FString::Printf(
+				TEXT("%s.%s должен быть положительным целым числом"),
+				*JsonPath,
+				Field);
+			return false;
+		}
+
+		const double Number = (*Value)->AsNumber();
+		if (!FMath::IsFinite(Number) || Number < 1.0 ||
+			Number > static_cast<double>(MAX_int32) ||
+			FMath::FloorToDouble(Number) != Number)
+		{
+			OutError = FString::Printf(
+				TEXT("%s.%s должен быть положительным целым числом не больше %d"),
+				*JsonPath,
+				Field,
+				MAX_int32);
+			return false;
+		}
+
+		OutValue = static_cast<int32>(Number);
+		return true;
+	}
 }
 
 bool FCorsairsCharacterGround::Load(
@@ -64,13 +99,19 @@ bool FCorsairsCharacterGround::Load(
 
 	int32 TileWidth = 0;
 	int32 TileHeight = 0;
-	if (!Root->TryGetNumberField(TEXT("gridWidth"), TileWidth) ||
-		!Root->TryGetNumberField(TEXT("gridHeight"), TileHeight) ||
-		TileWidth <= 0 || TileHeight <= 0)
+	if (!ReadPositiveDimension(
+			Root,
+			JsonPath,
+			TEXT("gridWidth"),
+			TileWidth,
+			OutError) ||
+		!ReadPositiveDimension(
+			Root,
+			JsonPath,
+			TEXT("gridHeight"),
+			TileHeight,
+			OutError))
 	{
-		OutError = FString::Printf(
-			TEXT("%s: gridWidth/gridHeight должны быть положительными целыми числами"),
-			*JsonPath);
 		UE_LOG(LogCorsairsCharacterGround, Error, TEXT("%s"), *OutError);
 		return false;
 	}
@@ -121,14 +162,27 @@ bool FCorsairsCharacterGround::LoadFromBytes(
 		return false;
 	}
 
-	const int64 ExpectedSize =
-		static_cast<int64>(TileWidth) *
-		static_cast<int64>(TileHeight) *
-		QuadrantsPerTile;
-	if (ExpectedSize > MAX_int32 || Bytes.Num() != ExpectedSize)
+	const uint64 TileCount =
+		static_cast<uint64>(TileWidth) *
+		static_cast<uint64>(TileHeight);
+	constexpr uint64 MaxTileCount =
+		static_cast<uint64>(MAX_int32) / QuadrantsPerTile;
+	if (TileCount > MaxTileCount)
 	{
 		OutError = FString::Printf(
-			TEXT("ожидалось %lld bytes для raster %dx%d, получено %d"),
+			TEXT("raster %dx%d слишком велик: максимум %llu source tiles"),
+			TileWidth,
+			TileHeight,
+			MaxTileCount);
+		return false;
+	}
+
+	const int32 ExpectedSize = static_cast<int32>(
+		TileCount * QuadrantsPerTile);
+	if (Bytes.Num() != ExpectedSize)
+	{
+		OutError = FString::Printf(
+			TEXT("ожидалось %d bytes для raster %dx%d, получено %d"),
 			ExpectedSize,
 			TileWidth,
 			TileHeight,

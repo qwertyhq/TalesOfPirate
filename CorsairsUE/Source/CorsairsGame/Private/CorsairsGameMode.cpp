@@ -8,6 +8,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/Paths.h"
+#include "TimerManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCorsairsGameMode, Log, All);
 
@@ -201,8 +202,14 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 		// интерполируемой поверхности сцены.
 		const FIntPoint Spawn = LocalActor.Position;
 		const bool bGroundLoaded =
-			LoadCharacterGround(Session->GetMapName());
-		GroundCharacter(Character, Spawn);
+			ActivateLocalCharacter(
+				Character,
+				Session->GetMapName(),
+				Spawn);
+		if (!bGroundLoaded)
+		{
+			break;
+		}
 		const FVector Location = Character->GetActorLocation();
 		UE_LOG(
 			LogCorsairsGameMode,
@@ -216,8 +223,6 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 			Location.Z,
 			bGroundLoaded ? TEXT("найдена") : TEXT("НЕ НАЙДЕНА"));
 
-		// С этого момента персонаж сам сообщает серверу о перемещении.
-		Character->AttachSession(Session);
 		break;
 	}
 
@@ -238,12 +243,15 @@ bool ACorsairsGameMode::LoadCharacterGround(const FString& MapName)
 		return true;
 	}
 
-	UE_LOG(
-		LogCorsairsGameMode,
-		Error,
+	StartupError = FString::Printf(
 		TEXT("character ground карты %s не загрузился: %s"),
 		*MapName,
 		*Error);
+	UE_LOG(
+		LogCorsairsGameMode,
+		Error,
+		TEXT("%s"),
+		*StartupError);
 	return false;
 }
 
@@ -255,9 +263,9 @@ void ACorsairsGameMode::GroundCharacter(
 	{
 		return;
 	}
-	if (CharacterGround == nullptr)
+	if (CharacterGround == nullptr || !CharacterGround->IsLoaded())
 	{
-		CharacterGround = MakeUnique<FCorsairsCharacterGround>();
+		return;
 	}
 
 	Character->AttachCharacterGround(CharacterGround.Get());
@@ -280,9 +288,9 @@ ACorsairsCharacter* ACorsairsGameMode::SpawnRemoteCharacter(
 	{
 		return nullptr;
 	}
-	if (CharacterGround == nullptr)
+	if (CharacterGround == nullptr || !CharacterGround->IsLoaded())
 	{
-		CharacterGround = MakeUnique<FCorsairsCharacterGround>();
+		return nullptr;
 	}
 
 	const ACorsairsCharacter* DefaultCharacter =
@@ -301,6 +309,49 @@ ACorsairsCharacter* ACorsairsGameMode::SpawnRemoteCharacter(
 		SpawnParameters);
 	GroundCharacter(Spawned, SourcePosition);
 	return Spawned;
+}
+
+bool ACorsairsGameMode::ActivateLocalCharacter(
+	ACorsairsPlayerCharacter* Character,
+	const FString& MapName,
+	const FIntPoint SourcePosition)
+{
+	if (Character == nullptr || Session == nullptr)
+	{
+		return false;
+	}
+	if (!LoadCharacterGround(MapName))
+	{
+		Character->AttachSession(nullptr);
+		Character->AttachCharacterGround(nullptr);
+		ScheduleSessionLogoutAfterGroundFailure();
+		return false;
+	}
+
+	GroundCharacter(Character, SourcePosition);
+	Character->AttachSession(Session);
+	return true;
+}
+
+void ACorsairsGameMode::ScheduleSessionLogoutAfterGroundFailure()
+{
+	UWorld* World = GetWorld();
+	if (World == nullptr || Session == nullptr)
+	{
+		return;
+	}
+
+	const TWeakObjectPtr<UCorsairsSession> FailedSession(Session);
+	World->GetTimerManager().SetTimerForNextTick(
+		FTimerDelegate::CreateWeakLambda(
+			this,
+			[FailedSession]()
+			{
+				if (FailedSession.IsValid())
+				{
+					FailedSession->Logout();
+				}
+			}));
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -333,6 +384,20 @@ ACorsairsCharacter* ACorsairsGameMode::SpawnRemoteCharacterForTests(
 	const FRotator Rotation)
 {
 	return SpawnRemoteCharacter(SourcePosition, Rotation);
+}
+
+bool ACorsairsGameMode::ActivateLocalCharacterForTests(
+	ACorsairsPlayerCharacter* Character,
+	const FString& MapName,
+	const FIntPoint SourcePosition)
+{
+	return ActivateLocalCharacter(Character, MapName, SourcePosition);
+}
+
+void ACorsairsGameMode::HandleActorSeenForTests(
+	const FCorsairsWorldActor& Actor)
+{
+	HandleActorSeen(Actor);
 }
 #endif
 

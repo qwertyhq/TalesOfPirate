@@ -78,6 +78,11 @@ public:
 	ACorsairsCharacter* SpawnRemoteCharacterForTests(
 		FIntPoint SourcePosition,
 		FRotator Rotation);
+	bool ActivateLocalCharacterForTests(
+		ACorsairsPlayerCharacter* Character,
+		const FString& MapName,
+		FIntPoint SourcePosition);
+	void HandleActorSeenForTests(const FCorsairsWorldActor& Actor);
 #endif
 
 private:
@@ -111,6 +116,11 @@ private:
 	ACorsairsCharacter* SpawnRemoteCharacter(
 		FIntPoint SourcePosition,
 		FRotator Rotation);
+	bool ActivateLocalCharacter(
+		ACorsairsPlayerCharacter* Character,
+		const FString& MapName,
+		FIntPoint SourcePosition);
+	void ScheduleSessionLogoutAfterGroundFailure();
 
 	TUniquePtr<FCorsairsCharacterCatalog> CharacterCatalog;
 	TUniquePtr<FCorsairsCharacterGround> CharacterGround;

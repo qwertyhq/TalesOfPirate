@@ -6,9 +6,14 @@
 #include "CorsairsCharacter.h"
 #include "CorsairsGameMode.h"
 #include "CorsairsPlayerCharacter.h"
+#include "EngineUtils.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "HAL/FileManager.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "Tests/AutomationCommon.h"
 
 namespace
@@ -31,6 +36,88 @@ namespace
 		Parameters.SpawnCollisionHandlingOverride =
 			ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 		return Parameters;
+	}
+
+	struct FCharacterGroundDiskFixture
+	{
+		FCharacterGroundDiskFixture()
+		{
+			MapName = TEXT("__corsairs_ground_") +
+				FGuid::NewGuid().ToString(EGuidFormats::Digits);
+			const FString Directory =
+				FPaths::ProjectDir() / TEXT("Data/Heights");
+			MetadataPath = Directory /
+				(MapName + TEXT(".terrain.json"));
+			BlockPath = Directory /
+				(MapName + TEXT(".block.raw"));
+		}
+
+		~FCharacterGroundDiskFixture()
+		{
+			IFileManager::Get().Delete(*MetadataPath, false, true);
+			IFileManager::Get().Delete(*BlockPath, false, true);
+		}
+
+		bool WriteMetadata(const FString& Text) const
+		{
+			return FFileHelper::SaveStringToFile(Text, *MetadataPath);
+		}
+
+		bool WriteBlock(const TArray<uint8>& Bytes) const
+		{
+			return FFileHelper::SaveArrayToFile(Bytes, *BlockPath);
+		}
+
+		void DeleteBlock() const
+		{
+			IFileManager::Get().Delete(*BlockPath, false, true);
+		}
+
+		FString MapName;
+		FString MetadataPath;
+		FString BlockPath;
+	};
+
+	int32 CountMovementBindings(
+		const UCorsairsSession* Session,
+		const ACorsairsPlayerCharacter* Pawn)
+	{
+		int32 Count = 0;
+		for (const UObject* Object :
+			Session->OnMovementChanged.GetAllObjects())
+		{
+			if (Object == Pawn)
+			{
+				++Count;
+			}
+		}
+		return Count;
+	}
+
+	int32 CountAuthorityBindings(
+		const UCorsairsSession* Session,
+		const ACorsairsPlayerCharacter* Pawn)
+	{
+		int32 Count = 0;
+		for (const UObject* Object :
+			Session->OnMovementAuthorityChanged.GetAllObjects())
+		{
+			if (Object == Pawn)
+			{
+				++Count;
+			}
+		}
+		return Count;
+	}
+
+	int32 CountCharacters(UWorld* World)
+	{
+		int32 Count = 0;
+		for (TActorIterator<ACorsairsCharacter> It(World); It; ++It)
+		{
+			++Count;
+		}
+		return Count;
 	}
 }
 
@@ -125,6 +212,16 @@ bool FCorsairsCharacterGroundRejectsInvalidRasterTest::RunTest(const FString&)
 	TestFalse(TEXT("rejected raster is not loaded"), Ground.IsLoaded());
 
 	Error.Empty();
+	TArray<uint8> Empty;
+	TestFalse(
+		TEXT("max dimensions reject without signed overflow"),
+		Ground.LoadFromBytes(MAX_int32, MAX_int32, Empty, Error));
+	TestTrue(
+		TEXT("overflow rejection names the excessive raster"),
+		Error.Contains(TEXT("слишком велик")));
+	TestFalse(TEXT("overflow rejection stays unloaded"), Ground.IsLoaded());
+
+	Error.Empty();
 	AddExpectedError(
 		TEXT("метаданные character ground не найдены"),
 		EAutomationExpectedErrorFlags::Contains,
@@ -133,6 +230,332 @@ bool FCorsairsCharacterGroundRejectsInvalidRasterTest::RunTest(const FString&)
 		TEXT("missing production metadata fails"),
 		Ground.Load(TEXT("__corsairs_missing_character_ground__"), Error));
 	TestTrue(TEXT("missing production data reports an error"), !Error.IsEmpty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsCharacterGroundProductionFilesTest,
+	"Corsairs.Movement.Ground.ValidatesProductionFiles",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsCharacterGroundProductionFilesTest::RunTest(const FString&)
+{
+	FCharacterGroundDiskFixture Fixture;
+	FCorsairsCharacterGround Ground;
+	FString Error;
+	const TArray<uint8> ValidBytes = {0x05, 0x45, 0x85, 0x00};
+	TestTrue(
+		TEXT("valid metadata is written"),
+		Fixture.WriteMetadata(
+			TEXT("{\"gridWidth\":1,\"gridHeight\":1}")));
+	TestTrue(
+		TEXT("valid block raster is written"),
+		Fixture.WriteBlock(ValidBytes));
+	TestTrue(
+		TEXT("real disk load succeeds"),
+		Ground.Load(Fixture.MapName, Error));
+	TestEqual(
+		TEXT("real disk load decodes block byte"),
+		Ground.Sample(FIntPoint(0, 0)).HeightCm,
+		25.0);
+
+	TestTrue(
+		TEXT("malformed metadata is written"),
+		Fixture.WriteMetadata(TEXT("{")));
+	AddExpectedError(
+		Fixture.MapName,
+		EAutomationExpectedErrorFlags::Contains,
+		1);
+	TestFalse(
+		TEXT("malformed metadata is rejected"),
+		Ground.Load(Fixture.MapName, Error));
+	TestTrue(
+		TEXT("malformed metadata error is explicit"),
+		Error.Contains(TEXT("некорректный JSON")));
+
+	const TArray<FString> InvalidNumberMetadata = {
+		TEXT("{\"gridWidth\":true,\"gridHeight\":1}"),
+		TEXT("{\"gridWidth\":\"1\",\"gridHeight\":1}"),
+		TEXT("{\"gridWidth\":1.5,\"gridHeight\":1}"),
+		TEXT("{\"gridWidth\":2147483648,\"gridHeight\":1}"),
+		TEXT("{\"gridWidth\":1e999,\"gridHeight\":1}"),
+		TEXT("{\"gridWidth\":1,\"gridHeight\":false}"),
+	};
+	for (int32 Index = 0; Index < InvalidNumberMetadata.Num(); ++Index)
+	{
+		TestTrue(
+			FString::Printf(TEXT("invalid numeric metadata %d is written"), Index),
+			Fixture.WriteMetadata(InvalidNumberMetadata[Index]));
+		AddExpectedError(
+			Fixture.MapName,
+			EAutomationExpectedErrorFlags::Contains,
+			1);
+		TestFalse(
+			FString::Printf(TEXT("invalid numeric metadata %d is rejected"), Index),
+			Ground.Load(Fixture.MapName, Error));
+		TestTrue(
+			FString::Printf(TEXT("invalid numeric metadata %d names integer contract"), Index),
+			Error.Contains(TEXT("положительным целым")));
+		TestFalse(
+			FString::Printf(TEXT("invalid numeric metadata %d stays unloaded"), Index),
+			Ground.IsLoaded());
+	}
+
+	TestTrue(
+		TEXT("metadata for missing raw is written"),
+		Fixture.WriteMetadata(
+			TEXT("{\"gridWidth\":1,\"gridHeight\":1}")));
+	Fixture.DeleteBlock();
+	AddExpectedError(
+		Fixture.MapName,
+		EAutomationExpectedErrorFlags::Contains,
+		1);
+	TestFalse(
+		TEXT("missing raw raster is rejected"),
+		Ground.Load(Fixture.MapName, Error));
+	TestTrue(
+		TEXT("missing raw error identifies raster"),
+		Error.Contains(TEXT("raster не найден")));
+
+	const TArray<uint8> WrongSizeBytes = {0x05, 0x45, 0x85};
+	TestTrue(
+		TEXT("wrong-size raw is written"),
+		Fixture.WriteBlock(WrongSizeBytes));
+	AddExpectedError(
+		Fixture.MapName,
+		EAutomationExpectedErrorFlags::Contains,
+		1);
+	TestFalse(
+		TEXT("wrong-size raw raster is rejected"),
+		Ground.Load(Fixture.MapName, Error));
+	TestTrue(
+		TEXT("wrong-size raw error states exact expected size"),
+		Error.Contains(TEXT("ожидалось 4 bytes")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsCharacterGroundRejectsUnloadedActorsTest,
+	"Corsairs.Movement.Ground.RejectsUnloadedActors",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsCharacterGroundRejectsUnloadedActorsTest::RunTest(
+	const FString&)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	TestNotNull(TEXT("fail-closed world created"), World);
+	if (World == nullptr)
+	{
+		return false;
+	}
+
+	ACorsairsGameMode* GameMode = World->SpawnActor<ACorsairsGameMode>(
+		ACorsairsGameMode::StaticClass(),
+		FVector::ZeroVector,
+		FRotator::ZeroRotator,
+		AlwaysSpawnParameters());
+	ACorsairsPlayerCharacter* Local =
+		World->SpawnActor<ACorsairsPlayerCharacter>(
+			ACorsairsPlayerCharacter::StaticClass(),
+			FVector(1000.0, 1000.0, 1000.0),
+			FRotator::ZeroRotator,
+			AlwaysSpawnParameters());
+	TestNotNull(TEXT("fail-closed game mode spawned"), GameMode);
+	TestNotNull(TEXT("fail-closed local actor spawned"), Local);
+	if (GameMode == nullptr || Local == nullptr)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	const FVector InitialLocation = Local->GetActorLocation();
+	const float InitialGravity = Local->GetCharacterMovement()->GravityScale;
+	const EMovementMode InitialMode =
+		Local->GetCharacterMovement()->MovementMode;
+	GameMode->GroundCharacterForTests(Local, FIntPoint(0, 0));
+	TestEqual(
+		TEXT("unloaded ground does not move local actor to sea Z"),
+		Local->GetActorLocation(),
+		InitialLocation);
+	TestEqual(
+		TEXT("unloaded ground does not disable local gravity"),
+		Local->GetCharacterMovement()->GravityScale,
+		InitialGravity);
+	TestEqual(
+		TEXT("unloaded ground does not change local movement mode"),
+		Local->GetCharacterMovement()->MovementMode,
+		InitialMode);
+
+	ACorsairsCharacter* Remote =
+		GameMode->SpawnRemoteCharacterForTests(
+			FIntPoint(0, 0),
+			FRotator::ZeroRotator);
+	TestNull(TEXT("unloaded ground refuses remote spawn"), Remote);
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsCharacterGroundActivationFailureTest,
+	"Corsairs.Movement.Ground.ActivationFailureIsFailClosed",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsCharacterGroundActivationFailureTest::RunTest(const FString&)
+{
+	FTestWorldWrapper TestWorld;
+	if (!TestTrue(
+		TEXT("activation world created"),
+		TestWorld.CreateTestWorld(EWorldType::Game)))
+	{
+		return false;
+	}
+	UWorld* World = TestWorld.GetTestWorld();
+	ACorsairsGameMode* GameMode = World->SpawnActor<ACorsairsGameMode>(
+		ACorsairsGameMode::StaticClass(),
+		FVector::ZeroVector,
+		FRotator::ZeroRotator,
+		AlwaysSpawnParameters());
+	APlayerController* Controller = World->SpawnActor<APlayerController>();
+	ACorsairsPlayerCharacter* Pawn =
+		World->SpawnActor<ACorsairsPlayerCharacter>(
+			ACorsairsPlayerCharacter::StaticClass(),
+			FVector(1000.0, 1000.0, 1000.0),
+			FRotator::ZeroRotator,
+			AlwaysSpawnParameters());
+	TestNotNull(TEXT("activation game mode spawned"), GameMode);
+	TestNotNull(TEXT("activation controller spawned"), Controller);
+	TestNotNull(TEXT("activation pawn spawned"), Pawn);
+	if (GameMode == nullptr || Controller == nullptr || Pawn == nullptr)
+	{
+		return false;
+	}
+	GameMode->bAutoLogin = false;
+	Controller->Possess(Pawn);
+	if (!TestTrue(
+		TEXT("activation world begins play"),
+		TestWorld.BeginPlayInTestWorld()))
+	{
+		TestWorld.ForwardErrorMessages(this);
+		return false;
+	}
+	TestTrue(
+		TEXT("catalog is ready before ground activation"),
+		GameMode->IsStartupReady());
+
+	UCorsairsSession* Session = GameMode->GetSession();
+	TestNotNull(TEXT("activation session exists"), Session);
+	if (Session == nullptr)
+	{
+		return false;
+	}
+	Session->SetInWorldForTests(77, FIntPoint(0, 0));
+	Session->SetMovementSpeedForTests(450);
+
+	FString PreviousGroundError;
+	const TArray<uint8> PreviousGroundBytes = {0x01, 0x00, 0x00, 0x00};
+	TestTrue(
+		TEXT("previous character ground loads before retry"),
+		GameMode->LoadCharacterGroundFromBytesForTests(
+			1,
+			1,
+			PreviousGroundBytes,
+			PreviousGroundError));
+	GameMode->GroundCharacterForTests(Pawn, FIntPoint(0, 0));
+	Pawn->AttachSession(Session);
+	Pawn->AddMovementInput(FVector::ForwardVector, 1.0f);
+	Pawn->GetCharacterMovement()->Velocity = FVector(120.0, 0.0, 0.0);
+	TestEqual(
+		TEXT("previous activation binds movement delegate"),
+		CountMovementBindings(Session, Pawn),
+		1);
+	TestEqual(
+		TEXT("previous activation binds authority delegate"),
+		CountAuthorityBindings(Session, Pawn),
+		1);
+	TestEqual(
+		TEXT("previous activation selects flying movement"),
+		Pawn->GetCharacterMovement()->MovementMode,
+		MOVE_Flying);
+	TestFalse(
+		TEXT("previous activation leaves pending prediction input"),
+		Pawn->GetPendingMovementInputVector().IsNearlyZero());
+
+	const FString MapName = TEXT("__corsairs_missing_activation_ground__");
+	const FString MetadataPath =
+		FPaths::ProjectDir() / TEXT("Data/Heights") /
+		(MapName + TEXT(".terrain.json"));
+	const FString LoadReason = FString::Printf(
+		TEXT("метаданные character ground не найдены: %s"),
+		*MetadataPath);
+	const FString ExpectedStartupError = FString::Printf(
+		TEXT("character ground карты %s не загрузился: %s"),
+		*MapName,
+		*LoadReason);
+	const FVector InitialLocation = Pawn->GetActorLocation();
+	AddExpectedError(
+		TEXT("появление персонажа 88 заблокировано"),
+		EAutomationExpectedErrorFlags::Contains,
+		1);
+	AddExpectedError(
+		MapName,
+		EAutomationExpectedErrorFlags::Contains,
+		2);
+	TestFalse(
+		TEXT("missing runtime ground rejects local activation"),
+		GameMode->ActivateLocalCharacterForTests(
+			Pawn,
+			MapName,
+			FIntPoint(0, 0)));
+	TestEqual(
+		TEXT("startup error preserves exact path and load reason"),
+		GameMode->GetStartupError(),
+		ExpectedStartupError);
+	TestEqual(
+		TEXT("failed activation leaves local transform unchanged"),
+		Pawn->GetActorLocation(),
+		InitialLocation);
+	TestTrue(
+		TEXT("failed activation never selects flying movement"),
+		Pawn->GetCharacterMovement()->MovementMode != MOVE_Flying);
+	TestTrue(
+		TEXT("failed activation keeps gravity enabled"),
+		Pawn->GetCharacterMovement()->GravityScale > 0.0f);
+	TestTrue(
+		TEXT("failed reactivation stops predicted velocity"),
+		Pawn->GetCharacterMovement()->Velocity.IsNearlyZero());
+	TestTrue(
+		TEXT("failed reactivation consumes pending prediction input"),
+		Pawn->GetPendingMovementInputVector().IsNearlyZero());
+	TestEqual(
+		TEXT("failed activation does not bind movement delegate"),
+		CountMovementBindings(Session, Pawn),
+		0);
+	TestEqual(
+		TEXT("failed activation does not bind authority delegate"),
+		CountAuthorityBindings(Session, Pawn),
+		0);
+	TestEqual(
+		TEXT("logout is not reentrant inside stage callback"),
+		Session->GetStage(),
+		ECorsairsLoginStage::InWorld);
+
+	const int32 CharactersBeforeSeen = CountCharacters(World);
+	FCorsairsWorldActor Remote;
+	Remote.WorldId = 88;
+	Remote.Position = FIntPoint(0, 0);
+	GameMode->HandleActorSeenForTests(Remote);
+	TestEqual(
+		TEXT("ActorSeen after ground failure spawns nothing"),
+		CountCharacters(World),
+		CharactersBeforeSeen);
+
+	TestWorld.TickTestWorld(1.0f / 60.0f);
+	TestEqual(
+		TEXT("failed activation logs out on the next safe tick"),
+		Session->GetStage(),
+		ECorsairsLoginStage::Idle);
+	TestWorld.ForwardErrorMessages(this);
 	return true;
 }
 

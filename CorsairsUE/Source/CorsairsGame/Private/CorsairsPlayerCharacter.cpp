@@ -85,6 +85,7 @@ void ACorsairsPlayerCharacter::AttachSession(UCorsairsSession* InSession)
 	}
 
 	Session = InSession;
+	bPredictionDisabledWithoutSession = Session == nullptr;
 	TimeSinceReport = 0.0f;
 	bHasValidMovementSpeed = false;
 	bSessionMovementAuthorityLocked = false;
@@ -104,6 +105,11 @@ void ACorsairsPlayerCharacter::AttachSession(UCorsairsSession* InSession)
 			Session->IsMovementAuthorityLocked();
 	}
 	UpdateMovementPredictionState();
+	if (Session == nullptr)
+	{
+		GetCharacterMovement()->StopMovementImmediately();
+		ConsumeMovementInputVector();
+	}
 }
 
 void ACorsairsPlayerCharacter::AttachCharacterGround(
@@ -112,6 +118,11 @@ void ACorsairsPlayerCharacter::AttachCharacterGround(
 	Super::AttachCharacterGround(InGround);
 	if (InGround == nullptr)
 	{
+		GetCharacterMovement()->GravityScale = 1.0f;
+		if (GetCharacterMovement()->MovementMode == MOVE_Flying)
+		{
+			GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+		}
 		return;
 	}
 
@@ -390,7 +401,7 @@ void ACorsairsPlayerCharacter::UpdateMovementPredictionState()
 	if (Session == nullptr)
 	{
 		bSessionMovementAuthorityLocked = false;
-		ApplyMovementPredictionLock(false);
+		ApplyMovementPredictionLock(bPredictionDisabledWithoutSession);
 		return;
 	}
 
