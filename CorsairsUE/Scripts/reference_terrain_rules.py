@@ -13,6 +13,7 @@ import json
 import math
 import os
 from pathlib import Path, PurePosixPath
+import plistlib
 import re
 import stat
 from typing import Any, TypedDict
@@ -62,6 +63,8 @@ _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _TXN = re.compile(r"[0-9a-f]{32}\Z")
 _HEAD = re.compile(r"[0-9a-f]{40}\Z")
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+_BUNDLE_IDENTIFIER = re.compile(
+    r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\Z")
 
 
 @dataclass(frozen=True)
@@ -132,7 +135,7 @@ def _normalized_relative(value: Any) -> bool:
     return (
         not path.is_absolute()
         and path.as_posix() == value
-        and all(part not in ("", ".", "..") for part in path.parts)
+        and all(part not in ("", ".", "..") for part in value.split("/"))
     )
 
 
@@ -1259,6 +1262,148 @@ def _require_file_below(
     return True
 
 
+def _attested_app_contains_executable(
+    attestation: Any, executable: Any,
+) -> bool:
+    if type(attestation) is not dict or type(executable) is not dict:
+        return False
+    app_value = attestation.get("appBundlePath")
+    executable_value = executable.get("path")
+    if (not _normalized_relative(app_value) or
+            not _normalized_relative(executable_value)):
+        return False
+    app = PurePosixPath(app_value)
+    packaged = PurePosixPath(executable_value)
+    try:
+        return (app.suffix == ".app" and packaged.parent.name == "MacOS" and
+                packaged.parents[1].name == "Contents" and
+                packaged.parents[2] == app)
+    except IndexError:
+        return False
+
+
+def validate_sandbox_attestation(
+    data: Any, repo_root: Path,
+) -> list[ValidationIssue]:
+    """Validate the sanitized signed-app/container binding evidence."""
+    issues: list[ValidationIssue] = []
+    expected = {
+        "schemaVersion", "reportType", "status", "transactionId", "sourceHead",
+        "appBundlePath", "bundleIdentifier", "signingIdentifier", "infoPlist",
+        "entitlementsPlist", "codesignVerified", "appSandbox",
+        "containerDataLeaf", "automationReportsRelativePath",
+        "containerMetadataIdentifier", "containerMetadataCreator", "issues",
+    }
+    root = _require_keys(data, expected, "", issues)
+    if root is None:
+        return issues
+    for key, value in (
+        ("schemaVersion", 1), ("reportType", "garner-terrain-app-sandbox"),
+        ("status", "PASS"), ("codesignVerified", True),
+        ("appSandbox", True), ("containerDataLeaf", "Data"),
+    ):
+        if not _check_exact(root[key], value, f"/{key}", issues):
+            return issues
+    if not _validate_identity(root, issues):
+        return issues
+    if not _validate_issue_list(root["status"], root["issues"], "/issues", issues):
+        return issues
+    bundle = root["bundleIdentifier"]
+    if type(bundle) is not str or not _BUNDLE_IDENTIFIER.fullmatch(bundle):
+        return [_issue("INVALID_IDENTITY", "/bundleIdentifier",
+                       "expected signed bundle identifier")]
+    for key in ("signingIdentifier", "containerMetadataIdentifier",
+                "containerMetadataCreator"):
+        if root[key] != bundle:
+            return [_issue("INVALID_IDENTITY", f"/{key}",
+                           "sandbox identity differs from bundle identifier")]
+    app_relative = root["appBundlePath"]
+    if (not _normalized_relative(app_relative) or
+            not app_relative.endswith(".app") or
+            not app_relative.startswith(
+                f"artifacts/maps/package-run/{root['transactionId']}/archive/")):
+        return [_issue("INVALID_FILE", "/appBundlePath",
+                       "app bundle must be the transaction archive app")]
+    app = Path(repo_root).resolve() / PurePosixPath(app_relative)
+    try:
+        app_info = app.lstat()
+        if app.is_symlink() or not stat.S_ISDIR(app_info.st_mode):
+            raise OSError("expected physical app directory")
+    except OSError as exc:
+        return [_issue("INVALID_FILE", "/appBundlePath", str(exc))]
+    info_path = _validate_file_evidence(
+        root["infoPlist"], "/infoPlist", repo_root, issues)
+    if issues or info_path is None:
+        return issues
+    if info_path != app / "Contents/Info.plist":
+        return [_issue("INVALID_FILE", "/infoPlist/path",
+                       "Info.plist is not from the attested app")]
+    entitlements_path = _validate_file_evidence(
+        root["entitlementsPlist"], "/entitlementsPlist", repo_root, issues)
+    if issues or entitlements_path is None:
+        return issues
+    report_prefix = (
+        f"artifacts/maps/reports/runs/{root['transactionId']}/package")
+    if not _require_file_below(
+            root["entitlementsPlist"], "/entitlementsPlist",
+            report_prefix, issues):
+        return issues
+    try:
+        info_payload = info_path.read_bytes()
+        entitlement_payload = entitlements_path.read_bytes()
+        info_value = plistlib.loads(info_payload)
+        entitlement_value = plistlib.loads(entitlement_payload)
+    except (OSError, ValueError, plistlib.InvalidFileException) as exc:
+        return [_issue("INVALID_REPORT", "/entitlementsPlist", str(exc))]
+    if type(info_value) is not dict or info_value.get("CFBundleIdentifier") != bundle:
+        return [_issue("INVALID_IDENTITY", "/infoPlist",
+                       "Info.plist bundle identifier differs")]
+    if (type(entitlement_value) is not dict or
+            entitlement_value.get("com.apple.security.app-sandbox") is not True):
+        return [_issue("INVALID_STATUS", "/entitlementsPlist",
+                       "signed app sandbox entitlement is not true")]
+    canonical_entitlements = plistlib.dumps(
+        entitlement_value, fmt=plistlib.FMT_XML, sort_keys=True)
+    if entitlement_payload != canonical_entitlements:
+        return [_issue("INVALID_REPORT", "/entitlementsPlist",
+                       "expected canonical sorted XML entitlement bytes")]
+    relative_reports = root["automationReportsRelativePath"]
+    if not _normalized_relative(relative_reports):
+        return [_issue("INVALID_FILE", "/automationReportsRelativePath",
+                       "expected sanitized path relative to container Data")]
+    return []
+
+
+def _load_sandbox_attestation_evidence(
+    evidence: Any, pointer: str, repo_root: Path,
+    transaction_id: str, source_head: str,
+    issues: list[ValidationIssue],
+) -> dict[str, Any] | None:
+    path = _validate_file_evidence(evidence, pointer, repo_root, issues)
+    if issues or path is None:
+        return None
+    prefix = f"artifacts/maps/reports/runs/{transaction_id}/package"
+    if not _require_file_below(evidence, pointer, prefix, issues):
+        return None
+    try:
+        value, _ = strict_json_load(path)
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        _first(issues, "INVALID_REPORT", pointer + "/path", str(exc))
+        return None
+    nested = validate_sandbox_attestation(value, repo_root)
+    if nested:
+        problem = nested[0]
+        _first(issues, problem["code"], pointer + problem["field"],
+               problem["detail"])
+        return None
+    if (value["transactionId"] != transaction_id or
+            value["sourceHead"] != source_head):
+        _first(issues, "INVALID_IDENTITY", pointer,
+               "sandbox attestation identity differs")
+        return None
+    return value
+
+
 def validate_evidence_set(
     data: Any,
     pointer: str,
@@ -1531,7 +1676,7 @@ def validate_cook_package_report(
     root = _require_keys(data, {
         "schemaVersion", "reportType", "status", "transactionId", "sourceHead",
         "targetReceipt", "stageManifest", "archiveManifest", "containers",
-        "containerLists", "packagedExecutable", "runtimeFiles",
+        "containerLists", "packagedExecutable", "sandboxAttestation", "runtimeFiles",
         "corsairsImportLeaks", "issues",
     }, "", issues)
     if root is None:
@@ -1550,10 +1695,21 @@ def validate_cook_package_report(
         return [_issue("EDITOR_MODULE_LEAK", "/corsairsImportLeaks",
                        "CorsairsImport must be absent")]
     for key in ("targetReceipt", "stageManifest", "archiveManifest",
-                "packagedExecutable"):
+                "packagedExecutable", "sandboxAttestation"):
         _validate_file_evidence(root[key], f"/{key}", repo_root, issues)
         if issues:
             return issues
+    sandbox_attestation = _load_sandbox_attestation_evidence(
+        root["sandboxAttestation"], "/sandboxAttestation", repo_root,
+        root["transactionId"], root["sourceHead"], issues)
+    if issues:
+        return issues
+    if not _attested_app_contains_executable(
+            sandbox_attestation, root["packagedExecutable"]):
+        return [_issue(
+            "INVALID_FILE", "/sandboxAttestation/appBundlePath",
+            "attested app does not enclose the packaged executable")]
+    inventories: dict[str, dict[str, Any]] = {}
     for key, expected_type in (
         ("stageManifest", "garner-terrain-stage-inventory"),
         ("archiveManifest", "garner-terrain-archive-inventory"),
@@ -1572,6 +1728,17 @@ def validate_cook_package_report(
                 nested["sourceHead"] != root["sourceHead"]):
             return [_issue("INVALID_IDENTITY", f"/{key}",
                            "nested inventory identity/type differs")]
+        inventories[key] = nested
+    archive_records = {
+        item["path"]: item for item in inventories["archiveManifest"]["files"]}
+    if archive_records.get(root["packagedExecutable"]["path"]) != root[
+            "packagedExecutable"]:
+        return [_issue("INVALID_FILE", "/packagedExecutable",
+                       "executable differs from archive inventory")]
+    if archive_records.get(sandbox_attestation["infoPlist"]["path"]) != (
+            sandbox_attestation["infoPlist"]):
+        return [_issue("INVALID_FILE", "/sandboxAttestation/infoPlist",
+                       "Info.plist differs from archive inventory")]
     for key in ("containers", "containerLists"):
         if type(root[key]) is not list or not root[key]:
             return [_issue("INVALID_SCHEMA", f"/{key}", "expected nonempty list")]
@@ -1694,7 +1861,7 @@ def validate_package_evidence(
     root = _require_keys(data, {
         "transactionId", "sourceHead", "targetReceipt", "stageManifest",
         "archiveManifest", "containers", "containerLists",
-        "packagedExecutable", "runtimeFiles",
+        "packagedExecutable", "sandboxAttestation", "runtimeFiles",
     }, pointer, issues)
     if root is None:
         return issues
@@ -1808,6 +1975,21 @@ def validate_package_evidence(
             "packagedExecutable"]:
         return [_issue("INVALID_FILE", pointer + "/packagedExecutable",
                        "executable differs from archive inventory")]
+    sandbox_attestation = _load_sandbox_attestation_evidence(
+        root["sandboxAttestation"], pointer + "/sandboxAttestation", repo_root,
+        transaction_id, source_head, issues)
+    if issues:
+        return issues
+    if not _attested_app_contains_executable(
+            sandbox_attestation, root["packagedExecutable"]):
+        return [_issue(
+            "INVALID_FILE", pointer + "/sandboxAttestation/appBundlePath",
+            "attested app does not enclose the packaged executable")]
+    if archive_records.get(sandbox_attestation["infoPlist"]["path"]) != (
+            sandbox_attestation["infoPlist"]):
+        return [_issue(
+            "INVALID_FILE", pointer + "/sandboxAttestation/infoPlist",
+            "Info.plist differs from archive inventory")]
     if type(root["runtimeFiles"]) is not list or len(root["runtimeFiles"]) != 3:
         return [_issue("INVALID_SCHEMA", pointer + "/runtimeFiles",
                        "expected exactly three packaged runtime records")]
@@ -2052,7 +2234,7 @@ def validate_base_bundle(
                        "Game build/package receipts are not the same evidence")]
     for key in (
         "targetReceipt", "stageManifest", "archiveManifest", "containers",
-        "containerLists", "packagedExecutable",
+        "containerLists", "packagedExecutable", "sandboxAttestation",
     ):
         if package[key] != cook[key]:
             return [_issue("INVALID_PACKAGE", f"/package/{key}",

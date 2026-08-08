@@ -73,6 +73,32 @@ class ModuleDependencyTests(unittest.TestCase):
         self.assertIn("Signature.ToString().ToLower()", runtime)
         self.assertIn("IsLowerHex(OutSha256, 64)", runtime)
 
+    def test_runtime_sandbox_probe_uses_supported_in_process_paths_before_world_load(self):
+        runtime = (ROOT / "CorsairsUE/Source/CorsairsGame/Private/Tests/"
+                   "CorsairsReferenceTerrainRuntimeTests.cpp").read_text(
+                       encoding="utf-8")
+        self.assertIn('#include "HAL/PlatformProcess.h"', runtime)
+        self.assertIn("FParse::Param(", runtime)
+        self.assertIn("CorsairsTerrainSandboxProbe", runtime)
+        self.assertIn("FPlatformProcess::GetGameBundleId()", runtime)
+        self.assertIn("FPlatformProcess::UserHomeDir()", runtime)
+        self.assertIn("FPaths::AutomationReportsDir()", runtime)
+        self.assertIn("EscapeJsonString(", runtime)
+        self.assertEqual(runtime.count("CORSAIRS_TERRAIN_SANDBOX_JSON="), 1)
+        self.assertLess(
+            runtime.index("CORSAIRS_TERRAIN_SANDBOX_JSON="),
+            runtime.index("LoadObject<UWorld>"),
+        )
+        sandbox_start = runtime.index("if (bSandboxProbe)")
+        world_else = runtime.index("\n\telse\n\t{", sandbox_start)
+        sandbox_branch = runtime[sandbox_start:world_else]
+        world_branch = runtime[world_else:]
+        self.assertTrue(sandbox_branch.rstrip().endswith("return true;\n\t}"))
+        self.assertNotIn("CORSAIRS_TERRAIN_RUNTIME_JSON=", sandbox_branch)
+        self.assertIn("LoadObject<UWorld>", world_branch)
+        self.assertIn("CORSAIRS_TERRAIN_RUNTIME_JSON=", world_branch)
+        self.assertNotIn("CORSAIRS_TERRAIN_SANDBOX_JSON=", world_branch)
+
     def test_contract_enum_uses_equality_not_python_alias_spelling(self):
         entrypoint = ROOT / "CorsairsUE/Scripts/import_reference_terrain.py"
         probe = f"""

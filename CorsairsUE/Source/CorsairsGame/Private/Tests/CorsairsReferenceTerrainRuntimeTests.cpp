@@ -10,6 +10,7 @@
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/WorldSettings.h"
 #include "HAL/PlatformMisc.h"
+#include "HAL/PlatformProcess.h"
 #include "Internationalization/Regex.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceConstant.h"
@@ -19,6 +20,7 @@
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Misc/SecureHash.h"
+#include "Serialization/JsonWriter.h"
 #include "UObject/SoftObjectPath.h"
 
 #if PLATFORM_MAC
@@ -122,6 +124,19 @@ namespace
 			*Input.Sha256,
 			Input.SizeBytes);
 	}
+
+	bool NormalizeProbeDirectory(const FString& Raw, FString& Out)
+	{
+		Out.Reset();
+		if (Raw.IsEmpty() || FPaths::IsRelative(Raw))
+		{
+			return false;
+		}
+		Out = FPaths::ConvertRelativePathToFull(Raw);
+		FPaths::RemoveDuplicateSlashes(Out);
+		FPaths::NormalizeDirectoryName(Out);
+		return !Out.IsEmpty() && !FPaths::IsRelative(Out) && Out != TEXT("/");
+	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -139,7 +154,59 @@ bool FCorsairsReferenceTerrainRuntimeTest::RunTest(const FString&)
 		FCommandLine::Get(), TEXT("CorsairsTerrainSourceHead="), SourceHead));
 	TestTrue(TEXT("transaction is 32 lowercase hex"), IsLowerHex(TransactionId, 32));
 	TestTrue(TEXT("source head is 40 lowercase hex"), IsLowerHex(SourceHead, 40));
-
+	const bool bSandboxProbe = FParse::Param(
+		FCommandLine::Get(), TEXT("CorsairsTerrainSandboxProbe"));
+	if (bSandboxProbe)
+	{
+		if (HasAnyErrors())
+		{
+			return false;
+		}
+		const FString BundleIdentifier = FPlatformProcess::GetGameBundleId();
+		FString ContainerDataRoot;
+		FString AutomationReportsRoot;
+		const bool bContainerValid = NormalizeProbeDirectory(
+			FString(FPlatformProcess::UserHomeDir()), ContainerDataRoot);
+		const bool bReportsValid = NormalizeProbeDirectory(
+			FPaths::AutomationReportsDir(), AutomationReportsRoot);
+		TestTrue(TEXT("sandbox bundle identifier is nonempty"),
+			!BundleIdentifier.IsEmpty());
+		TestTrue(TEXT("sandbox container root is normalized absolute"),
+			bContainerValid);
+		TestTrue(TEXT("sandbox container root has Data leaf"),
+			bContainerValid &&
+			FPaths::GetCleanFilename(ContainerDataRoot).Equals(
+				TEXT("Data"), ESearchCase::CaseSensitive));
+		TestTrue(TEXT("automation reports root is normalized absolute"),
+			bReportsValid);
+		TestTrue(TEXT("automation reports root is strictly below container Data"),
+			bContainerValid && bReportsValid &&
+			AutomationReportsRoot != ContainerDataRoot &&
+			FPaths::IsUnderDirectory(AutomationReportsRoot, ContainerDataRoot));
+		if (HasAnyErrors())
+		{
+			return false;
+		}
+		const FString Json = FString::Printf(
+			TEXT("{\"automationReportsRoot\":%s,\"bundleIdentifier\":%s,")
+			TEXT("\"containerDataRoot\":%s,\"issues\":[],")
+			TEXT("\"reportType\":\"garner-terrain-packaged-sandbox\",")
+			TEXT("\"schemaVersion\":1,\"sourceHead\":%s,\"status\":\"PASS\",")
+			TEXT("\"transactionId\":%s}"),
+			*EscapeJsonString(AutomationReportsRoot),
+			*EscapeJsonString(BundleIdentifier),
+			*EscapeJsonString(ContainerDataRoot),
+			*EscapeJsonString(SourceHead),
+			*EscapeJsonString(TransactionId));
+		UE_LOG(
+			LogCorsairsReferenceTerrainRuntime,
+			Display,
+			TEXT("CORSAIRS_TERRAIN_SANDBOX_JSON=%s"),
+			*Json);
+		return true;
+	}
+	else
+	{
 	UWorld* World = LoadObject<UWorld>(nullptr, WorldObject);
 	TestNotNull(TEXT("cooked Garner world loads without play"), World);
 	if (World == nullptr)
@@ -277,6 +344,7 @@ bool FCorsairsReferenceTerrainRuntimeTest::RunTest(const FString&)
 		TEXT("CORSAIRS_TERRAIN_RUNTIME_JSON=%s"),
 		*Json);
 	return true;
+	}
 }
 
 #endif

@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import tempfile
 import unittest
 
@@ -206,6 +207,76 @@ class ReferenceTerrainRulesTests(unittest.TestCase):
     def setUp(self):
         self.fixture = Fixture()
         self.addCleanup(self.fixture.close)
+
+    def _sandbox_attestation_fixture(self):
+        app = (
+            self.fixture.root /
+            f"artifacts/maps/package-run/{TXN}/archive/Mac/Actual.app")
+        info_path = app / "Contents/Info.plist"
+        info_path.parent.mkdir(parents=True, exist_ok=True)
+        info_payload = plistlib.dumps({
+            "CFBundleIdentifier": "com.example.CorsairsUE",
+        }, fmt=plistlib.FMT_XML, sort_keys=True)
+        info_path.write_bytes(info_payload)
+        package_reports = (
+            self.fixture.root / f"artifacts/maps/reports/runs/{TXN}/package")
+        package_reports.mkdir(parents=True, exist_ok=True)
+        entitlements_path = package_reports / "app-entitlements.plist"
+        entitlement_value = {
+            "com.apple.security.app-sandbox": True,
+            "com.apple.security.get-task-allow": True,
+        }
+        entitlements_payload = plistlib.dumps(
+            entitlement_value, fmt=plistlib.FMT_XML, sort_keys=True)
+        entitlements_path.write_bytes(entitlements_payload)
+        attestation = {
+            "appBundlePath": app.relative_to(self.fixture.root).as_posix(),
+            "appSandbox": True,
+            "automationReportsRelativePath": (
+                "Library/Application Support/Epic/CorsairsUE/"
+                "Saved/Automation/Reports"),
+            "bundleIdentifier": "com.example.CorsairsUE",
+            "codesignVerified": True,
+            "containerDataLeaf": "Data",
+            "containerMetadataCreator": "com.example.CorsairsUE",
+            "containerMetadataIdentifier": "com.example.CorsairsUE",
+            "entitlementsPlist": self.fixture.file_evidence(entitlements_path),
+            "infoPlist": self.fixture.file_evidence(info_path),
+            "issues": [],
+            "reportType": "garner-terrain-app-sandbox",
+            "schemaVersion": 1,
+            "signingIdentifier": "com.example.CorsairsUE",
+            "sourceHead": HEAD,
+            "status": "PASS",
+            "transactionId": TXN,
+        }
+        return attestation, {
+            "app": app,
+            "info": info_path,
+            "infoPayload": info_payload,
+            "entitlements": entitlements_path,
+            "entitlementsPayload": entitlements_payload,
+            "packageReports": package_reports,
+        }
+
+    def _assert_sandbox_attestation_issue(self, attestation, code, field):
+        issues = rules.validate_sandbox_attestation(
+            attestation, self.fixture.root)
+        self.assertTrue(issues)
+        self.assertEqual((issues[0]["code"], issues[0]["field"]), (code, field))
+
+    def _write_sandbox_attestation_evidence(
+            self, attestation, paths, leaf="app-sandbox.json"):
+        path = paths["packageReports"] / leaf
+        path.write_bytes(rules.canonical_json_bytes(attestation) + b"\n")
+        return self.fixture.file_evidence(path)
+
+    def test_normalized_relative_rejects_dot_and_empty_components(self):
+        self.assertFalse(rules._normalized_relative("."))
+        self.assertFalse(rules._normalized_relative(""))
+        self.assertFalse(rules._normalized_relative("Reports//index.json"))
+        self.assertFalse(rules._normalized_relative("Reports/"))
+        self.assertTrue(rules._normalized_relative("Reports"))
 
     def test_asset_paths_are_canonical(self):
         self.assertEqual(rules.asset_paths("garner", 17, 21), {
@@ -450,6 +521,304 @@ class ReferenceTerrainRulesTests(unittest.TestCase):
         }
         self.assertEqual(
             rules.validate_inventory_report(inventory, self.fixture.root), [])
+
+    def test_sandbox_attestation_accepts_sanitized_literal_fixture(self):
+        attestation, paths = self._sandbox_attestation_fixture()
+        self.assertEqual(
+            rules.validate_sandbox_attestation(attestation, self.fixture.root), [])
+        single_component = copy.deepcopy(attestation)
+        for key in (
+                "bundleIdentifier", "signingIdentifier",
+                "containerMetadataIdentifier", "containerMetadataCreator"):
+            single_component[key] = "CorsairsUE"
+        paths["info"].write_bytes(plistlib.dumps({
+            "CFBundleIdentifier": "CorsairsUE",
+        }, fmt=plistlib.FMT_XML, sort_keys=True))
+        single_component["infoPlist"] = self.fixture.file_evidence(paths["info"])
+        self.assertEqual(
+            rules.validate_sandbox_attestation(
+                single_component, self.fixture.root), [])
+        executable = {
+            "path": (
+                f"artifacts/maps/package-run/{TXN}/archive/Mac/Actual.app/"
+                "Contents/MacOS/Actual"),
+        }
+        self.assertTrue(rules._attested_app_contains_executable(
+            attestation, executable))
+        changed_app = copy.deepcopy(attestation)
+        changed_app["appBundlePath"] = (
+            f"artifacts/maps/package-run/{TXN}/archive/Mac/Other.app")
+        self.assertFalse(rules._attested_app_contains_executable(
+            changed_app, executable))
+
+    def test_sandbox_attestation_top_level_mutation_matrix(self):
+        attestation, _ = self._sandbox_attestation_fixture()
+        top_level_fields = (
+            "schemaVersion", "reportType", "status", "transactionId",
+            "sourceHead", "appBundlePath", "bundleIdentifier",
+            "signingIdentifier", "infoPlist", "entitlementsPlist",
+            "codesignVerified", "appSandbox", "containerDataLeaf",
+            "automationReportsRelativePath", "containerMetadataIdentifier",
+            "containerMetadataCreator", "issues",
+        )
+        self.assertEqual(set(top_level_fields), set(attestation))
+        for field in top_level_fields:
+            with self.subTest(mutation="delete", field=field):
+                changed = copy.deepcopy(attestation)
+                changed.pop(field)
+                self._assert_sandbox_attestation_issue(
+                    changed, "INVALID_SCHEMA", f"/{field}")
+
+        type_cases = (
+            ("schemaVersion", "1", "INVALID_SCHEMA", "/schemaVersion"),
+            ("reportType", [], "INVALID_SCHEMA", "/reportType"),
+            ("status", [], "INVALID_SCHEMA", "/status"),
+            ("transactionId", [], "INVALID_IDENTITY", "/transactionId"),
+            ("sourceHead", [], "INVALID_IDENTITY", "/sourceHead"),
+            ("appBundlePath", [], "INVALID_FILE", "/appBundlePath"),
+            ("bundleIdentifier", [], "INVALID_IDENTITY", "/bundleIdentifier"),
+            ("signingIdentifier", [], "INVALID_IDENTITY", "/signingIdentifier"),
+            ("infoPlist", [], "INVALID_SCHEMA", "/infoPlist"),
+            ("entitlementsPlist", [], "INVALID_SCHEMA", "/entitlementsPlist"),
+            ("codesignVerified", 1, "INVALID_SCHEMA", "/codesignVerified"),
+            ("appSandbox", 1, "INVALID_SCHEMA", "/appSandbox"),
+            ("containerDataLeaf", [], "INVALID_SCHEMA", "/containerDataLeaf"),
+            ("automationReportsRelativePath", [], "INVALID_FILE",
+             "/automationReportsRelativePath"),
+            ("containerMetadataIdentifier", [], "INVALID_IDENTITY",
+             "/containerMetadataIdentifier"),
+            ("containerMetadataCreator", [], "INVALID_IDENTITY",
+             "/containerMetadataCreator"),
+            ("issues", {}, "INVALID_SCHEMA", "/issues"),
+        )
+        for field, replacement, code, pointer in type_cases:
+            with self.subTest(mutation="mistype", field=field):
+                changed = copy.deepcopy(attestation)
+                changed[field] = replacement
+                self._assert_sandbox_attestation_issue(changed, code, pointer)
+
+        changed = copy.deepcopy(attestation)
+        changed["unexpected"] = True
+        self._assert_sandbox_attestation_issue(
+            changed, "INVALID_SCHEMA", "/unexpected")
+
+        relation_cases = (
+            ("schema-version", "schemaVersion", 2,
+             "INVALID_SCHEMA", "/schemaVersion"),
+            ("report-type", "reportType", "other",
+             "INVALID_SCHEMA", "/reportType"),
+            ("status", "status", "FAIL", "INVALID_SCHEMA", "/status"),
+            ("transaction-shape", "transactionId", "1" * 31,
+             "INVALID_IDENTITY", "/transactionId"),
+            ("head-shape", "sourceHead", "2" * 39,
+             "INVALID_IDENTITY", "/sourceHead"),
+            ("app-path", "appBundlePath", "/private/Actual.app",
+             "INVALID_FILE", "/appBundlePath"),
+            ("bundle-shape", "bundleIdentifier", "not_a_bundle",
+             "INVALID_IDENTITY", "/bundleIdentifier"),
+            ("bundle-relation", "bundleIdentifier", "com.example.Other",
+             "INVALID_IDENTITY", "/signingIdentifier"),
+            ("signing-relation", "signingIdentifier", "com.example.Other",
+             "INVALID_IDENTITY", "/signingIdentifier"),
+            ("codesign", "codesignVerified", False,
+             "INVALID_SCHEMA", "/codesignVerified"),
+            ("sandbox", "appSandbox", False,
+             "INVALID_SCHEMA", "/appSandbox"),
+            ("data-leaf", "containerDataLeaf", "data",
+             "INVALID_SCHEMA", "/containerDataLeaf"),
+            ("absolute-reports", "automationReportsRelativePath", "/private/Reports",
+             "INVALID_FILE", "/automationReportsRelativePath"),
+            ("metadata-id", "containerMetadataIdentifier", "com.example.Other",
+             "INVALID_IDENTITY", "/containerMetadataIdentifier"),
+            ("metadata-creator", "containerMetadataCreator", "com.example.Other",
+             "INVALID_IDENTITY", "/containerMetadataCreator"),
+            ("pass-issues", "issues", [{
+                "code": "TEST", "field": "/test", "detail": "failure",
+            }], "INVALID_STATUS", "/issues"),
+        )
+        for name, field, replacement, code, pointer in relation_cases:
+            with self.subTest(mutation="relation", case=name):
+                changed = copy.deepcopy(attestation)
+                changed[field] = replacement
+                self._assert_sandbox_attestation_issue(changed, code, pointer)
+
+    def test_sandbox_attestation_file_evidence_mutation_matrix(self):
+        attestation, _ = self._sandbox_attestation_fixture()
+        for evidence_key in ("infoPlist", "entitlementsPlist"):
+            for field in ("path", "sha256", "sizeBytes"):
+                with self.subTest(
+                        evidence=evidence_key, mutation="delete", field=field):
+                    changed = copy.deepcopy(attestation)
+                    changed[evidence_key].pop(field)
+                    self._assert_sandbox_attestation_issue(
+                        changed, "INVALID_SCHEMA", f"/{evidence_key}/{field}")
+
+            type_cases = (
+                ("path", [], "INVALID_FILE"),
+                ("sha256", [], "INVALID_HASH"),
+                ("sizeBytes", "1", "INVALID_FILE"),
+            )
+            for field, replacement, code in type_cases:
+                with self.subTest(
+                        evidence=evidence_key, mutation="mistype", field=field):
+                    changed = copy.deepcopy(attestation)
+                    changed[evidence_key][field] = replacement
+                    self._assert_sandbox_attestation_issue(
+                        changed, code, f"/{evidence_key}/{field}")
+
+            changed = copy.deepcopy(attestation)
+            changed[evidence_key]["unexpected"] = True
+            self._assert_sandbox_attestation_issue(
+                changed, "INVALID_SCHEMA", f"/{evidence_key}/unexpected")
+
+            cases = (
+                ("absolute-path", "path", "/private/input.plist", "INVALID_FILE"),
+                ("traversal-path", "path", "../input.plist", "INVALID_FILE"),
+                ("malformed-hash", "sha256", "x", "INVALID_HASH"),
+                ("wrong-hash", "sha256", "0" * 64, "INVALID_HASH"),
+                ("zero-size", "sizeBytes", 0, "INVALID_FILE"),
+                ("wrong-size", "sizeBytes",
+                 attestation[evidence_key]["sizeBytes"] + 1, "INVALID_FILE"),
+            )
+            for name, field, replacement, code in cases:
+                with self.subTest(evidence=evidence_key, mutation=name):
+                    changed = copy.deepcopy(attestation)
+                    changed[evidence_key][field] = replacement
+                    self._assert_sandbox_attestation_issue(
+                        changed, code, f"/{evidence_key}/{field}")
+
+        wrong_info = copy.deepcopy(attestation)
+        wrong_info["infoPlist"] = copy.deepcopy(attestation["entitlementsPlist"])
+        self._assert_sandbox_attestation_issue(
+            wrong_info, "INVALID_FILE", "/infoPlist/path")
+        wrong_entitlements = copy.deepcopy(attestation)
+        wrong_entitlements["entitlementsPlist"] = copy.deepcopy(
+            attestation["infoPlist"])
+        self._assert_sandbox_attestation_issue(
+            wrong_entitlements, "INVALID_FILE", "/entitlementsPlist/path")
+
+    def test_sandbox_attestation_rehashes_physical_file_mutation_matrix(self):
+        attestation, paths = self._sandbox_attestation_fixture()
+        for evidence_key, path_key, payload_key in (
+                ("infoPlist", "info", "infoPayload"),
+                ("entitlementsPlist", "entitlements", "entitlementsPayload")):
+            path = paths[path_key]
+            payload = paths[payload_key]
+            auxiliary = path.with_name(path.name + ".mutation-source")
+            for mutation, code, field in (
+                    ("missing", "INVALID_FILE", "path"),
+                    ("tampered", "INVALID_HASH", "sha256"),
+                    ("symlink", "INVALID_FILE", "path"),
+                    ("hardlink", "INVALID_FILE", "path")):
+                with self.subTest(evidence=evidence_key, mutation=mutation):
+                    if auxiliary.exists() or auxiliary.is_symlink():
+                        auxiliary.unlink()
+                    if path.exists() or path.is_symlink():
+                        path.unlink()
+                    path.write_bytes(payload)
+                    try:
+                        if mutation == "missing":
+                            path.unlink()
+                        elif mutation == "tampered":
+                            path.write_bytes(b"x" * len(payload))
+                        elif mutation == "symlink":
+                            path.rename(auxiliary)
+                            path.symlink_to(auxiliary.name)
+                        else:
+                            os.link(path, auxiliary)
+                        self._assert_sandbox_attestation_issue(
+                            copy.deepcopy(attestation), code,
+                            f"/{evidence_key}/{field}")
+                    finally:
+                        if path.exists() or path.is_symlink():
+                            path.unlink()
+                        if auxiliary.exists() or auxiliary.is_symlink():
+                            auxiliary.unlink()
+                        path.write_bytes(payload)
+
+    def test_sandbox_attestation_plist_content_mutation_matrix(self):
+        attestation, paths = self._sandbox_attestation_fixture()
+        changed = copy.deepcopy(attestation)
+        paths["info"].write_bytes(plistlib.dumps({
+            "CFBundleIdentifier": "com.example.Other",
+        }, fmt=plistlib.FMT_XML, sort_keys=True))
+        changed["infoPlist"] = self.fixture.file_evidence(paths["info"])
+        self._assert_sandbox_attestation_issue(
+            changed, "INVALID_IDENTITY", "/infoPlist")
+        paths["info"].write_bytes(paths["infoPayload"])
+
+        entitlement_cases = (
+            ("malformed", b"not-a-plist", "INVALID_REPORT"),
+            ("non-dict", plistlib.dumps(
+                ["com.apple.security.app-sandbox"],
+                fmt=plistlib.FMT_XML, sort_keys=True), "INVALID_STATUS"),
+            ("noncanonical", plistlib.dumps({
+                "com.apple.security.app-sandbox": True,
+            }, fmt=plistlib.FMT_BINARY, sort_keys=False), "INVALID_REPORT"),
+            ("missing-sandbox", plistlib.dumps({
+                "com.apple.security.get-task-allow": True,
+            }, fmt=plistlib.FMT_XML, sort_keys=True), "INVALID_STATUS"),
+            ("false-sandbox", plistlib.dumps({
+                "com.apple.security.app-sandbox": False,
+            }, fmt=plistlib.FMT_XML, sort_keys=True), "INVALID_STATUS"),
+            ("mistyped-sandbox", plistlib.dumps({
+                "com.apple.security.app-sandbox": "true",
+            }, fmt=plistlib.FMT_XML, sort_keys=True), "INVALID_STATUS"),
+        )
+        for name, payload, code in entitlement_cases:
+            with self.subTest(mutation=name):
+                paths["entitlements"].write_bytes(payload)
+                changed = copy.deepcopy(attestation)
+                changed["entitlementsPlist"] = self.fixture.file_evidence(
+                    paths["entitlements"])
+                self._assert_sandbox_attestation_issue(
+                    changed, code, "/entitlementsPlist")
+        paths["entitlements"].write_bytes(paths["entitlementsPayload"])
+
+    def test_cook_validator_prefixes_nested_sandbox_attestation_failures(self):
+        attestation, paths = self._sandbox_attestation_fixture()
+        outer_evidence = {}
+        for name in ("receipt", "stage", "archive", "executable"):
+            path = paths["packageReports"] / f"outer-{name}.bin"
+            path.write_bytes(name.encode("ascii"))
+            outer_evidence[name] = self.fixture.file_evidence(path)
+
+        def cook_report(sandbox_evidence):
+            return {
+                "archiveManifest": outer_evidence["archive"],
+                "containerLists": [],
+                "containers": [],
+                "corsairsImportLeaks": [],
+                "issues": [],
+                "packagedExecutable": outer_evidence["executable"],
+                "reportType": "garner-terrain-cook-package",
+                "runtimeFiles": [],
+                "sandboxAttestation": sandbox_evidence,
+                "schemaVersion": 1,
+                "sourceHead": HEAD,
+                "stageManifest": outer_evidence["stage"],
+                "status": "PASS",
+                "targetReceipt": outer_evidence["receipt"],
+                "transactionId": TXN,
+            }
+
+        for name, mutate, code, field in (
+                ("nested-field", lambda value: value.__setitem__(
+                    "appSandbox", False), "INVALID_SCHEMA",
+                 "/sandboxAttestation/appSandbox"),
+                ("nested-identity", lambda value: value.__setitem__(
+                    "sourceHead", "3" * 40), "INVALID_IDENTITY",
+                 "/sandboxAttestation")):
+            with self.subTest(mutation=name):
+                changed = copy.deepcopy(attestation)
+                mutate(changed)
+                evidence = self._write_sandbox_attestation_evidence(
+                    changed, paths, f"{name}.json")
+                issues = rules.validate_cook_package_report(
+                    cook_report(evidence), self.fixture.root)
+                self.assertTrue(issues)
+                self.assertEqual(
+                    (issues[0]["code"], issues[0]["field"]), (code, field))
 
     def test_base_bundle_rejects_mutable_report_receipt_or_binary_path(self):
         run_root = (
