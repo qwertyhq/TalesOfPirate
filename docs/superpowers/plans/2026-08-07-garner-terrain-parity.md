@@ -1956,7 +1956,37 @@ git commit -m "feat(converter): add Garner terrain reference command"
 
 ---
 
-### Task 8: Import, assign, and validate the reference page in Unreal
+### Task 8: Rebuild, import, package, and attest the Garner reference terrain
+
+Task 8 starts only after terrain Tasks 1–7 are GREEN, independently reviewed,
+and committed. It consumes the one published Task 7 top manifest
+`artifacts/maps/garner.reference-albedo.json`; it never discovers a run by
+directory order and never trusts ignored `Content` from an earlier session.
+
+The task has three explicit acceptance layers:
+
+1. **Owned here:** clean-checkout terrain command/installer, deterministic
+   `/Game/Maps/Garner` bootstrap, two-pass reference import, independent
+   editor checker, Mac Editor/Game builds, cook/package audit, and a packaged
+   NullRHI runtime smoke test.
+2. **Required prerequisite for the Game/cook/runtime layer:** Movement Task 6
+   has replaced `UCorsairsTerrainHeights` with the runtime
+   `FCorsairsCharacterGround` and removed the Editor-only
+   `CorsairsGame -> CorsairsImport` dependency. Editor-only terrain import may
+   be developed before that point, but Task 8 may not claim full GREEN or a
+   successful runtime package while the reverse dependency remains.
+3. **Downstream, not duplicated here:** scene parity Task 8 consumes the
+   atomically published terrain-base bundle and owns the instrumented original
+   plus UE graphical capture at 1920x1080, 30 Hz, tick 120. A terrain-only
+   marker world is not a valid visual comparison with the populated original
+   city, so this task emits no fake parity screenshot and makes no visual-
+   parity claim.
+
+The implementation must preserve the exact user rule: all heavyweight
+commands are blocking and sequential, run at `nice -n 10`, native/UE
+parallelism is capped at two, and every owned Editor/client/process tree is
+reaped immediately after its active step. No original `Game.exe` or
+CrossOver/Wine process is launched by this task.
 
 **Files:**
 
@@ -1967,15 +1997,90 @@ git commit -m "feat(converter): add Garner terrain reference command"
 - Create: `CorsairsUE/Scripts/tests/test_reference_terrain_rules.py`
 - Create: `CorsairsUE/Scripts/tests/test_module_dependencies.py`
 - Create: `CorsairsUE/Source/CorsairsImport/Private/Tests/ReferenceTerrainAssetTests.cpp`
+- Create: `CorsairsUE/Source/CorsairsGame/Private/Tests/CorsairsReferenceTerrainRuntimeTests.cpp`
+- Create: `scripts/build_garner_reference_terrain.py`
+- Create: `scripts/tests/test_build_garner_reference_terrain.py`
 - Modify: `CorsairsUE/Scripts/setup_terrain_material.py`
 - Modify: `CorsairsUE/Scripts/apply_terrain_material.py`
 - Modify: `CorsairsUE/Scripts/place_terrain.py`
 - Modify: `CorsairsUE/Source/CorsairsImport/CorsairsImport.Build.cs`
+- Modify: `CorsairsUE/Source/CorsairsGame/CorsairsGame.Build.cs`
 
-**Interfaces:**
+Do not modify or stage Task 7 outputs, `Content`, `artifacts`, installed
+`Data/Heights` products, `databases/game.db`, `__pycache__`, or another
+agent's tracked WIP. The Task 8 commit contains only the tracked sources above.
 
-Pure Python contracts (`reference_terrain_rules.py` imports no `unreal`
-module):
+## Exact handoff from Tasks 1–7
+
+Before any Unreal mutation, rerun and validate the exact Task 7 chain:
+
+```text
+terrain-reference command
+  -> artifacts/maps/runs/<one-run-id>/seven regular files
+  -> artifacts/maps/garner.reference-albedo.json published last
+  -> install_runtime_map_data.py
+  -> CorsairsUE/Data/Heights/garner.block.raw
+  -> CorsairsUE/Data/Heights/garner.terrain.json
+```
+
+The top manifest is schema 1 and algorithm
+`legacy-fixed-pipeline-v1`. Require source map SHA-256, page `(17,21)`, source
+bounds `{2176,2688,128,128}`, `pixelsPerCell=32`, dimensions `4096x4096`,
+ambient `[1,1,1]`, `dwTColor=0`, required-present rect
+`{2193,2756,80,47}`, a sorted unique real texture-ID set, a 16x16 section
+mask rooted at `(272,336)` with exactly 256 ones, seven canonical
+`runs/<one-run-id>/<expected-leaf>` paths/hashes, zero absent/unresolved
+counts, and every Task 5/6 budget and geometry metric.
+
+The seven leaves are exact and distinct:
+
+```text
+garner.height.r16
+garner.block.raw
+garner.region.raw
+garner.terrain.json
+garner.albedo_17_21.png
+garner.terrain_17_21.gltf
+garner.terrain_17_21.bin
+```
+
+`validate_manifest` reopens and hashes all seven files from
+`manifest_path.parent`; no report-supplied hash is trusted. The installer is
+run twice. The first result must make the two runtime files equal the
+manifest's `block` and `terrainMetadata` hashes; the second must be a true
+no-op. Installer rollback tests from Task 7 remain part of the full Python
+suite.
+
+The clean orchestrator uses the exact Task 7 production arguments before the
+Editor build; it does not accept a hand-written manifest:
+
+```bash
+nice -n 10 ./tools/AssetConverter/build/AssetConverter terrain-reference \
+  --map Client/map/garner.map \
+  --database databases/gamedata.sqlite \
+  --client-root Client \
+  --alpha Client/texture/terrain/alpha/total.png \
+  --output artifacts/maps \
+  --page 17 21 \
+  --require-present-rect 2193 2756 80 47 \
+  --max-rss-mib 128 \
+  --max-cache-mib 32 \
+  --max-png-mib 96 \
+  --max-height-error-cm 5 \
+  --max-rms-error-cm 2
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 \
+  CorsairsUE/Scripts/install_runtime_map_data.py \
+  artifacts/maps/garner.reference-albedo.json \
+  CorsairsUE/Data/Heights
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 \
+  CorsairsUE/Scripts/install_runtime_map_data.py \
+  artifacts/maps/garner.reference-albedo.json \
+  CorsairsUE/Data/Heights
+```
+
+## Pure Python contracts
+
+`reference_terrain_rules.py` imports no `unreal` module and exposes:
 
 ```python
 from dataclasses import dataclass
@@ -1990,6 +2095,8 @@ class ValidationIssue(TypedDict):
 
 
 REFERENCE_GAME_MODE = "/Script/CorsairsGame.CorsairsGameMode"
+REFERENCE_MAP_PACKAGE = "/Game/Maps/Garner"
+REFERENCE_WORLD_OBJECT = "/Game/Maps/Garner.Garner"
 
 
 @dataclass(frozen=True)
@@ -2027,8 +2134,7 @@ def reference_actor_object_path(
 
 def overlapping_legacy_tiles(
     page_bounds: tuple[float, float, float, float],
-    actor_bounds:
-        list[tuple[str, float, float, float, float]],
+    actor_bounds: list[tuple[str, float, float, float, float]],
 ) -> list[str]: ...
 
 
@@ -2038,30 +2144,17 @@ def assert_legacy_target_allowed(
 ) -> None: ...
 
 
-def validate_import_report(data: dict) -> list[ValidationIssue]: ...
-
-
 def validate_level_build_report(data: dict) -> list[ValidationIssue]: ...
-
-
+def validate_import_report(data: dict) -> list[ValidationIssue]: ...
 def validate_idempotent_import_reports(
     first: dict,
     second: dict,
 ) -> list[ValidationIssue]: ...
+def validate_check_report(data: dict) -> list[ValidationIssue]: ...
+def validate_base_bundle(data: dict, bundle_path: Path) -> list[ValidationIssue]: ...
 ```
 
-`manifest_path` is required because the only path base is
-`manifest_path.parent`, identical to C++ `manifestDirectory`. Validation
-requires every entry to match `runs/<one-run-id>/<expected-leaf>`, resolves
-that manifest-relative path against the top manifest parent, rejects
-absolute paths, `..`, mixed run IDs, nested `runs`, and leaf-only paths, and
-requires the resolved target (including symlinks) to remain under the
-resolved manifest directory. It then reads the actual seven referenced
-files, verifies every SHA-256, and recomputes `metrics.totalOutputBytes`.
-Validation without file I/O is not allowed to claim that a manifest is
-valid.
-
-Implement `asset_paths` with this exact body:
+`asset_paths` and `reference_actor_object_path` use these exact bodies:
 
 ```python
 def asset_paths(
@@ -2078,13 +2171,8 @@ def asset_paths(
         "material": "/Game/Terrain/Reference/M_TerrainReference",
         "instance": f"{root}/MI_{stem}",
     }
-```
 
-Implement the actor helper with this exact body so reports, importer,
-checker, and pure tests include the world object between package and
-`PersistentLevel`:
 
-```python
 def reference_actor_object_path(
     map_package: str,
     map_name: str,
@@ -2099,297 +2187,257 @@ def reference_actor_object_path(
     )
 ```
 
-`validate_manifest` requires schema version 1, algorithm `legacy-fixed-pipeline-v1`, exact page/source-cell/frustum bounds, sorted unique `usedTextureIds`, exact section grid and row-major mask length/content, every canonical manifest-relative file path/hash including paired `.gltf/.bin`, ambient/dwTColor, and all metrics including `totalOutputBytes` and `sharedBoundaryMaxCm`. It recomputes total output bytes from the referenced files and requires equality. It returns structured errors for absent sections, unresolved layers, missing hashes, page-size mismatch, and violated RSS/file/geometry budgets; it must not return an empty list for any invalid manifest.
-
-`overlapping_legacy_tiles` must use strict rectangle overlap on all four edges and return actor names in sorted order.
-
-**Editor entry points and report DTOs:**
-
-```python
-# build_reference_terrain_level.py
-def run_build(
-    manifest_path: Path,
-    map_package: str,
-    report_path: Path,
-) -> dict: ...
-
-
-# import_reference_terrain.py
-def run_import(
-    manifest_path: Path,
-    map_package: str,
-    report_path: Path,
-) -> dict: ...
-
-
-# check_reference_terrain.py
-def run_check(
-    manifest_path: Path,
-    map_package: str,
-    level_build_report_path: Path,
-    first_import_report_path: Path,
-    second_import_report_path: Path,
-    report_path: Path,
-) -> dict: ...
-```
-
-All three scripts parse exactly these positional arguments from
-`sys.argv[1:]`,
-write their JSON report through `<report>.tmp` plus `os.replace`, and raise
-`RuntimeError` after writing the report when any issue exists. A
-`Python script executed successfully` line is never treated as success.
-
-`build_reference_terrain_level.py` is the tracked clean-checkout builder for
-this terrain-only plan. Its only prerequisites are a successful Task 7
-manifest, the tracked `CorsairsUE.uproject`/modules, and the tracked builder
-and rule scripts from Task 8. It must not call `place_all_maps.py`: that
-existing builder also requires generated scene glTF imports,
-`artifacts/maps/garner.objects.json`, `model_map.json`, legacy terrain mesh
-imports, materials, lighting, and gameplay placement owned by other plans.
-None of those untracked Content products is a hidden prerequisite here.
-
-The builder validates the Task 7 manifest first, requires the literal map
-package `/Game/Maps/Garner`, removes any ignored/generated existing map
-package, and creates a new level with `LevelEditorSubsystem.new_level`.
-Before saving, it resolves
-`unreal.load_class(None, REFERENCE_GAME_MODE)`, requires a non-null class,
-and sets `world.get_world_settings().default_game_mode` to that exact class.
-It also spawns one empty marker actor with object name and label
-`ReferenceTerrainBuildRoot` plus tag `CorsairsReferenceTerrainBuildRoot`.
-It saves the map, reloads it, and requires
-`world.get_outermost().get_name() == "/Game/Maps/Garner"` and
-`world.get_path_name() == "/Game/Maps/Garner.Garner"`, then reads the
-reloaded `WorldSettings.default_game_mode` and requires its class path to be
-exactly `REFERENCE_GAME_MODE`. The resulting terrain-free marker/GameMode
-world is only a deterministic bootstrap and is explicitly not a playable or
-accepted terrain result. No GREEN or acceptance gate may stop after the
-builder; acceptance happens only after the importer has added and validated
-the reference terrain actor while preserving the exact GameMode. The base
-deliberately contains no scene population or legacy dominant terrain; those
-are not fabricated for this test. The importer and checker still enumerate
-actual legacy terrain actors and enforce overlap rules, so the same scripts
-remain valid when a later full-world builder runs before them.
-
-The builder atomically writes and self-validates this report:
-
-```json
-{
-  "schemaVersion": 1,
-  "kind": "reference-terrain-level-build",
-  "manifestPath": "/absolute/repo/artifacts/maps/garner.reference-albedo.json",
-  "manifestSha256": "<sha256>",
-  "mapPackage": "/Game/Maps/Garner",
-  "worldObjectPath": "/Game/Maps/Garner.Garner",
-  "markerObjectPath": "/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrainBuildRoot",
-  "defaultGameMode": "/Script/CorsairsGame.CorsairsGameMode",
-  "mapFilename": "/absolute/repo/CorsairsUE/Content/Maps/Garner.umap",
-  "mapSha256": "<sha256>",
-  "replacedExistingMap": false,
-  "issues": []
-}
-```
-
-`validate_level_build_report` requires all fields/types, the literal package,
-world/marker paths, literal `defaultGameMode == REFERENCE_GAME_MODE`,
-normalized absolute filenames, lowercase 64-hex hashes, and an empty issue
-list. `check_reference_terrain.py` validates this report and its SHA-256,
-then requires the marker and exact GameMode to exist in the actually loaded
-world. The builder report's `mapSha256` is the saved pre-import base hash;
-importer mutations are expected to change it.
-
-Every import report has this exact shape; every list and
-`finalPackageHashes` is sorted by package/object path:
-
-```json
-{
-  "schemaVersion": 1,
-  "kind": "reference-terrain-import",
-  "manifestPath": "<absolute normalized path>",
-  "manifestSha256": "<sha256>",
-  "mapPackage": "/Game/Maps/Garner",
-  "canonicalObjects": {
-    "mesh": "/Game/Terrain/Reference/Garner/SM_Garner_17_21",
-    "texture": "/Game/Terrain/Reference/Garner/T_Garner_17_21",
-    "material": "/Game/Terrain/Reference/M_TerrainReference",
-    "instance": "/Game/Terrain/Reference/Garner/MI_Garner_17_21",
-    "actor": "/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrain_Garner_17_21"
-  },
-  "created": [
-    {
-      "objectPath": "<object>",
-      "packageName": "<long package name>",
-      "beforeSha256": null,
-      "afterSha256": "<saved package sha256>"
-    }
-  ],
-  "updated": [
-    {
-      "objectPath": "<object>",
-      "packageName": "<long package name>",
-      "beforeSha256": "<sha256>",
-      "afterSha256": "<saved package sha256>"
-    }
-  ],
-  "deleted": [
-    {
-      "objectPath": "<object>",
-      "packageName": "<owning long package name>",
-      "beforeSha256": "<sha256>",
-      "afterSha256": "<owning package sha256 or null when package is gone>"
-    }
-  ],
-  "savedPackages": [
-    {
-      "packageName": "<long package name>",
-      "filename": "<absolute .uasset/.umap path>",
-      "sha256": "<sha256>"
-    }
-  ],
-  "finalPackageHashes": [
-    {
-      "packageName": "<long package name>",
-      "filename": "<absolute .uasset/.umap path>",
-      "sha256": "<sha256>"
-    }
-  ],
-  "issues": []
-}
-```
-
-`created`, `updated`, and `deleted` describe object-level mutations and
-carry the owning package hash before/after the save. `savedPackages`
-contains every package actually written in this run. `finalPackageHashes`
-always contains the five managed packages after the run: the four canonical
-asset packages and `/Game/Maps/Garner`. Hashes are computed from the saved
-`.uasset`/`.umap` files, never from object names or timestamps.
-
-`validate_import_report` rejects missing/wrongly typed fields, unsorted or
-duplicate records, malformed hashes, mutation records whose after-hash does
-not agree with `finalPackageHashes`, and saved packages absent from the final
-set. `validate_idempotent_import_reports` additionally requires identical
-manifest/map/canonical-object identity, requires the second report's
-`created`, `updated`, `deleted`, and `savedPackages` arrays all to be empty,
-and requires byte-for-byte equality of the two `finalPackageHashes` arrays.
-
-The check report has this exact top-level/observation shape. Asset/class
-records and package hashes are sorted by path:
-
-```json
-{
-  "schemaVersion": 1,
-  "kind": "reference-terrain-check",
-  "manifestPath": "<absolute normalized path>",
-  "manifestSha256": "<sha256>",
-  "mapPackage": "/Game/Maps/Garner",
-  "levelBuildReportSha256": "<sha256>",
-  "firstImportReportSha256": "<sha256>",
-  "secondImportReportSha256": "<sha256>",
-  "actualPackageHashes": [],
-  "observations": {
-    "loadedWorldPackage": "/Game/Maps/Garner",
-    "loadedWorldObject": "/Game/Maps/Garner.Garner",
-    "buildMarker": "/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrainBuildRoot",
-    "defaultGameMode": "/Script/CorsairsGame.CorsairsGameMode",
-    "assets": [],
-    "textureNeverStream": false,
-    "material": {
-      "blendMode": "masked",
-      "shadingModel": "unlit",
-      "staticMeshUsage": true,
-      "naniteUsage": true,
-      "emissiveInput": "T_Garner_17_21.RGB",
-      "opacityMaskInput": "T_Garner_17_21.A"
-    },
-    "instanceParent": "/Game/Terrain/Reference/M_TerrainReference",
-    "instanceTexture": "/Game/Terrain/Reference/Garner/T_Garner_17_21",
-    "meshMaterial": "/Game/Terrain/Reference/Garner/MI_Garner_17_21",
-    "referenceActors": [
-      {
-        "objectPath": "/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrain_Garner_17_21",
-        "label": "ReferenceTerrain_Garner_17_21",
-        "locationCm": [217600.0, -268800.0, 0.0],
-        "boundsCm": [217600.0, -281600.0, 230400.0, -268800.0]
-      }
-    ],
-    "overlappingLegacyActors": [],
-    "taggedLegacyActors": [],
-    "visibleOverlaps": [],
-    "grassOverrides": []
-  },
-  "issues": []
-}
-```
-
-Success requires `actualPackageHashes == second.finalPackageHashes`, exactly
-one observed build marker, exactly one observed reference actor with the
-required world-qualified object path/transform/bounds, actual
-`defaultGameMode == REFERENCE_GAME_MODE`, and empty `visibleOverlaps`,
-`grassOverrides`, and `issues`.
-
-- [ ] **Step 1: Add RED Python tests**
-
-Build a valid manifest fixture with seven real temporary files and literal
-hashes. Deep-copy it for a table-driven mutation test. The table must cover
-at least:
+Their required outputs are:
 
 ```text
-schemaVersion missing/wrong
-algorithmVersion missing/wrong
-page x/y, source bounds, pixelsPerCell, pixel dimensions
-ambient and dwTColor
-requiredPresentRect
-usedTextureIds unsorted/duplicate/out of uint8 range
-section origin/dimensions/mask missing, wrong length, or any zero bit
-each of the seven file entries missing
-leaf-only/absolute/traversing/nested-runs/mixed-run-id/symlink-escape path
-wrong manifest-parent base, missing file, malformed hash, file tamper
-every metrics member missing or wrong type
-RSS/cache/row/PNG/max/RMS/shared-boundary budget violation
-absentSectionCount or unresolvedLayerCount nonzero
-totalOutputBytes not equal to the seven actual file sizes
+/Game/Terrain/Reference/Garner/SM_Garner_17_21
+/Game/Terrain/Reference/Garner/T_Garner_17_21
+/Game/Terrain/Reference/M_TerrainReference
+/Game/Terrain/Reference/Garner/MI_Garner_17_21
+/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrain_Garner_17_21
 ```
 
-Every mutation must assert the exact `code` and JSON-pointer-like `field`,
-not only that the issue list is nonempty. Add overlap cases for overlap,
-one-centimeter separation, and edge-touch on each of the four edges; touching
-is not overlap.
+The build marker path is exactly
+`/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrainBuildRoot`.
+Old actor-style paths without `.Garner`, Blueprint `_C` GameModes,
+`/Script/Engine.GameModeBase`, or a different map package are fatal.
 
-Create valid first/second import-report fixtures and mutate each top-level
-member and every mutation/hash record. Require rejection when the second
-report has one created, updated, deleted, or saved package; when any package
-hash differs; when a package is missing/duplicated/reordered; or when
-manifest/map/canonical object identity differs. The literal valid pair has
-empty second-run mutation arrays and identical five-package hashes.
+## Material and texture sampling contract
 
-Create a valid level-build report and delete or alter each required field.
-Require exact structured errors for a wrong map package, missing world
-object suffix, old actor-style path without `.Garner`, wrong marker path,
-missing/wrongly typed/wrong-valued `defaultGameMode`, relative map filename,
-malformed map/manifest hash, non-boolean replacement flag, or nonempty
-issues. The valid fixture uses only
-`/Script/CorsairsGame.CorsairsGameMode`; `/Script/Engine.GameModeBase` and a
-Blueprint `_C` path are both rejected with
-`{"code":"INVALID_GAME_MODE","field":"/defaultGameMode"}`.
+The imported page is already the final legacy fixed-pipeline color. It is not
+lit a second time. Require and independently read back:
 
-In `test_module_dependencies.py`, add a tracked source-graph
-characterization test that reads both Build.cs files, extracts quoted
-dependency names, requires `CorsairsImport` in `CorsairsGame` dependencies,
-and requires `CorsairsGame` absent from both public and private
-`CorsairsImport` dependencies. This standalone test imports no
-`reference_terrain_rules` or `unreal` module and must fail if the reverse edge
-is introduced; loading the class by soft path is not counted as a module
-dependency.
+```text
+texture class = Texture2D
+source size = 4096x4096 RGBA8
+source/import metadata SHA-256 = manifest files.albedo.sha256
+sRGB = true
+compression = TC_DEFAULT
+filter = TF_BILINEAR
+address X/Y = TA_CLAMP
+mip generation = TMGS_FROM_TEXTURE_GROUP
+LOD group = TEXTUREGROUP_WORLD
+LOD bias = 0
+never_stream = false
 
-Require exact canonical paths. Add a pure
-`assert_legacy_target_allowed(entry_point, asset_path)` helper used by
-`setup_terrain_material.py`, `apply_terrain_material.py`, and
-`place_terrain.py` immediately before any asset assignment or actor
-mutation. For each of those three literal entry-point names, the test
-requires `/Game/Terrain/Reference/...` to raise `ValueError` and a normal
-`/Game/Terrain/...` path to pass.
+M_TerrainReference blend = BLEND_MASKED
+M_TerrainReference shading = MSM_UNLIT
+TextureSample sampler type = SAMPLERTYPE_COLOR
+TextureSample sampler source = SSM_FROM_TEXTURE_ASSET
+TextureSample parameter name = BaseColorTexture
+RGB -> MP_EMISSIVE_COLOR
+A -> MP_OPACITY_MASK
+material usage = MATUSAGE_STATIC_MESH + MATUSAGE_NANITE
 
-Use these exact pure-test names so RED/GREEN output identifies every
-contract:
+MI parent = /Game/Terrain/Reference/M_TerrainReference
+MI BaseColorTexture = T_Garner_17_21
+mesh Nanite enabled = true
+mesh slot 0 = MI_Garner_17_21
+level component slot 0 = MI_Garner_17_21
+```
+
+The importer changes a setting only when the actual value differs. The C++
+Editor test reads texture source dimensions/settings, the material expression
+graph and usage flags, mesh slot, component override, Nanite state, actor
+transform, and bounds from the saved/reloaded packages. Hash metadata without
+property/graph readback is insufficient; property readback without manifest
+file/hash validation is also insufficient. The later graphical tick-120
+capture remains the final proof of sampling/display behavior.
+
+Legacy `setup_terrain_material.py`, `apply_terrain_material.py`, and
+`place_terrain.py` call `assert_legacy_target_allowed` immediately before
+every asset assignment or actor mutation. Every `/Game/Terrain/Reference`
+target raises `ValueError`; ordinary `/Game/Terrain/...` remains allowed.
+
+## Module and packaged-data contract
+
+After Movement Task 6, both forbidden dependency directions must be absent:
+
+```text
+CorsairsGame !-> CorsairsImport
+CorsairsImport !-> CorsairsGame
+```
+
+`CorsairsImport` remains `Type=Editor`; move its existing `UnrealEd`
+dependency from `PublicDependencyModuleNames` to
+`PrivateDependencyModuleNames`. Its asset tests load the exact GameMode by
+`FSoftClassPath`, include no `CorsairsGame` header, and add no reverse module
+edge. This supersedes the stale canonical-plan sentence that expected
+`CorsairsImport` in `CorsairsGame`: retaining that edge makes the Mac Game
+target/cook invalid.
+
+`CorsairsGame.Build.cs` stages these exact runtime inputs as UFS runtime
+dependencies when present, preserving their project-relative paths:
+
+```text
+Data/character_map.json
+Data/Heights/garner.block.raw
+Data/Heights/garner.terrain.json
+```
+
+The clean orchestrator runs Task 7's installer before either Game build or
+cook, so all three must exist for acceptance. A normal source-only Editor
+build is not made permanently dependent on ignored generated files; the
+packaging/runtime gate itself fails if any input is missing, has the wrong
+hash, is omitted from staged output, or cannot be read through the same
+`FPaths::ProjectDir()/Data/...` path used by runtime code.
+The staged/archive audit also requires no `CorsairsImport` runtime binary or
+module descriptor; its presence is an Editor-module leak even if cook exits
+zero.
+
+## Editor report contracts
+
+All entry points accept exactly the positional arguments from the canonical
+plan, write `<report>.tmp`, flush/fsync, `os.replace`, fsync the parent, then
+self-validate. They write an issue-bearing failure report and raise
+`RuntimeError` on any issue. Exit code or the Unreal line `Python script
+executed successfully` is never accepted without a valid report.
+
+`build_reference_terrain_level.py`:
+
+- validates the Task 7 manifest before touching Unreal;
+- accepts only `/Game/Maps/Garner`;
+- deletes/replaces only the ignored generated Garner package;
+- uses `LevelEditorSubsystem.new_level` and creates exactly one renamed marker
+  object plus label `ReferenceTerrainBuildRoot` and tag
+  `CorsairsReferenceTerrainBuildRoot`;
+- loads exactly `/Script/CorsairsGame.CorsairsGameMode`, sets
+  `WorldSettings.default_game_mode`, never substitutes another class;
+- saves/reloads and verifies package `/Game/Maps/Garner`, world object
+  `/Game/Maps/Garner.Garner`, marker path and exact GameMode;
+- atomically reports manifest path/hash, map/package/world/marker/GameMode,
+  normalized map filename/hash, replacement flag, and `issues=[]`.
+
+The builder's marker-only world is explicitly not playable and not visual
+acceptance. It contains no fabricated scene, legacy terrain, PlayerStart, or
+hidden ignored prerequisite.
+
+`import_reference_terrain.py` validates before mutation, then:
+
+1. Loads the exact map/world/marker/GameMode and refuses any mismatch.
+2. Snapshots the five canonical package hashes: mesh, texture, base material,
+   material instance, and Garner map.
+3. Imports only manifest-resolved glTF+bin+PNG whose hashes already passed.
+   Any unexpected generated material/texture sidecar is deleted and reported.
+   The mesh stores the manifest glTF and bin hashes as metadata; the texture
+   stores the PNG hash. Idempotence compares those exact metadata values plus
+   actual import/settings state before deciding whether to reimport.
+4. Reconciles the exact texture/material contract above.
+5. Keeps exactly one renamed `StaticMeshActor` with full object path
+   `/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrain_Garner_17_21`,
+   label `ReferenceTerrain_Garner_17_21`, tag
+   `CorsairsReferenceTerrain`, and location
+   `(217600,-268800,0)` cm.
+6. Requires component bounds within 1 cm of X `[217600,230400]`,
+   Y `[-281600,-268800]` cm.
+7. Uses actual `get_actor_bounds(False)` and strict four-edge overlap. It
+   persistently hides/tags only overlapping legacy `Terrain_*` actors and
+   restores any tagged actor that no longer overlaps.
+8. Saves only dirty packages and computes hashes after successful saves.
+
+Each import report uses the canonical schema: manifest/map/canonical object
+identity, sorted object-level `created`/`updated`/`deleted`, sorted
+`savedPackages`, five sorted `finalPackageHashes`, and `issues`. Pass 2 must
+have all four mutation/save lists empty and byte-identical final hashes to
+pass 1.
+
+`check_reference_terrain.py` is read-only. It validates and hashes the
+manifest, level-build report, both import reports and idempotence relation;
+loads the exact world; independently inspects the actual marker, GameMode,
+assets, texture sampling, material graph/usages, mesh/Nanite/material slots,
+one actor/transform/bounds, all legacy overlaps/tags/visibility, and five
+package hashes. It never creates, mutates, dirties, deletes, or saves a
+package. Success requires actual package hashes exactly equal pass 2 and
+zero issues/visible overlaps/grass overrides. Its observations also require
+literal counts `materialFallbackCount=0`, `materialUsageErrorCount=0`, and
+`translucentNaniteCount=0`; a WorldGrid/default/white fallback or a material
+that merely compiles without both required usages is fatal.
+
+## Durable rollback and base-bundle publication
+
+`scripts/build_garner_reference_terrain.py` is the sole clean-checkout Task 8
+orchestrator. Pure tests inject the command runner, file operations and
+failpoints. Before the first generated-Content mutation it:
+
+1. Acquires an exclusive ignored transaction lock and refuses any pre-existing
+   `UnrealEditor`, `UnrealEditor-Cmd`, packaged client, `Game.exe`,
+   CrossOver/Wine, or active Task 8 transaction; it never kills a pre-existing
+   process.
+2. Before rerunning Task 7 or installing anything, snapshots the exact previous
+   bytes/existence/mode/hash of the current top terrain manifest, the two
+   installed runtime files, the prior terrain-base bundle, and the five
+   managed package families, including `.uasset`, `.umap`, `.uexp`, `.ubulk`,
+   and `.uptnl` sidecars. A newly created Task 7 run directory may remain
+   unreferenced after failure, but no prior top pointer or installed file may
+   change.
+3. Saves a 0600 journal plus same-volume recovery directory, fsyncs files and
+   parent directories, and records the pre-run directory listing so a failed
+   import cannot leak newly generated sidecars.
+4. Runs and validates the Task 7 manifest+installer chain, then starts every
+   later subprocess in a dedicated process group, records PID/PGID,
+   waits in foreground, and on timeout/failure/interruption terminates/reaps
+   only that owned group before rollback.
+
+The five package families are resolved narrowly from these stems; no parent
+directory is ever used as a destructive target:
+
+```text
+CorsairsUE/Content/Terrain/Reference/Garner/SM_Garner_17_21
+CorsairsUE/Content/Terrain/Reference/Garner/T_Garner_17_21
+CorsairsUE/Content/Terrain/Reference/M_TerrainReference
+CorsairsUE/Content/Terrain/Reference/Garner/MI_Garner_17_21
+CorsairsUE/Content/Maps/Garner
+```
+
+The ordered mutation path is:
+
+```text
+Task 7 manifest+installer -> Editor build
+       -> builder -> import pass 1 -> import pass 2 -> read-only checker
+       -> Editor automation -> Game build
+       -> clean cook/package (reuse the just-built receipt)
+       -> packaged NullRHI runtime smoke
+```
+
+If any command, report, hash, save, automation, cook, or runtime gate fails,
+the orchestrator first reaps its owned process tree, then restores all old
+top-manifest/runtime-data/base-bundle/package-family bytes and modes or removes
+files that were previously absent, removes every newly introduced managed-root
+sidecar, verifies exact hashes/absence, and leaves the journal/recovery
+material in place if verification fails. Success deletes recovery material
+only after all reports and final files hash correctly.
+
+Only after the complete owned chain passes does it atomically publish
+`artifacts/maps/reports/garner-terrain-base.json`. That bundle contains
+normalized paths and SHA-256 for:
+
+```text
+Task 7 top manifest and its one run ID
+the seven Task 7 run files
+the two installed runtime files
+level-build report
+import pass 1 report
+import pass 2 report
+terrain checker report
+Editor automation report
+five final package files
+Mac Editor and Game build identities
+cook/package report and packaged executable
+packaged runtime smoke report
+```
+
+Publication uses a unique regular temp file in the same directory, flush,
+file fsync, `os.replace`, and parent-directory fsync. A failed validation or
+replace leaves the previous bundle byte-identical.
+
+`validate_base_bundle` reopens every listed file, recomputes every hash,
+requires all manifest/report identities to agree, and requires the checker's
+actual hashes to equal import pass 2. The bundle is the only terrain-base
+input accepted by scene parity Task 8; loose report discovery is forbidden.
+
+## RED tests
+
+Add the canonical mutation matrices and these additional focused tests:
 
 ```text
 test_asset_paths_are_canonical
@@ -2402,317 +2450,219 @@ test_legacy_entry_points_reject_reference_namespace
 test_validate_import_report_mutation_matrix
 test_second_import_is_zero_mutation_with_identical_hashes
 test_idempotence_report_mutation_matrix
+test_texture_sampling_contract_is_complete
+test_module_graph_has_no_editor_runtime_cycle
+test_clean_checkout_orders_installer_before_game_build_and_cook
+test_base_bundle_rehashes_every_input
+test_base_bundle_publish_failure_preserves_previous_bytes
+test_failure_after_each_unreal_step_restores_package_bytes
+test_timeout_reaps_only_owned_process_group_before_restore
+test_success_removes_recovery_journal
+test_capture_is_delegated_to_scene_task8_not_faked
 ```
 
-- [ ] **Step 2: Verify Python RED**
+The manifest matrix deletes/changes every required field and covers each of
+the seven path/hash entries, leaf-only/absolute/traversal/nested-runs/mixed-
+run/symlink escape, missing/tampered file, all metrics and budgets, mask
+content, texture-ID ordering, and recomputed total bytes. Every case asserts
+the exact `code` and JSON-pointer-like `field`.
+
+The level/import/check/base matrices delete or mistype every field, mutate
+every canonical path/hash, reject unsorted/duplicate records and nonempty
+issues, and prove that pass 2 cannot save equal bytes and still call itself
+zero-mutation. Rollback tests inject a failure after builder, each import,
+checker, automation, build, cook, and runtime smoke.
+
+Run the smallest RED commands serially:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
-  CorsairsUE.Scripts.tests.test_module_dependencies.ModuleDependencyTests.test_corsairs_import_does_not_depend_on_corsairs_game -v
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 -m unittest \
+  CorsairsUE.Scripts.tests.test_module_dependencies.ModuleDependencyTests.test_module_graph_has_no_editor_runtime_cycle -v
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 -m unittest \
   CorsairsUE.Scripts.tests.test_reference_terrain_rules.ReferenceTerrainRulesTests.test_level_build_report_requires_corsairs_game_mode -v
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 -m unittest \
   CorsairsUE.Scripts.tests.test_reference_terrain_rules -v
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 -m unittest \
+  scripts.tests.test_build_garner_reference_terrain -v
 ```
 
-Expected: the dependency-direction characterization passes against the
-current Build.cs files; the GameMode-focused command and module command fail
-because `reference_terrain_rules.py` does not exist. During implementation,
-the GameMode-focused test must remain RED for a missing field,
-`/Script/Engine.GameModeBase`, or any value other than the exact Corsairs
-class path.
+Expected initial RED is a missing production module/function or a literal
+contract failure. A zero-test run, skip, hidden pre-existing asset, or stale
+report is not RED evidence.
 
-- [ ] **Step 3: Add RED Unreal asset test**
-
-Register two focused automation tests under
-`Corsairs.Terrain.ReferenceAssets`:
+Add Editor automation tests:
 
 ```text
 Corsairs.Terrain.ReferenceAssets.DefaultGameMode
 Corsairs.Terrain.ReferenceAssets.ReferenceActor
 ```
 
-Both use the same explicit canonical-map loader; the first checks the exact
-GameMode and the second must load:
+They explicitly load `/Game/Maps/Garner`, require world object
+`/Game/Maps/Garner.Garner`, soft-load the exact GameMode, marker, four assets,
+sampling/material contract, one world-qualified actor, transform/bounds,
+hidden overlaps, and no `MI_grass05`. They do not rely on startup map state.
+
+Add a Development-only runtime test in `CorsairsGame`:
 
 ```text
-/Game/Terrain/Reference/Garner/SM_Garner_17_21
-/Game/Terrain/Reference/Garner/T_Garner_17_21
-/Game/Terrain/Reference/M_TerrainReference
-/Game/Terrain/Reference/Garner/MI_Garner_17_21
+Corsairs.Terrain.ReferenceRuntime.CookedWorld
 ```
 
-Before any actor assertion the automation test must explicitly load the canonical map:
+It runs in the packaged Game target and uses runtime `LoadObject<UWorld>` to
+load the cooked `/Game/Maps/Garner.Garner` package without starting play or a
+network login. From the cooked `UWorld`/persistent level it requires the same
+package/world/default-GameMode/reference-actor/asset/material-binding/transform
+facts. Editor-only expression nodes are checked before cook by the Editor test;
+the runtime test checks the cooked effective blend/shading/material bindings
+and does not pretend stripped graph objects are runtime evidence.
+It also opens the staged `Data/character_map.json`, `garner.block.raw`, and
+`garner.terrain.json` through the production paths and records their hashes.
+It includes no Editor API and no `CorsairsImport` dependency. Actual BeginPlay,
+login, character and graphical runtime evidence remains the downstream scene
+capture gate.
 
-```cpp
-UWorld* World =
-    UEditorLoadingAndSavingUtils::LoadMap(
-        TEXT("/Game/Maps/Garner"));
-TestNotNull(TEXT("Garner world"), World);
-TestEqual(
-    TEXT("exact loaded package"),
-    World->GetOutermost()->GetName(),
-    FString(TEXT("/Game/Maps/Garner")));
-TestEqual(
-    TEXT("exact loaded world object"),
-    World->GetPathName(),
-    FString(TEXT("/Game/Maps/Garner.Garner")));
-UClass* DefaultGameMode =
-    World->GetWorldSettings()->DefaultGameMode.Get();
-TestNotNull(TEXT("default game mode"), DefaultGameMode);
-const FSoftClassPath ExpectedGameModePath(
-    TEXT("/Script/CorsairsGame.CorsairsGameMode"));
-UClass* ExpectedGameMode =
-    ExpectedGameModePath.TryLoadClass<AGameModeBase>();
-TestNotNull(TEXT("soft-loaded expected game mode"), ExpectedGameMode);
-TestEqual(
-    TEXT("exact default game mode class"),
-    DefaultGameMode,
-    ExpectedGameMode);
-TestEqual(
-    TEXT("exact default game mode"),
-    DefaultGameMode->GetPathName(),
-    FString(TEXT("/Script/CorsairsGame.CorsairsGameMode")));
-```
+## GREEN commands
 
-Include `FileHelpers.h`, `GameFramework/GameModeBase.h`,
-`GameFramework/WorldSettings.h`, and `UObject/SoftObjectPath.h`. Do not
-include a header from the `CorsairsGame` module or name its concrete C++
-GameMode type in the `CorsairsImport` module.
-`CorsairsImport.Build.cs` currently lists
-`UnrealEd` in `PublicDependencyModuleNames`; move that existing dependency to
-`PrivateDependencyModuleNames` for the Editor-only module instead of adding a
-duplicate. Its public/private dependency arrays must not contain
-`CorsairsGame`: `CorsairsGame.Build.cs` already depends on `CorsairsImport`,
-so the reverse edge would be a compile-blocking module cycle. The soft class
-path and `AGameModeBase` APIs come from the existing `CoreUObject`/`Engine`
-dependencies and load the runtime class without a `CorsairsGame` C++
-include/link dependency; the pointer comparison and `GetPathName()` assertion
-still enforce the exact class. The test may not use the configured startup
-map as an implicit substitute.
-
-Require the build marker at
-`/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrainBuildRoot`, texture
-streaming, masked and unlit base material, explicit StaticMesh and Nanite
-usage, the MI on both the StaticMesh asset and level component, and exactly
-one actor whose full `GetPathName()` is
-`/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrain_Garner_17_21`.
-Also require no overlapping visible dominant tile and no `MI_grass05`
-override.
-
-Require the actor transform and component bounds to reproduce Task 6 exactly: actor `(217600,-268800,0) cm`, world X bounds `[217600,230400]`, and world Y bounds `[-281600,-268800]`, within 1 cm.
-
-- [ ] **Step 4: Verify Unreal RED**
-
-Build succeeds without a `CorsairsImport -> CorsairsGame` dependency, but
-automation fails when the clean map/assets/actor or exact Corsairs GameMode
-do not exist:
+Run one heavy command at a time. Before each heavyweight step the orchestrator
+must prove no competing owned/pre-existing UE/client/build process and check
+`pmset -g therm`; a warning aborts before launch rather than heating the Mac.
 
 ```bash
-"/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/Mac/Build.sh" \
+nice -n 10 cmake -S tools/AssetConverter \
+  -B tools/AssetConverter/build -DCMAKE_BUILD_TYPE=Debug
+nice -n 10 cmake --build tools/AssetConverter/build \
+  --target AssetConverter AssetConverterTests TerrainPageBudgetProbe -j2
+nice -n 10 ctest --test-dir tools/AssetConverter/build \
+  -j1 --output-on-failure
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 -m unittest discover \
+  -s CorsairsUE/Scripts/tests -v
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 -m unittest \
+  scripts.tests.test_build_garner_reference_terrain -v
+
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 \
+  scripts/build_garner_reference_terrain.py \
+  --repo-root "$PWD" \
+  --manifest artifacts/maps/garner.reference-albedo.json \
+  --map /Game/Maps/Garner \
+  --output artifacts/maps/reports
+```
+
+Inside that tracked orchestrator, build the Editor before the four Editor
+commands:
+
+```bash
+nice -n 10 "/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/Mac/Build.sh" \
   CorsairsUEEditor Mac Development \
-  "$PWD/CorsairsUE/CorsairsUE.uproject" -WaitMutex
-"/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac/UnrealEditor-Cmd" \
   "$PWD/CorsairsUE/CorsairsUE.uproject" \
-  -unattended -nop4 -NullRHI -NoSound \
-  -ExecCmds="Automation RunTests Corsairs.Terrain.ReferenceAssets" \
-  -TestExit="Automation Test Queue Empty"
-```
+  -WaitMutex -MaxParallelActions=2
 
-- [ ] **Step 5: Implement idempotent headless import**
-
-Implement `build_reference_terrain_level.py` first using the exact clean
-builder contract above. Deleting/replacing `/Game/Maps/Garner` is authorized
-only inside this builder because `CorsairsUE/Content` is ignored/generated;
-the script must reject any map package other than the literal canonical one.
-Resolve `REFERENCE_GAME_MODE`, set it through
-`world.get_world_settings().set_editor_property("default_game_mode",
-game_mode_class)`, and fail rather than substituting `GameModeBase`. After
-`save_current_level`, reload and inspect the
-package/world/marker/`default_game_mode`, compute the `.umap` hash, validate
-the build-report DTO, and only then publish the report. A missing Task 7
-manifest, failed manifest validation, failed delete/new/class-load/set/save/
-reload, wrong world path, wrong GameMode, or missing/duplicate marker is
-fatal.
-
-`import_reference_terrain.py` performs these operations in order:
-
-1. Read and validate the manifest through
-   `validate_manifest(data, manifest_path)`. Resolve the glTF, its paired
-   `.bin`, and PNG only as `manifest_path.parent / files.*.path` after the
-   canonical manifest-relative grammar passes. Abort
-   before loading/saving Unreal packages when any hash or budget fails.
-2. Require `map_package == "/Game/Maps/Garner"`, load it through
-   `LevelEditorSubsystem.load_level`, get the editor world, and require
-   `world.get_outermost().get_name() == "/Game/Maps/Garner"`,
-   `world.get_path_name() == "/Game/Maps/Garner.Garner"`, and exactly one
-   `ReferenceTerrainBuildRoot` marker. It also requires the loaded
-   `WorldSettings.default_game_mode` class path to equal
-   `REFERENCE_GAME_MODE` and must not modify that property. This makes
-   running the tracked builder a checked prerequisite rather than assuming
-   an ignored local `.umap`.
-3. Snapshot on-disk SHA-256 for the four canonical asset packages and map
-   package. Record object existence/type and relevant properties. This
-   snapshot is the source of every `beforeSha256`.
-4. Reconcile assets by desired state, not by unconditional reimport. Store
-   the validated source SHA-256 as asset metadata. Import the PNG/glTF only
-   when the canonical asset is absent, has the wrong class, has a different
-   source hash, or differs in required import settings. Configure glTF import
-   with `AssetImportTask.save=False` and to skip generated
-   materials/textures; delete any unexpected sidecar object it nevertheless
-   creates, recording it in `deleted`.
-5. Build/reconcile `M_TerrainReference` with
-   `BLEND_MASKED`, `MSM_UNLIT`, texture RGB connected to emissive, texture A
-   connected to opacity mask, and explicit `MATUSAGE_STATIC_MESH` and
-   `MATUSAGE_NANITE`. Set `T_Garner_17_21.never_stream=False`. Reconcile the
-   MI parent/texture parameter and mesh slot zero. Call setters only when the
-   current value differs.
-6. Find actors only after the canonical map is loaded. Keep exactly one
-   `StaticMeshActor` with object name and label
-   `ReferenceTerrain_Garner_17_21`; delete any duplicate reference actor and
-   report that object deletion. Set its mesh, component material, transform
-   `(217600,-268800,0)` cm, and tag `CorsairsReferenceTerrain`.
-7. Compute actual XY bounds for every legacy `Terrain_*` actor from
-   `get_actor_bounds(False)`. For strict overlaps with the reference actor
-   bounds, persistently hide all StaticMesh components (`visible=False`,
-   `hidden_in_game=True`) and add tag
-   `CorsairsReferenceTerrainHidden`. Never alter a non-overlapping actor.
-   A tagged actor that no longer overlaps is restored and untagged.
-8. Track created/updated/deleted objects as each mutation is made. Save only
-   dirty changed asset packages with
-   `EditorAssetLibrary.save_loaded_asset(..., only_if_is_dirty=True)` and
-   save the map only when an actor/component changed. Compute every
-   after/final hash only after all saves return success. Write and
-   self-validate the import report; any save failure or report issue raises.
-
-`check_reference_terrain.py` is read-only. It first validates the manifest,
-the level-build report and its own file hash, both import reports, and the
-idempotence relation. It then independently loads `/Game/Maps/Garner`,
-requires the exact loaded package `/Game/Maps/Garner`, world object
-`/Game/Maps/Garner.Garner`, build marker, and actual
-`WorldSettings.default_game_mode == REFERENCE_GAME_MODE`, and inspects
-current editor objects rather than trusting any report:
-
-- load the four canonical asset paths and require exact classes;
-- inspect actual texture `never_stream`, material blend/shading/StaticMesh
-  and Nanite usage, material graph connections, MI parent and texture
-  parameter;
-- inspect actual mesh slot zero, Nanite setting, the single reference actor,
-  component mesh/material, actor transform, and component world bounds;
-- require the post-import world to contain both the reference terrain actor
-  and exact Corsairs GameMode; the marker-only pre-import bootstrap is never
-  reported as playable or accepted;
-- enumerate actual legacy `Terrain_*` actors, derive current XY bounds with
-  `get_actor_bounds(False)`, and require every strict overlap to carry the
-  importer tag and have no visible component;
-- require every importer-tagged legacy actor to overlap, proving the importer
-  did not hide non-overlapping terrain;
-- reject any visible overlap, any `MI_grass05` override, duplicate reference
-  actor, or actor/assets from another loaded world;
-- hash the five actual saved packages and require exact equality with
-  `second.finalPackageHashes`.
-
-The checker writes all observed paths, GameMode, properties, bounds,
-overlapping actor names, and actual package hashes to its report. It never
-creates, modifies, deletes, marks dirty, or saves an asset or level.
-
-- [ ] **Step 6: Run importer twice and verify GREEN**
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
-  CorsairsUE.Scripts.tests.test_module_dependencies.ModuleDependencyTests.test_corsairs_import_does_not_depend_on_corsairs_game -v
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
-  CorsairsUE.Scripts.tests.test_reference_terrain_rules.ReferenceTerrainRulesTests.test_level_build_report_requires_corsairs_game_mode -v
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
-  CorsairsUE.Scripts.tests.test_reference_terrain_rules -v
-rg -q '"CorsairsImport"' CorsairsUE/Source/CorsairsGame/CorsairsGame.Build.cs
-if rg -q '"CorsairsGame"' \
-  CorsairsUE/Source/CorsairsImport/CorsairsImport.Build.cs; then
-  echo "forbidden module cycle: CorsairsImport -> CorsairsGame" >&2
-  exit 1
-fi
-mkdir -p artifacts/maps/reports
 UE="/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac/UnrealEditor-Cmd"
-"$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" -run=pythonscript \
+nice -n 10 "$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" -run=pythonscript \
   -script="$PWD/CorsairsUE/Scripts/build_reference_terrain_level.py $PWD/artifacts/maps/garner.reference-albedo.json /Game/Maps/Garner $PWD/artifacts/maps/reports/reference-terrain-level-build.json" \
   -unattended -nop4 -NullRHI -NoSound
-"$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" -run=pythonscript \
+nice -n 10 "$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" -run=pythonscript \
   -script="$PWD/CorsairsUE/Scripts/import_reference_terrain.py $PWD/artifacts/maps/garner.reference-albedo.json /Game/Maps/Garner $PWD/artifacts/maps/reports/reference-terrain-import-pass1.json" \
   -unattended -nop4 -NullRHI -NoSound
-"$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" -run=pythonscript \
+nice -n 10 "$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" -run=pythonscript \
   -script="$PWD/CorsairsUE/Scripts/import_reference_terrain.py $PWD/artifacts/maps/garner.reference-albedo.json /Game/Maps/Garner $PWD/artifacts/maps/reports/reference-terrain-import-pass2.json" \
   -unattended -nop4 -NullRHI -NoSound
-"$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" -run=pythonscript \
+nice -n 10 "$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" -run=pythonscript \
   -script="$PWD/CorsairsUE/Scripts/check_reference_terrain.py $PWD/artifacts/maps/garner.reference-albedo.json /Game/Maps/Garner $PWD/artifacts/maps/reports/reference-terrain-level-build.json $PWD/artifacts/maps/reports/reference-terrain-import-pass1.json $PWD/artifacts/maps/reports/reference-terrain-import-pass2.json $PWD/artifacts/maps/reports/reference-terrain-check.json" \
   -unattended -nop4 -NullRHI -NoSound
-"$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" \
-  -unattended -nop4 -NullRHI -NoSound \
-  -ExecCmds="Automation RunTests Corsairs.Terrain.ReferenceAssets" \
-  -TestExit="Automation Test Queue Empty"
-python3 - <<'PY'
-import json
-from pathlib import Path
-
-root = Path("artifacts/maps/reports")
-build = json.loads(
-    (root / "reference-terrain-level-build.json").read_text())
-first = json.loads(
-    (root / "reference-terrain-import-pass1.json").read_text())
-second = json.loads(
-    (root / "reference-terrain-import-pass2.json").read_text())
-check = json.loads(
-    (root / "reference-terrain-check.json").read_text())
-assert build["mapPackage"] == "/Game/Maps/Garner"
-assert build["worldObjectPath"] == "/Game/Maps/Garner.Garner"
-assert build["markerObjectPath"] == (
-    "/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrainBuildRoot")
-assert build["defaultGameMode"] == (
-    "/Script/CorsairsGame.CorsairsGameMode")
-assert build["issues"] == []
-assert second["created"] == []
-assert second["updated"] == []
-assert second["deleted"] == []
-assert second["savedPackages"] == []
-assert second["finalPackageHashes"] == first["finalPackageHashes"]
-assert check["actualPackageHashes"] == second["finalPackageHashes"]
-assert check["observations"]["loadedWorldObject"] == (
-    "/Game/Maps/Garner.Garner")
-assert check["observations"]["defaultGameMode"] == (
-    "/Script/CorsairsGame.CorsairsGameMode")
-assert check["observations"]["referenceActors"] == [{
-    "objectPath": (
-        "/Game/Maps/Garner.Garner:PersistentLevel."
-        "ReferenceTerrain_Garner_17_21"),
-    "label": "ReferenceTerrain_Garner_17_21",
-    "locationCm": [217600.0, -268800.0, 0.0],
-    "boundsCm": [217600.0, -281600.0, 230400.0, -268800.0],
-}]
-assert check["issues"] == []
-PY
 ```
 
-Expected acceptance: the tracked builder recreates and reloads the canonical
-map from a clean ignored `Content` with exact Corsairs GameMode; the builder
-alone is not accepted. The standalone dependency test and `rg` gate prove
-the existing one-way `CorsairsGame -> CorsairsImport` edge has no reverse
-edge. All three subsequent Unreal Python commands exit zero, pass 2 reports
-zero mutations and zero saved packages, its five final hashes are identical
-to pass 1, and the read-only checker observes the same five hashes, exact
-GameMode, and world-qualified reference terrain actor from disk.
-`Corsairs.Terrain.ReferenceAssets` passes only after loading that post-import
-canonical map.
-
-- [ ] **Step 7: Run full regression and Commit**
+Then, within the same orchestrator, run Editor automation, the runtime target,
+cook/package, and packaged runtime test sequentially:
 
 ```bash
-cmake --build tools/AssetConverter/build \
-  --target AssetConverter AssetConverterTests TerrainPageBudgetProbe -j4
-ctest --test-dir tools/AssetConverter/build --output-on-failure
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
-  -s CorsairsUE/Scripts/tests -v
-"/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/Mac/Build.sh" \
-  CorsairsUEEditor Mac Development \
-  "$PWD/CorsairsUE/CorsairsUE.uproject" -WaitMutex
+UE="/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac/UnrealEditor-Cmd"
+nice -n 10 "$UE" "$PWD/CorsairsUE/CorsairsUE.uproject" \
+  -unattended -nop4 -NullRHI -NoSound \
+  -ExecCmds="Automation RunTests Corsairs.Terrain.ReferenceAssets" \
+  -TestExit="Automation Test Queue Empty" \
+  -ReportOutputPath="$PWD/artifacts/maps/reports/reference-terrain-editor-automation"
+
+nice -n 10 "/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/Mac/Build.sh" \
+  CorsairsUE Mac Development \
+  "$PWD/CorsairsUE/CorsairsUE.uproject" \
+  -WaitMutex -MaxParallelActions=2
+
+nice -n 10 "/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/RunUAT.sh" \
+  BuildCookRun \
+  -project="$PWD/CorsairsUE/CorsairsUE.uproject" \
+  -noP4 -unattended -utf8output \
+  -platform=Mac -clientconfig=Development \
+  -skipbuild -cook -stage -pak -archive \
+  -map=/Game/Maps/Garner \
+  -CookOutputDir="$PWD/artifacts/maps/package-run/cooked" \
+  -stagingdirectory="$PWD/artifacts/maps/package-run/stage" \
+  -archivedirectory="$PWD/artifacts/maps/package-run/archive" \
+  -MaxParallelActions=2
+
+nice -n 10 \
+  "$PWD/artifacts/maps/package-run/archive/Mac/CorsairsUE.app/Contents/MacOS/CorsairsUE" \
+  -unattended -NullRHI -NoSound -stdout -FullStdOutLogOutput \
+  -ExecCmds="Automation RunTests Corsairs.Terrain.ReferenceRuntime" \
+  -TestExit="Automation Test Queue Empty" \
+  -ReportOutputPath="$PWD/artifacts/maps/reports/reference-terrain-runtime"
+```
+
+The real orchestrator allocates a unique `package-run/<transaction-id>` rather
+than reusing the literal example directory above. It resolves the actual
+archived executable path from the UAT receipt instead of silently accepting
+the example path when UAT emits a different layout. It hashes the receipt,
+executable, every automation-report file, package container/list, runtime
+report, and staged runtime data. Cook success without the explicit Garner
+map/assets/data in the package is failure.
+
+After every heavy command and at final exit:
+
+```bash
+ps -axo pid,etime,%cpu,%mem,nice,command | \
+  rg -i 'UnrealEditor|CorsairsUE\.app/Contents/MacOS/CorsairsUE|Game\.exe|CrossOver|wine|Build\.sh|RunUAT' || true
+pmset -g therm
+```
+
+The process audit filters out its own `ps`/`rg` lines and requires no owned
+Task 8 process. Never use a broad process-name kill.
+
+## Downstream same-resolution capture gate
+
+`garner-terrain-base.json` is not final visual acceptance. Scene parity Task 8
+must validate and hash-link it, populate the real scene, then produce three
+distinct files:
+
+```text
+original-223325-278475-1920x1080.png
+ue-223325-278475-1920x1080.png
+side-by-side-223325-278475-1920x1080.png
+```
+
+Both raw frames use the approved `(223325,278475)` position, 1920x1080 world
+viewport, 16:9, 30 logical ticks/s, capture tick 120, target height 100 cm,
+arm 6103.2778 cm, pitch -55.00798 deg, horizontal FOV 54.0222067 deg, yaw
+90 deg, fixed exposure/tone settings, and exact process/DB/`system.ini`
+rollback from the scene plan. Distinct hashes, runtime position evidence,
+five landmark projection errors <=5 px, and human inspection remain
+mandatory. Terrain Task 8 must not start either client or weaken/de-duplicate
+that downstream gate.
+
+The scene plan has a stricter publication bridge after this task: it may use
+terrain import pass 1 as its seed evidence, but it still creates and validates
+its own GameMode-configuration report followed by two additional zero-mutation
+terrain import reports before scene staging. `garner-terrain-base.json` is
+therefore an immutable input to, not a replacement for, the scene run's
+`garner-base-bundle.json`; the two bundle names and report roles must not be
+collapsed.
+
+## Commit
+
+After fresh GREEN evidence, run `git diff --check`, inspect the exact staged
+path list, and commit only tracked Task 8 sources. Generated Content,
+artifacts/package/reports/base bundle, installed runtime data, DBs, pycache,
+and recovery journals remain ignored.
+
+```bash
 git add \
   CorsairsUE/Scripts/reference_terrain_rules.py \
   CorsairsUE/Scripts/build_reference_terrain_level.py \
@@ -2724,18 +2674,21 @@ git add \
   CorsairsUE/Scripts/apply_terrain_material.py \
   CorsairsUE/Scripts/place_terrain.py \
   CorsairsUE/Source/CorsairsImport/Private/Tests/ReferenceTerrainAssetTests.cpp \
-  CorsairsUE/Source/CorsairsImport/CorsairsImport.Build.cs
-git commit -m "feat(ue): import Garner reference terrain page"
+  CorsairsUE/Source/CorsairsImport/CorsairsImport.Build.cs \
+  CorsairsUE/Source/CorsairsGame/Private/Tests/CorsairsReferenceTerrainRuntimeTests.cpp \
+  CorsairsUE/Source/CorsairsGame/CorsairsGame.Build.cs \
+  scripts/build_garner_reference_terrain.py \
+  scripts/tests/test_build_garner_reference_terrain.py
+git commit -m "feat(ue): import and attest Garner reference terrain"
 ```
 
-## Dependency Order
+## Dependency order
 
 ```text
-Task 1 -> Task 2
-Task 1 + Task 3 + Task 4 -> Task 5
-Task 1 -> Task 6
-Task 2 + Task 5 + Task 6 -> Task 7
-Task 7 -> Task 8 level builder -> import pass 1 -> import pass 2 -> checker
+Terrain Tasks 1..6 -> Terrain Task 7 manifest + installer
+Movement Task 6 -> runtime module boundary and block-grid consumer
+Terrain Task 7 + Movement Task 6 -> Terrain Task 8 owned chain
+Terrain Task 8 base bundle + Scene Task 7 -> Scene Task 8 dual-client capture
 ```
 
-Do not parallelize production edits across these tasks. Converter-only review work may run while Unreal automation is executing, but each task must have a single implementation owner and a clean scoped commit.
+---

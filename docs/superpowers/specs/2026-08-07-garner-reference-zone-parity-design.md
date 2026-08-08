@@ -316,6 +316,130 @@ StaticMesh asset, так и level component. Component override со стары�
 `MI_grass05` является ошибкой. Старые dominant scripts не могут молча
 обработать reference-pages.
 
+#### Канонический terrain-base в Unreal и packaged runtime
+
+Terrain Task 8 начинается только после GREEN/review/commit terrain Tasks 1–7
+и Movement Task 6. Единственный вход из Task 7 — атомарно опубликованный
+`artifacts/maps/garner.reference-albedo.json`; consumer не выбирает run по
+имени, времени или порядку каталога. Перед первой Unreal-мутацией tracked
+orchestrator повторно запускает production `terrain-reference`, валидирует
+один run с семью файлами и дважды запускает runtime installer. Вторая
+установка обязана быть истинным no-op.
+
+После Movement Task 6 runtime/editor module graph имеет ровно такую границу:
+
+```text
+CorsairsGame !-> CorsairsImport
+CorsairsImport !-> CorsairsGame
+```
+
+`CorsairsImport` остаётся `Type=Editor`, а `UnrealEd` является его private
+dependency. Editor tests загружают GameMode через `FSoftClassPath`, не
+включают header из `CorsairsGame` и не создают обратное ребро. Сохранение
+`CorsairsGame -> CorsairsImport` является ошибкой Mac Game build и cook, а
+не допустимым способом получить Editor API в runtime.
+
+Clean-checkout builder владеет только этими каноническими объектами:
+
+```text
+/Game/Maps/Garner
+/Game/Maps/Garner.Garner
+/Script/CorsairsGame.CorsairsGameMode
+/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrainBuildRoot
+/Game/Maps/Garner.Garner:PersistentLevel.ReferenceTerrain_Garner_17_21
+/Game/Terrain/Reference/Garner/SM_Garner_17_21
+/Game/Terrain/Reference/Garner/T_Garner_17_21
+/Game/Terrain/Reference/M_TerrainReference
+/Game/Terrain/Reference/Garner/MI_Garner_17_21
+```
+
+Builder удаляет/пересоздаёт только ignored/generated package Garner, ставит
+ровно один marker и exact native GameMode, сохраняет и повторно загружает
+world. Marker-only world не является playable или visual acceptance.
+Importer затем выполняется дважды; второй проход не создаёт, не обновляет,
+не удаляет и не сохраняет ни одного объекта/package, а его пять финальных
+package hashes byte-for-byte совпадают с первым проходом. Независимый checker
+читает сохранённые packages и reports с диска и ничего не мутирует.
+
+Texture/package readback обязан подтвердить весь sampling contract:
+
+```text
+Texture2D source = 4096x4096 RGBA8
+source/import SHA-256 = manifest files.albedo.sha256
+sRGB = true
+compression = TC_DEFAULT
+filter = TF_BILINEAR
+address X/Y = TA_CLAMP
+mip generation = TMGS_FROM_TEXTURE_GROUP
+LOD group = TEXTUREGROUP_WORLD
+LOD bias = 0
+never_stream = false
+TextureSample = SAMPLERTYPE_COLOR + SSM_FROM_TEXTURE_ASSET
+parameter = BaseColorTexture
+RGB -> MP_EMISSIVE_COLOR
+A -> MP_OPACITY_MASK
+material usage = MATUSAGE_STATIC_MESH + MATUSAGE_NANITE
+mesh Nanite = enabled
+mesh slot 0 = MI_Garner_17_21
+level component slot 0 = MI_Garner_17_21
+```
+
+`CorsairsGame.Build.cs` stages как UFS runtime dependencies с сохранением
+project-relative путей ровно эти production inputs:
+
+```text
+Data/character_map.json
+Data/Heights/garner.block.raw
+Data/Heights/garner.terrain.json
+```
+
+Task 7 installer выполняется до Game build и cook. Package audit повторно
+хеширует все три staged/archive файла, требует Garner map/assets и запрещает
+любой runtime binary/module descriptor `CorsairsImport`. Development-only
+`Corsairs.Terrain.ReferenceRuntime.CookedWorld` запускается из packaged Game
+под `-NullRHI`, через runtime `LoadObject<UWorld>` загружает exact
+`/Game/Maps/Garner.Garner`, проверяет world/GameMode/actor/material bindings и
+читает три файла через те же `FPaths::ProjectDir()/Data/...` пути. Он не
+запускает BeginPlay, login или network.
+
+Terrain orchestrator выполняет строго одну тяжёлую команду за раз в таком
+порядке:
+
+```text
+Task 7 manifest + installer twice -> Editor build
+    -> map builder -> import pass 1 -> import pass 2 -> read-only checker
+    -> Editor automation -> Game build
+    -> unique clean cook/stage/pak/archive with the just-built receipt
+    -> packaged NullRHI runtime automation
+```
+
+Каждый subprocess получает отдельную process group, точные PID/PGID и
+foreground wait. Все тяжёлые команды идут под `nice -n 10`, CMake/UE
+parallelism ограничен двумя actions, перед каждым запуском проверяются
+конкурирующие UE/client/build processes и `pmset -g therm`. Thermal warning
+останавливает цепочку до запуска. После каждого шага и при любом
+success/failure/timeout/interrupt orchestrator завершает и `wait`-ит только
+собственную process tree; broad process-name kill запрещён.
+
+До первой мутации orchestrator сохраняет exact bytes/existence/mode/hash
+предыдущих top manifest, двух runtime-файлов, terrain-base bundle и пяти
+managed package families со всеми `.uasset/.umap/.uexp/.ubulk/.uptnl`
+sidecars. 0600 journal, same-volume recovery directory, file/parent fsync и
+startup recovery обеспечивают полный rollback. Неуспешный rollback сохраняет
+recovery evidence и возвращает `RECOVERY_REQUIRED`; частичный success
+запрещён. Только после всех gates атомарно публикуется
+`artifacts/maps/reports/garner-terrain-base.json` с нормализованными путями и
+повторно вычисленными SHA-256 для Task 7 manifest/seven files, runtime pair,
+reports, пяти packages, Editor/Game build identities, cook/package,
+executable и packaged runtime report.
+
+`garner-terrain-base.json` является immutable input для scene parity Task 8,
+но не заменяет его более строгий `garner-base-bundle.json`. Только scene Task
+8 населяет полный город и владеет original/UE capture 1920x1080 на tick 120,
+side-by-side, landmark projection и восстановлением DB/`system.ini`. Terrain
+Task 8 не запускает ни один графический клиент и не заявляет visual parity по
+marker-only world.
+
 ### 5. Типы объектов и два height sampler
 
 Scene placement применяет одну политику:
@@ -670,7 +794,15 @@ center.Z = CharacterGridHeight(X,Y) + scaledCapsuleHalfHeight
 
 ## Воспроизводимая сборка и ошибки
 
-Один tracked orchestrator:
+Воспроизводимость имеет две вложенные, но не взаимозаменяемые publication
+границы. `scripts/build_garner_reference_terrain.py` атомарно публикует
+проверенный `garner-terrain-base.json` после Editor/Game/cook/package/NullRHI
+цепочки выше. Scene parity Task 8 принимает только этот bundle по hash-link,
+строит полный Garner и публикует собственный `garner-base-bundle.json` вместе
+с dual-client capture. Loose reports, ignored `Content` и ручное состояние
+Editor не являются входом ни одной границы.
+
+Сквозной scene orchestrator:
 
 1. собирает и тестирует `AssetConverter`;
 2. потоково конвертирует `garner.map` и `garner.obj`;
@@ -695,6 +827,13 @@ center.Z = CharacterGridHeight(X,Y) + scaledCapsuleHalfHeight
 - output нарушает memory/disk/page budget;
 - height/layer array не совпадает с metadata;
 - page `(17,21)` или camera-frustum bounds содержат absent section;
+- exact Garner package/world/GameMode/marker/reference actor не совпадает;
+- второй import-pass мутирует или сохраняет package;
+- Game target содержит dependency или packaged module `CorsairsImport`;
+- staged runtime data отсутствует или не совпадает по SHA-256;
+- cook/package/packaged NullRHI runtime report не подтверждает Garner;
+- rollback не восстановил точные bytes/existence/mode managed inputs;
+- перед тяжёлым запуском обнаружен thermal warning или competing process;
 - object type неизвестен;
 - type-0 model не разрешён внутри радиуса 8 000 см;
 - число scene parts для source key не совпало с catalog;
@@ -765,8 +904,18 @@ Editor не является входом.
 
 - `AssetConverterTests` — PASS;
 - Python unit suite — PASS;
-- Mac Development build — PASS;
-- Unreal automation — PASS;
+- Mac Editor Development build — PASS;
+- exact `/Game/Maps/Garner.Garner` с
+  `/Script/CorsairsGame.CorsairsGameMode` — PASS;
+- два import-pass дают zero-mutation/hash idempotence — PASS;
+- Unreal Editor automation — PASS;
+- Mac Game Development build без обеих зависимостей между
+  `CorsairsGame`/`CorsairsImport` — PASS;
+- unique Garner cook/stage/pak/archive с тремя UFS runtime-файлами и без
+  `CorsairsImport` — PASS;
+- packaged `Corsairs.Terrain.ReferenceRuntime.CookedWorld` под NullRHI — PASS;
+- `garner-terrain-base.json` опубликован последним и независимо rehash-ится —
+  PASS;
 - material fallback/usage/translucent-Nanite counts — `0/0/0`;
 - type-1 instances в scene mesh — 0;
 - 143 ранее ложных instances в радиусе 61,03 м отсутствуют;
