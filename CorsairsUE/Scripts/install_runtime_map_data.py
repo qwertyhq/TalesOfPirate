@@ -46,6 +46,7 @@ _MAX_RMS_ERROR_CM = 2.0
 _MAX_SHARED_BOUNDARY_CM = 0.0
 _JOURNAL_NAME = ".garner-runtime-install.transaction.json"
 _RETIRED_JOURNAL_NAME = _JOURNAL_NAME + ".retired"
+_JOURNAL_AUTH_NAME = _JOURNAL_NAME + ".retired-auth"
 _LOCK_NAME = ".garner-runtime-install.lock"
 _RETIRED_LOCK_NAME = _LOCK_NAME + ".retired"
 
@@ -98,7 +99,8 @@ def _load_strict_json(path: Path) -> tuple[dict[str, Any], bytes]:
             parse_constant=lambda token: (_ for _ in ()).throw(
                 ValueError(f"non-finite JSON number {token}")),
         )
-    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError,
+            RecursionError) as exc:
         raise InstallError(f"invalid manifest JSON: {exc}") from exc
     if type(value) is not dict:
         raise InstallError("invalid manifest JSON: root must be an object")
@@ -106,24 +108,38 @@ def _load_strict_json(path: Path) -> tuple[dict[str, Any], bytes]:
     return value, raw
 
 
-def _validate_unicode_scalars(value: Any, pointer: str) -> None:
+def _validate_unicode_scalars(
+    value: Any,
+    pointer: str,
+    *,
+    status: str = "WRITE_FAILED",
+    label: str = "manifest JSON",
+) -> None:
     def reject_surrogate(text: str, location: str) -> None:
         if any(0xD800 <= ord(character) <= 0xDFFF for character in text):
             raise InstallError(
-                "invalid manifest JSON: non-Unicode scalar at " +
-                (location or "/"))
+                f"invalid {label}: non-Unicode scalar at " +
+                (location or "/"), status=status)
 
-    if type(value) is str:
-        reject_surrogate(value, pointer)
-    elif type(value) is list:
-        for index, item in enumerate(value):
-            _validate_unicode_scalars(item, f"{pointer}/{index}")
-    elif type(value) is dict:
-        for key, item in value.items():
-            escaped = key.replace("~", "~0").replace("/", "~1")
-            child = f"{pointer}/{escaped}"
-            reject_surrogate(key, child)
-            _validate_unicode_scalars(item, child)
+    stack: list[tuple[Any, str, int]] = [(value, pointer, 0)]
+    while stack:
+        current, location, depth = stack.pop()
+        if depth > 128:
+            raise InstallError(
+                f"invalid {label}: nesting exceeds 128 at " +
+                (location or "/"), status=status)
+        if type(current) is str:
+            reject_surrogate(current, location)
+        elif type(current) is list:
+            stack.extend(
+                (item, f"{location}/{index}", depth + 1)
+                for index, item in enumerate(current))
+        elif type(current) is dict:
+            for key, item in current.items():
+                escaped = key.replace("~", "~0").replace("/", "~1")
+                child = f"{location}/{escaped}"
+                reject_surrogate(key, child)
+                stack.append((item, child, depth + 1))
 
 
 def _require_keys(value: Any, expected: set[str], pointer: str) -> dict[str, Any]:
@@ -296,7 +312,11 @@ def _finalize_windows_entries(
             if payload(entry.reservation) != expected_reservation:
                 raise DurableFsError(
                     f"invalid typed finalization reservation: {entry.reservation}")
-            durable_fs.remove_owned(entry.reservation)
+            durable_fs.remove_owned(
+                entry.reservation,
+                source_hash=digest(entry.reservation),
+                expected_mode=mode(entry.reservation),
+                expected_identity=identity(entry.reservation))
             reservation_present = False
         elif not source_present and reservation_present:
             if not recorded(entry.reservation, entry):
@@ -680,29 +700,60 @@ class PosixDurableFs:
         del transaction_id, kind
         if tombstone is not None and (tombstone.exists() or tombstone.is_symlink()):
             raise self._error("RemoveOwned", tombstone, errno.EINVAL)
+        if not source_hash or expected_mode is None or not tuple(expected_identity):
+            raise self._error("RemoveOwned", path, errno.EINVAL)
+        descriptor = -1
         try:
-            info = path.lstat()
+            descriptor = os.open(
+                path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            info = os.fstat(descriptor)
         except FileNotFoundError:
             return
         except OSError as exc:
             raise self._error("RemoveOwned", path, exc.errno or errno.EIO) from exc
-        if not stat.S_ISREG(info.st_mode) or path.is_symlink():
-            raise self._error("RemoveOwned", path, errno.EINVAL)
-        if (expected_identity and
-                tuple(expected_identity) != _physical_identity(path)):
-            raise self._error("RemoveOwned", path, errno.ESTALE)
-        if source_hash and _sha256_file(path) != source_hash:
-            raise self._error("RemoveOwned", path, errno.ESTALE)
-        if (expected_mode is not None and
-                _observable_mode(info) != expected_mode):
-            raise self._error("RemoveOwned", path, errno.ESTALE)
-        if fault_point:
-            _run_fault(fault, fault_point)
         try:
+            retained_identity = (info.st_dev, info.st_ino, info.st_nlink)
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
+                    tuple(expected_identity) != retained_identity or
+                    _observable_mode(info) != expected_mode):
+                raise OSError(errno.ESTALE, "owned identity/mode changed")
+
+            def retained_hash() -> str:
+                digest = hashlib.sha256()
+                offset = 0
+                while True:
+                    block = os.pread(descriptor, 1024 * 1024, offset)
+                    if not block:
+                        return digest.hexdigest()
+                    digest.update(block)
+                    offset += len(block)
+
+            if retained_hash() != source_hash:
+                raise OSError(errno.ESTALE, "owned payload changed")
+            path_info = path.lstat()
+            if ((path_info.st_dev, path_info.st_ino, path_info.st_nlink) !=
+                    retained_identity or path.is_symlink()):
+                raise OSError(errno.ESTALE, "owned path identity changed")
+            if fault_point:
+                _run_fault(fault, fault_point)
+            refreshed = os.fstat(descriptor)
+            path_info = path.lstat()
+            if ((refreshed.st_dev, refreshed.st_ino, refreshed.st_nlink) !=
+                    retained_identity or
+                    (path_info.st_dev, path_info.st_ino, path_info.st_nlink) !=
+                    retained_identity or path.is_symlink() or
+                    _observable_mode(refreshed) != expected_mode or
+                    retained_hash() != source_hash):
+                raise OSError(errno.ESTALE, "owned path changed before unlink")
             os.unlink(path)
             self.sync_directory_or_equivalent(path.parent)
+        except _InjectedFault:
+            raise
         except OSError as exc:
             raise self._error("RemoveOwned", path, exc.errno or errno.EIO) from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
         if path.exists() or path.is_symlink():
             raise self._error("RemoveOwned", path, errno.EIO)
 
@@ -718,7 +769,12 @@ class PosixDurableFs:
         except OSError as exc:
             raise self._error("RestoreMode", path, exc.errno or errno.EIO) from exc
 
-    def lock_exclusive(self, canonical: Path, retired: Path) -> "_PosixLock":
+    def lock_exclusive(
+        self,
+        canonical: Path,
+        retired: Path,
+        fault: Callable[[str], Any] | None = None,
+    ) -> "_PosixLock":
         marker = f"corsairs-durable-lock-v1\npath={canonical.as_posix()}\n".encode()
         nofollow = getattr(os, "O_NOFOLLOW", 0)
         for _ in range(32):
@@ -743,11 +799,16 @@ class PosixDurableFs:
                             "pre-existing empty durable lock is not owned")
                     os.ftruncate(descriptor, 0)
                     os.pwrite(descriptor, marker, 0)
+                    _run_fault(
+                        fault, "INSTALL_LOCK_MARKER_AFTER_WRITE_BEFORE_FLUSH")
                     os.fsync(descriptor)
+                    _run_fault(
+                        fault, "INSTALL_LOCK_MARKER_AFTER_FLUSH_BEFORE_READBACK")
                     handle_info = os.fstat(descriptor)
                 if (handle_info.st_size != len(marker) or
                         os.pread(descriptor, len(marker), 0) != marker):
                     raise OSError(errno.EINVAL, "lock marker mismatch")
+                _run_fault(fault, "INSTALL_LOCK_MARKER_AFTER_READBACK")
                 path_info = canonical.lstat()
                 if (not stat.S_ISREG(path_info.st_mode) or
                         path_info.st_nlink != 1 or
@@ -764,8 +825,20 @@ class PosixDurableFs:
                             (handle_info.st_dev, handle_info.st_ino) or
                             retired.read_bytes() != marker):
                         raise OSError(errno.EINVAL, "foreign retired lock")
-                    self.remove_owned(retired)
+                    self.remove_owned(
+                        retired,
+                        source_hash=hashlib.sha256(marker).hexdigest(),
+                        expected_mode=_observable_mode(retired_info),
+                        expected_identity=(
+                            retired_info.st_dev, retired_info.st_ino,
+                            retired_info.st_nlink))
                 return _PosixLock(canonical, retired, descriptor, marker)
+            except _InjectedFault:
+                try:
+                    os.close(descriptor)
+                except (OSError, UnboundLocalError):
+                    pass
+                raise
             except BlockingIOError as exc:
                 try:
                     os.close(descriptor)
@@ -803,6 +876,14 @@ class PosixDurableFs:
                     (path_info.st_dev, path_info.st_ino)):
                 raise OSError(errno.ESTALE, "lock identity changed")
             _run_fault(fault, "INSTALL_AFTER_LOCK_RESERVATION_DURABLE")
+            refreshed_handle = os.fstat(lock.descriptor)
+            refreshed_path = lock.canonical.lstat()
+            if (not stat.S_ISREG(refreshed_path.st_mode) or
+                    refreshed_path.st_nlink != 1 or
+                    (refreshed_handle.st_dev, refreshed_handle.st_ino) !=
+                    (refreshed_path.st_dev, refreshed_path.st_ino) or
+                    lock.canonical.read_bytes() != lock.marker):
+                raise OSError(errno.ESTALE, "lock identity changed after hook")
             self.replace_same_volume(lock.canonical, lock.retired)
             self.sync_directory_or_equivalent(lock.canonical.parent)
             _run_fault(fault, "INSTALL_AFTER_LOCK_MOVE_TO_RETIRED")
@@ -839,6 +920,7 @@ class WindowsDurableFs:
     FILE_ATTRIBUTE_NORMAL = 0x00000080
     GENERIC_READ = 0x80000000
     GENERIC_WRITE = 0x40000000
+    DELETE = 0x00010000
     FILE_WRITE_ATTRIBUTES = 0x00000100
     FILE_SHARE_READ = 0x00000001
     FILE_SHARE_WRITE = 0x00000002
@@ -885,6 +967,9 @@ class WindowsDurableFs:
                 ("FileAttributes", wintypes.DWORD),
             ]
 
+        class FileDispositionInfo(ctypes.Structure):
+            _fields_ = [("DeleteFile", ctypes.c_ubyte)]
+
         class Overlapped(ctypes.Structure):
             _fields_ = [
                 ("Internal", ctypes.c_size_t),
@@ -897,6 +982,7 @@ class WindowsDurableFs:
         self.FileAttributeTagInfo = FileAttributeTagInfo
         self.ByHandleFileInformation = ByHandleFileInformation
         self.FileBasicInfo = FileBasicInfo
+        self.FileDispositionInfo = FileDispositionInfo
         self.Overlapped = Overlapped
         self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         self.kernel32.CreateFileW.argtypes = [
@@ -1368,67 +1454,101 @@ class WindowsDurableFs:
             if (expected_mode is not None and
                     self.physical_mode(path) != expected_mode):
                 raise self._error("RemoveOwned", path, 13)
-        delete_identity = (tuple(expected_identity) if expected_identity else
-                           (self.physical_identity(path)
-                            if path.exists() or path.is_symlink() else ()))
+        if not expected_identity or not source_hash or expected_mode is None:
+            raise self._error("RemoveOwned", path, 87)
         attributes = self.kernel32.GetFileAttributesW(str(path))
-        if attributes == 0xFFFFFFFF:
+        if attributes == self.INVALID_FILE_ATTRIBUTES:
             native = self.ctypes.get_last_error()
             if native in (2, 3):
                 return
             raise self._error("RemoveOwned", path, native)
-        if attributes & self.FILE_ATTRIBUTE_REPARSE_POINT:
-            raise self._error("RemoveOwned", path, 4390)
+        handle = self._open(
+            path, self.OPEN_EXISTING,
+            self.DELETE | self.GENERIC_READ | self.FILE_WRITE_ATTRIBUTES,
+            self.FILE_SHARE_READ | self.FILE_SHARE_WRITE,
+            "RemoveOwned")
+        original_basic = self.FileBasicInfo()
+        current_basic = self.FileBasicInfo()
         readonly_cleared = False
 
-        def restore_readonly() -> None:
-            if not readonly_cleared:
-                return
-            try:
-                if (delete_identity and
-                        self.physical_identity(path) != delete_identity):
-                    return
-            except (InstallError, OSError):
-                return
-            if not self.kernel32.SetFileAttributesW(str(path), attributes):
-                native = self.ctypes.get_last_error()
-                raise self._error("RemoveOwned", path, native)
-            restored = self.kernel32.GetFileAttributesW(str(path))
-            if restored == self.INVALID_FILE_ATTRIBUTES:
-                native = self.ctypes.get_last_error()
-                raise self._error("RemoveOwned", path, native)
-            if restored != attributes:
-                raise self._error("RemoveOwned", path, 13)
+        def handle_bytes() -> bytes:
+            size = self.ctypes.c_longlong()
+            if not self.kernel32.GetFileSizeEx(handle, self.ctypes.byref(size)):
+                raise self._error(
+                    "RemoveOwned", path, self.ctypes.get_last_error())
+            beginning = self.ctypes.c_longlong()
+            if not self.kernel32.SetFilePointerEx(
+                    handle, beginning, None, 0):
+                raise self._error(
+                    "RemoveOwned", path, self.ctypes.get_last_error())
+            remaining = size.value
+            chunks: list[bytes] = []
+            while remaining:
+                count = min(remaining, 1024 * 1024)
+                buffer = self.ctypes.create_string_buffer(count)
+                read = self.wintypes.DWORD()
+                if not self.kernel32.ReadFile(
+                        handle, buffer, count, self.ctypes.byref(read), None):
+                    raise self._error(
+                        "RemoveOwned", path, self.ctypes.get_last_error())
+                if read.value <= 0 or read.value > count:
+                    raise self._error("RemoveOwned", path, 13)
+                chunks.append(buffer.raw[:read.value])
+                remaining -= read.value
+            return b"".join(chunks)
 
         try:
-            if attributes & self.FILE_ATTRIBUTE_READONLY:
-                updated = attributes & ~self.FILE_ATTRIBUTE_READONLY
-                if updated == 0:
-                    updated = self.FILE_ATTRIBUTE_NORMAL
-                if not self.kernel32.SetFileAttributesW(str(path), updated):
-                    native = self.ctypes.get_last_error()
-                    raise self._error("RemoveOwned", path, native)
-                readonly_cleared = True
-                readback = self.kernel32.GetFileAttributesW(str(path))
-                if readback == self.INVALID_FILE_ATTRIBUTES:
-                    native = self.ctypes.get_last_error()
-                    raise self._error("RemoveOwned", path, native)
-                if readback != updated:
-                    raise self._error("RemoveOwned", path, 13)
-            if (delete_identity and
-                    self.physical_identity(path) != delete_identity) or (
-                    source_hash and self.physical_hash(path) != source_hash):
+            if self._identity(handle, path, "RemoveOwned") != expected_identity:
                 raise self._error("RemoveOwned", path, 1168)
-            if not self.kernel32.DeleteFileW(str(path)):
-                native = self.ctypes.get_last_error()
-                raise DurableFsError(
-                    f"DURABLE_FS_ERROR op=RemoveOwned path={_json_path(path)} "
-                    f"native=win32:{native}:")
+            if not self.kernel32.GetFileInformationByHandleEx(
+                    handle, 0, self.ctypes.byref(original_basic),
+                    self.ctypes.sizeof(original_basic)):
+                raise self._error(
+                    "RemoveOwned", path, self.ctypes.get_last_error())
+            if (original_basic.FileAttributes != expected_mode or
+                    hashlib.sha256(handle_bytes()).hexdigest() != source_hash):
+                raise self._error("RemoveOwned", path, 1168)
+            if fault_point:
+                _run_fault(fault, fault_point)
+            if original_basic.FileAttributes & self.FILE_ATTRIBUTE_READONLY:
+                self.ctypes.memmove(
+                    current_basic, original_basic,
+                    self.ctypes.sizeof(original_basic))
+                current_basic.FileAttributes &= ~self.FILE_ATTRIBUTE_READONLY
+                if current_basic.FileAttributes == 0:
+                    current_basic.FileAttributes = self.FILE_ATTRIBUTE_NORMAL
+                if not self.kernel32.SetFileInformationByHandle(
+                        handle, 0, self.ctypes.byref(current_basic),
+                        self.ctypes.sizeof(current_basic)):
+                    raise self._error(
+                        "RemoveOwned", path, self.ctypes.get_last_error())
+                readonly_cleared = True
+            if (self._identity(handle, path, "RemoveOwned") !=
+                    expected_identity or
+                    hashlib.sha256(handle_bytes()).hexdigest() != source_hash):
+                raise self._error("RemoveOwned", path, 1168)
+            disposition = self.FileDispositionInfo()
+            disposition.DeleteFile = 1
+            if not self.kernel32.SetFileInformationByHandle(
+                    handle, 4, self.ctypes.byref(disposition),
+                    self.ctypes.sizeof(disposition)):
+                raise self._error(
+                    "RemoveOwned", path, self.ctypes.get_last_error())
         except BaseException:
-            restore_readonly()
+            if readonly_cleared:
+                self.kernel32.SetFileInformationByHandle(
+                    handle, 0, self.ctypes.byref(original_basic),
+                    self.ctypes.sizeof(original_basic))
+                self.kernel32.FlushFileBuffers(handle)
+            self.kernel32.CloseHandle(handle)
             raise
-        if path.exists() or path.is_symlink():
-            raise self._error("RemoveOwned", path, 13)
+        self.kernel32.CloseHandle(handle)
+        remaining_attributes = self.kernel32.GetFileAttributesW(str(path))
+        if remaining_attributes != self.INVALID_FILE_ATTRIBUTES:
+            raise self._error("RemoveOwned", path, 1168)
+        native = self.ctypes.get_last_error()
+        if native not in (2, 3):
+            raise self._error("RemoveOwned", path, native)
 
     def restore_mode(self, path: Path, mode: int) -> None:
         if mode == 0:
@@ -1442,14 +1562,19 @@ class WindowsDurableFs:
             raise self._error("RestoreMode", path, 13)
         self.flush_file(path)
 
-    def lock_exclusive(self, canonical: Path, retired: Path) -> "_WindowsLock":
+    def lock_exclusive(
+        self,
+        canonical: Path,
+        retired: Path,
+        fault: Callable[[str], Any] | None = None,
+    ) -> "_WindowsLock":
         marker = f"corsairs-durable-lock-v1\npath={canonical.as_posix()}\n".encode()
         for _ in range(32):
             created = False
             try:
                 handle = self._open(
                     canonical, self.CREATE_NEW,
-                    self.GENERIC_READ | self.GENERIC_WRITE,
+                    self.DELETE | self.GENERIC_READ | self.GENERIC_WRITE,
                     self.FILE_SHARE_READ | self.FILE_SHARE_WRITE |
                     self.FILE_SHARE_DELETE, "LockExclusive")
                 created = True
@@ -1459,7 +1584,7 @@ class WindowsDurableFs:
                     raise
                 handle = self._open(
                     canonical, self.OPEN_EXISTING,
-                    self.GENERIC_READ | self.GENERIC_WRITE,
+                    self.DELETE | self.GENERIC_READ | self.GENERIC_WRITE,
                     self.FILE_SHARE_READ | self.FILE_SHARE_WRITE |
                     self.FILE_SHARE_DELETE, "LockExclusive")
             try:
@@ -1488,9 +1613,13 @@ class WindowsDurableFs:
                         raise self._error("LockExclusive", canonical, native)
                     if written.value != len(marker):
                         raise self._error("LockExclusive", canonical, 29)
+                    _run_fault(
+                        fault, "INSTALL_LOCK_MARKER_AFTER_WRITE_BEFORE_FLUSH")
                     if not self.kernel32.FlushFileBuffers(handle):
                         native = self.ctypes.get_last_error()
                         raise self._error("LockExclusive", canonical, native)
+                    _run_fault(
+                        fault, "INSTALL_LOCK_MARKER_AFTER_FLUSH_BEFORE_READBACK")
                     if not self.kernel32.GetFileSizeEx(
                             handle, self.ctypes.byref(size)):
                         native = self.ctypes.get_last_error()
@@ -1509,6 +1638,7 @@ class WindowsDurableFs:
                     raise self._error("LockExclusive", canonical, native)
                 if read.value != len(marker) or readback.raw != marker:
                     raise self._error("LockExclusive", canonical, 13)
+                _run_fault(fault, "INSTALL_LOCK_MARKER_AFTER_READBACK")
                 try:
                     fresh = self._open(
                         canonical, self.OPEN_EXISTING, self.GENERIC_READ,
@@ -1589,6 +1719,7 @@ class WindowsDurableFs:
         lock: "_WindowsLock",
         fault: Callable[[str], Any] | None = None,
     ) -> None:
+        guard = None
         try:
             fresh = self._open(
                 lock.canonical, self.OPEN_EXISTING, self.GENERIC_READ,
@@ -1618,14 +1749,30 @@ class WindowsDurableFs:
                     lock.handle, lock.retired, "RetireLock") != lock.identity:
                 raise self._error("RetireLock", lock.retired, 1168)
             _run_fault(fault, "INSTALL_AFTER_LOCK_MOVE_TO_RETIRED")
-            if not self.kernel32.DeleteFileW(str(lock.retired)):
-                native = self.ctypes.get_last_error()
-                raise self._error("RetireLock", lock.retired, native)
+            guard = self._open(
+                lock.retired, self.OPEN_EXISTING,
+                self.DELETE | self.GENERIC_READ,
+                self.FILE_SHARE_READ | self.FILE_SHARE_WRITE,
+                "RetireLock")
+            if self._identity(
+                    guard, lock.retired, "RetireLock") != lock.identity:
+                raise self._error("RetireLock", lock.retired, 1168)
+            disposition = self.FileDispositionInfo()
+            disposition.DeleteFile = 1
+            if not self.kernel32.SetFileInformationByHandle(
+                    guard, 4, self.ctypes.byref(disposition),
+                    self.ctypes.sizeof(disposition)):
+                raise self._error(
+                    "RetireLock", lock.retired,
+                    self.ctypes.get_last_error())
             _run_fault(fault, "INSTALL_AFTER_LOCK_DELETE_PENDING")
         except BaseException:
+            if guard is not None:
+                self.kernel32.CloseHandle(guard)
             self.abandon_lock(lock)
             raise
-        self.abandon_lock(lock)  # CloseHandle is the final filesystem call
+        self.abandon_lock(lock)
+        self.kernel32.CloseHandle(guard)  # final filesystem operation
 
 
 @dataclass
@@ -1687,13 +1834,87 @@ def _journal_bytes(journal: dict[str, Any]) -> bytes:
     return _canonical_json(journal)
 
 
+_JOURNAL_AUTH_PREFIX = b"corsairs-journal-retired-auth-v1\nsha256="
+
+
+def _journal_auth_bytes(journal_bytes: bytes) -> bytes:
+    return (_JOURNAL_AUTH_PREFIX + hashlib.sha256(journal_bytes).hexdigest().encode()
+            + b"\n" + journal_bytes)
+
+
+def _read_journal_auth(path: Path) -> bytes:
+    _physical_regular(path, "/journalRetiredAuth")
+    if _observable_mode(path.lstat()) != _private_mode():
+        raise InstallError(
+            "install journal retirement authentication mode mismatch",
+            status="RECOVERY_REQUIRED", recovery_paths=(path,))
+    payload = path.read_bytes()
+    if not payload.startswith(_JOURNAL_AUTH_PREFIX):
+        raise InstallError(
+            "invalid install journal retirement authentication",
+            status="RECOVERY_REQUIRED", recovery_paths=(path,))
+    separator = payload.find(b"\n", len(_JOURNAL_AUTH_PREFIX))
+    if separator < 0:
+        raise InstallError(
+            "invalid install journal retirement authentication",
+            status="RECOVERY_REQUIRED", recovery_paths=(path,))
+    recorded_hash = payload[len(_JOURNAL_AUTH_PREFIX):separator]
+    journal_bytes = payload[separator + 1:]
+    if (len(recorded_hash) != 64 or
+            re.fullmatch(rb"[0-9a-f]{64}", recorded_hash) is None or
+            hashlib.sha256(journal_bytes).hexdigest().encode() != recorded_hash):
+        raise InstallError(
+            "install journal retirement authentication mismatch",
+            status="RECOVERY_REQUIRED", recovery_paths=(path,))
+    return journal_bytes
+
+
+def _ensure_journal_auth(
+    durable_fs: Any, canonical: Path, journal_bytes: bytes
+) -> Path:
+    auth_path = canonical.parent / _JOURNAL_AUTH_NAME
+    expected = _journal_auth_bytes(journal_bytes)
+    if not (auth_path.exists() or auth_path.is_symlink()):
+        _write_owned(durable_fs, auth_path, expected, _private_mode())
+        durable_fs.sync_directory_or_equivalent(auth_path.parent)
+    if _read_journal_auth(auth_path) != journal_bytes:
+        raise InstallError(
+            "install journal retirement authentication does not match payload",
+            status="RECOVERY_REQUIRED", recovery_paths=(auth_path,))
+    return auth_path
+
+
+def _remove_journal_auth(
+    durable_fs: Any, canonical: Path, journal_bytes: bytes
+) -> None:
+    auth_path = canonical.parent / _JOURNAL_AUTH_NAME
+    if not (auth_path.exists() or auth_path.is_symlink()):
+        raise InstallError(
+            "install journal retirement authentication is missing",
+            status="RECOVERY_REQUIRED", recovery_paths=(auth_path,))
+    if _read_journal_auth(auth_path) != journal_bytes:
+        raise InstallError(
+            "install journal retirement authentication does not match payload",
+            status="RECOVERY_REQUIRED", recovery_paths=(auth_path,))
+    identity = _physical_identity(auth_path)
+    payload = _journal_auth_bytes(journal_bytes)
+    durable_fs.remove_owned(
+        auth_path, source_hash=hashlib.sha256(payload).hexdigest(),
+        expected_mode=_private_mode(), expected_identity=identity)
+
+
 def _parse_journal_impl(raw: bytes, target_root: Path) -> dict[str, Any]:
     try:
         journal = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_pairs)
-    except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+    except (UnicodeError, ValueError, json.JSONDecodeError,
+            RecursionError) as exc:
         raise InstallError(f"invalid install journal: {exc}", status="RECOVERY_REQUIRED") from exc
+    _validate_unicode_scalars(
+        journal, "/journal", status="RECOVERY_REQUIRED",
+        label="install journal")
     expected = {"version", "phase", "transactionId", "manifestPath",
-                "manifestSha256", "journalRetired", "entries"}
+                "manifestSha256", "recoveryCommand", "journalRetired",
+                "entries"}
     _require_keys(journal, expected, "/journal")
     if _integer(journal["version"], "/journal/version") != 1:
         raise InstallError("invalid install journal version", status="RECOVERY_REQUIRED")
@@ -1715,6 +1936,13 @@ def _parse_journal_impl(raw: bytes, target_root: Path) -> dict[str, Any]:
             "invalid install journal manifestPath",
             status="RECOVERY_REQUIRED")
     _hash(journal["manifestSha256"], "/journal/manifestSha256")
+    recovery_command = _string(
+        journal["recoveryCommand"], "/journal/recoveryCommand")
+    if (not recovery_command or
+            recovery_command != _recovery_command(manifest_path, target_root)):
+        raise InstallError(
+            "invalid install journal recoveryCommand",
+            status="RECOVERY_REQUIRED")
     journal_retired = Path(_string(
         journal["journalRetired"], "/journal/journalRetired"))
     if journal_retired != target_root / _RETIRED_JOURNAL_NAME:
@@ -1835,11 +2063,37 @@ def _write_journal(
     update = canonical.parent / (
         f".garner-runtime-install.journal.{journal['transactionId']}.{time.monotonic_ns()}")
     payload = _journal_bytes(journal)
-    _write_owned(durable_fs, update, payload, _private_mode())
-    if _parse_journal(update.read_bytes(), canonical.parent) != journal:
-        raise DurableFsError("journal readback mismatch")
-    durable_fs.replace_same_volume(update, canonical)
-    durable_fs.sync_directory_or_equivalent(canonical.parent)
+    update_identity: tuple[int, int, int] = ()
+    try:
+        _write_owned(durable_fs, update, payload, _private_mode())
+        update_identity = _physical_identity(update)
+        if (_observable_mode(update.lstat()) != _private_mode() or
+                _parse_journal(update.read_bytes(), canonical.parent) != journal):
+            raise DurableFsError("journal readback mismatch")
+        durable_fs.replace_same_volume(update, canonical)
+        try:
+            durable_fs.sync_directory_or_equivalent(canonical.parent)
+        except (DurableFsError, OSError) as exc:
+            raise DurableFsError(
+                "RECOVERY_REQUIRED install journal rename durability uncertain "
+                f"path={canonical.as_posix()} cause={exc}") from exc
+    except BaseException as exc:
+        if update.exists() or update.is_symlink():
+            if not update_identity:
+                raise DurableFsError(
+                    "RECOVERY_REQUIRED install journal update retained "
+                    f"path={update.as_posix()} cause={exc}") from exc
+            try:
+                durable_fs.remove_owned(
+                    update, source_hash=hashlib.sha256(payload).hexdigest(),
+                    expected_mode=_private_mode(),
+                    expected_identity=update_identity)
+            except BaseException as cleanup_exc:
+                raise DurableFsError(
+                    "RECOVERY_REQUIRED install journal update retained "
+                    f"path={update.as_posix()} cause={exc} "
+                    f"cleanup={cleanup_exc}") from cleanup_exc
+        raise
     if canonical.read_bytes() != payload:
         raise DurableFsError("journal publication readback mismatch")
     return _physical_identity(canonical), payload
@@ -1941,7 +2195,18 @@ def _recover_transaction(
     journal_path: Path,
     retired_journal: Path,
     fault: Callable[[str], Any] | None = None,
+    recovery_context: dict[str, str] | None = None,
 ) -> None:
+    auth_path = target_root / _JOURNAL_AUTH_NAME
+    uncertain_updates = sorted(
+        path for path in target_root.iterdir()
+        if path.name.startswith(".garner-runtime-install.journal."))
+    if uncertain_updates:
+        raise InstallError(
+            f"uncertain install journal update retained: "
+            f"{uncertain_updates[0].as_posix()}",
+            status="RECOVERY_REQUIRED",
+            recovery_paths=tuple(uncertain_updates))
     unexpected = sorted(
         path for path in target_root.iterdir()
         if path.name.startswith(".garner-runtime-install") and
@@ -1954,7 +2219,43 @@ def _recover_transaction(
             status="RECOVERY_REQUIRED", recovery_paths=(unexpected[0],))
     canonical_exists = journal_path.exists() or journal_path.is_symlink()
     retired_exists = retired_journal.exists() or retired_journal.is_symlink()
+    auth_exists = auth_path.exists() or auth_path.is_symlink()
+    authenticated_bytes = _read_journal_auth(auth_path) if auth_exists else None
     if not canonical_exists and not retired_exists:
+        if authenticated_bytes is not None:
+            journal = _parse_journal(authenticated_bytes, target_root)
+            if recovery_context is not None:
+                recovery_context["command"] = journal["recoveryCommand"]
+            state_matches = True
+            if journal["phase"] == "COMMITTED":
+                state_matches = all(
+                    _verify_entry(entry, True, entry["stageIdentity"])
+                    for entry in journal["entries"].values())
+            else:
+                for entry in journal["entries"].values():
+                    target = Path(entry["target"])
+                    if entry["priorExists"]:
+                        identities = {tuple(entry["priorIdentity"])}
+                        if entry["rollbackIdentity"]:
+                            identities.add(tuple(entry["rollbackIdentity"]))
+                        try:
+                            exists, digest, mode, _ = _path_state(target)
+                            state_matches = (
+                                exists and digest == entry["priorSha256"] and
+                                mode == entry["priorMode"] and
+                                _physical_identity(target) in identities)
+                        except (InstallError, OSError):
+                            state_matches = False
+                    else:
+                        state_matches = not (
+                            target.exists() or target.is_symlink())
+                    if not state_matches:
+                        break
+            if not state_matches:
+                raise InstallError(
+                    "authentication-only recovery cannot verify runtime pair",
+                    status="RECOVERY_REQUIRED", recovery_paths=(auth_path,))
+            _remove_journal_auth(durable_fs, journal_path, authenticated_bytes)
         return
     if canonical_exists and retired_exists:
         try:
@@ -1966,6 +2267,14 @@ def _recover_transaction(
                 status="RECOVERY_REQUIRED",
                 recovery_paths=(journal_path, retired_journal)) from exc
         canonical_journal = _parse_journal(canonical_bytes, target_root)
+        if recovery_context is not None:
+            recovery_context["command"] = canonical_journal["recoveryCommand"]
+        if (authenticated_bytes is not None and
+                authenticated_bytes != canonical_bytes):
+            raise InstallError(
+                "install journal retirement authentication does not match payload",
+                status="RECOVERY_REQUIRED",
+                recovery_paths=(journal_path, retired_journal, auth_path))
         reservation_builder = getattr(durable_fs, "_reservation_bytes", None)
         expected_reservation = (
             reservation_builder(
@@ -1985,7 +2294,13 @@ def _recover_transaction(
                 "both canonical and retired install journals exist",
                 status="RECOVERY_REQUIRED",
                 recovery_paths=(journal_path, retired_journal))
-        durable_fs.remove_owned(retired_journal)
+        reservation_identity = _physical_identity(retired_journal)
+        reservation_mode = _observable_mode(retired_journal.lstat())
+        durable_fs.remove_owned(
+            retired_journal,
+            source_hash=hashlib.sha256(retired_bytes).hexdigest(),
+            expected_mode=reservation_mode,
+            expected_identity=reservation_identity)
         retired_exists = False
     source = journal_path if canonical_exists else retired_journal
     try:
@@ -1997,6 +2312,18 @@ def _recover_transaction(
             f"cannot validate physical install journal {source}",
             status="RECOVERY_REQUIRED", recovery_paths=(source,)) from exc
     journal = _parse_journal(journal_bytes, target_root)
+    if recovery_context is not None:
+        recovery_context["command"] = journal["recoveryCommand"]
+    if source == retired_journal and authenticated_bytes is None:
+        raise InstallError(
+            "retired install journal lacks independent authentication",
+            status="RECOVERY_REQUIRED", recovery_paths=(retired_journal,))
+    if (authenticated_bytes is not None and
+            authenticated_bytes != journal_bytes):
+        raise InstallError(
+            "install journal retirement authentication does not match payload",
+            status="RECOVERY_REQUIRED",
+            recovery_paths=(source, auth_path))
     normalization_entries: list[DurableEntryToFinalize] = []
     for key, entry in journal["entries"].items():
         stage = Path(entry["stage"])
@@ -2199,6 +2526,7 @@ def _recover_transaction(
                     expected_identity=entry[identity_key], fault=fault,
                     fault_point="INSTALL_AFTER_TOMBSTONE_RESERVATION_DURABLE")
     if source == journal_path:
+        _ensure_journal_auth(durable_fs, journal_path, journal_bytes)
         reservation_builder = getattr(durable_fs, "reserve_move_target", None)
         if reservation_builder is not None:
             reservation_builder(
@@ -2217,6 +2545,7 @@ def _recover_transaction(
     durable_fs.remove_owned(
         source, source_hash=hashlib.sha256(journal_bytes).hexdigest(),
         expected_mode=_private_mode(), expected_identity=journal_identity)
+    _remove_journal_auth(durable_fs, journal_path, journal_bytes)
 
 
 class _InjectedFault(RuntimeError):
@@ -2258,6 +2587,7 @@ def install_runtime_map_data(
     journal_path = target_root / _JOURNAL_NAME
     retired_journal = target_root / _RETIRED_JOURNAL_NAME
     command = _recovery_command(manifest_path, target_root)
+    recovery_context = {"command": command}
 
     def recovery_evidence() -> tuple[Path, ...]:
         candidates = {journal_path, retired_journal, lock_path, retired_lock}
@@ -2272,12 +2602,13 @@ def install_runtime_map_data(
              if path.exists() or path.is_symlink()),
             key=lambda path: path.as_posix()))
     try:
-        lock = durable_fs.lock_exclusive(lock_path, retired_lock)
+        lock = durable_fs.lock_exclusive(lock_path, retired_lock, fault=fault)
     except (OSError, DurableFsError) as exc:
         raise InstallError(str(exc)) from exc
     try:
         _recover_transaction(
-            durable_fs, target_root, journal_path, retired_journal, fault)
+            durable_fs, target_root, journal_path, retired_journal, fault,
+            recovery_context)
         validated = validate_manifest(manifest_path)
         _run_fault(fault, "INSTALL_AFTER_MANIFEST_VALIDATE")
         post_validate_identities = {
@@ -2326,6 +2657,7 @@ def install_runtime_map_data(
             "transactionId": transaction_id,
             "manifestPath": manifest_path.as_posix(),
             "manifestSha256": hashlib.sha256(validated.raw).hexdigest(),
+            "recoveryCommand": command,
             "journalRetired": retired_journal.as_posix(),
             "entries": {},
         }
@@ -2507,6 +2839,7 @@ def install_runtime_map_data(
                         fault_point="INSTALL_AFTER_TOMBSTONE_RESERVATION_DURABLE",
                     )
             reserve_journal = getattr(durable_fs, "reserve_move_target", None)
+            _ensure_journal_auth(durable_fs, journal_path, journal_bytes)
             if reserve_journal is not None:
                 reserve_journal(
                     journal_path, retired_journal, "retire-install-journal",
@@ -2524,6 +2857,7 @@ def install_runtime_map_data(
                 source_hash=hashlib.sha256(journal_bytes).hexdigest(),
                 expected_mode=_private_mode(),
                 expected_identity=journal_identity)
+            _remove_journal_auth(durable_fs, journal_path, journal_bytes)
             durable_fs.retire_lock(lock, fault)
             return "OK"
         except _InjectedFault as exc:
@@ -2575,7 +2909,7 @@ def install_runtime_map_data(
     except InstallError as original:
         if original.status == "RECOVERY_REQUIRED":
             if not original.recovery_command:
-                original.recovery_command = command
+                original.recovery_command = recovery_context["command"]
             original.recovery_paths = tuple(sorted(
                 set(original.recovery_paths) | set(recovery_evidence()),
                 key=lambda path: path.as_posix()))
@@ -2606,20 +2940,21 @@ def install_runtime_map_data(
         evidence = recovery_evidence()
         raise InstallError(
             f"injected fault {exc.point}", status="RECOVERY_REQUIRED",
-            recovery_paths=evidence, recovery_command=command) from exc
+            recovery_paths=evidence,
+            recovery_command=recovery_context["command"]) from exc
     except (DurableFsError, OSError) as exc:
         durable_fs.abandon_lock(lock)
         evidence = recovery_evidence()
         raise InstallError(
             str(exc), status="RECOVERY_REQUIRED", recovery_paths=evidence,
-            recovery_command=command) from exc
+            recovery_command=recovery_context["command"]) from exc
     except Exception as exc:
         durable_fs.abandon_lock(lock)
         evidence = recovery_evidence()
         raise InstallError(
             f"unexpected post-lock exception: {type(exc).__name__}: {exc}",
             status="RECOVERY_REQUIRED", recovery_paths=evidence,
-            recovery_command=command) from exc
+            recovery_command=recovery_context["command"]) from exc
     except BaseException:
         durable_fs.abandon_lock(lock)
         raise

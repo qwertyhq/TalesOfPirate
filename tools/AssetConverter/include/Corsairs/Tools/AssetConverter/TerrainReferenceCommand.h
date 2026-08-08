@@ -181,6 +181,7 @@ struct TerrainPublicationResult {
     std::string Detail;
     std::filesystem::path RecoveryBackup;
     std::string RecoveryCommand;
+    std::vector<std::filesystem::path> RecoveryPaths;
 };
 
 struct TerrainReferenceDependencies {
@@ -261,6 +262,7 @@ enum class TerrainWindowsDurableAction : std::uint32_t {
     DELETE_RESERVATION,
     VERIFY_ABSENCE,
     VERIFY_LOCK_IDENTITIES,
+    PIN_RETIREMENT_PATH,
     ACCEPT_DELETE_PENDING,
     CLOSE_LOCK_HANDLE,
 };

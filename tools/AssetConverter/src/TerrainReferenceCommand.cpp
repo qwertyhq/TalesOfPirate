@@ -2024,6 +2024,7 @@ PlanTerrainWindowsLockRetirement() {
         {0u, TerrainWindowsDurableAction::RESERVE_TARGET},
         {0u, TerrainWindowsDurableAction::MOVE_TO_RESERVATION},
         {0u, TerrainWindowsDurableAction::VERIFY_RESERVATION_PAYLOAD},
+        {0u, TerrainWindowsDurableAction::PIN_RETIREMENT_PATH},
         {0u, TerrainWindowsDurableAction::ACCEPT_DELETE_PENDING},
         {0u, TerrainWindowsDurableAction::CLOSE_LOCK_HANDLE},
     };
@@ -2806,9 +2807,57 @@ bool RemoveOwnedPhysical(
         return false;
     }
 #else
-    if (::unlink(path.c_str()) != 0) {
+    const int retained = ::open(
+        path.c_str(), O_RDONLY | O_NOFOLLOW
+#if defined(O_CLOEXEC)
+            | O_CLOEXEC
+#endif
+    );
+    if (retained < 0) {
         const int nativeError = errno;
         detail = DurableNativeError("RemoveOwned", path, nativeError);
+        return false;
+    }
+    struct stat retainedStatus {};
+    struct stat pathStatus {};
+    std::string retainedHashDetail;
+    const auto retainedHash = Sha256File(path, retainedHashDetail);
+    const bool retainedMatches =
+        ::fstat(retained, &retainedStatus) == 0 &&
+        ::lstat(path.c_str(), &pathStatus) == 0 &&
+        S_ISREG(retainedStatus.st_mode) && retainedStatus.st_nlink == 1 &&
+        S_ISREG(pathStatus.st_mode) && pathStatus.st_nlink == 1 &&
+        retainedStatus.st_dev == pathStatus.st_dev &&
+        retainedStatus.st_ino == pathStatus.st_ino &&
+        SerializePhysicalIdentity(PhysicalFileIdentity{
+            static_cast<std::uint64_t>(retainedStatus.st_dev), 0u,
+            static_cast<std::uint64_t>(retainedStatus.st_ino)}) ==
+            expectedIdentity &&
+        static_cast<std::uint32_t>(retainedStatus.st_mode & 07777u) ==
+            *expectedMode &&
+        retainedHash.has_value() && *retainedHash == expectedHash;
+    if (!retainedMatches) {
+        const int nativeError = errno == 0 ? ESTALE : errno;
+        ::close(retained);
+        detail = retainedHash.has_value()
+            ? DurableNativeError("RemoveOwned", path, nativeError)
+            : retainedHashDetail;
+        return false;
+    }
+    if (::unlink(path.c_str()) != 0) {
+        const int nativeError = errno;
+        ::close(retained);
+        detail = DurableNativeError("RemoveOwned", path, nativeError);
+        return false;
+    }
+    struct stat removedStatus {};
+    const bool removedRetainedIdentity =
+        ::fstat(retained, &removedStatus) == 0 &&
+        removedStatus.st_dev == retainedStatus.st_dev &&
+        removedStatus.st_ino == retainedStatus.st_ino;
+    const bool closeOk = ::close(retained) == 0;
+    if (!removedRetainedIdentity || !closeOk) {
+        detail = DurableNativeError("RemoveOwned", path, ESTALE);
         return false;
     }
 #endif
@@ -3428,9 +3477,18 @@ std::string WindowsLockGeneration(const WindowsFileIdentity& identity) {
 std::optional<PublicationLock> AcquirePublicationLock(
     const std::filesystem::path& canonical,
     const std::filesystem::path& retired,
-    std::string& detail) {
+    std::string& detail,
+    const TerrainReferenceFaultInjector& injectFault = {}) {
     detail.clear();
     const std::string marker = PublicationLockMarker(canonical);
+    const auto interrupted = [&](std::string_view point) {
+        if (!injectFault ||
+            injectFault(point) == TerrainReferenceFaultAction::NONE) {
+            return false;
+        }
+        detail = std::format("injected fault {}", point);
+        return true;
+    };
 #if defined(_WIN32)
     // A share-delete handle plus LockFileEx gives process-lifetime ownership.
     for (std::uint32_t attempt = 0u; attempt < 32u; ++attempt) {
@@ -3514,11 +3572,21 @@ std::optional<PublicationLock> AcquirePublicationLock(
                     "LockExclusive", canonical, ERROR_WRITE_FAULT);
                 return std::nullopt;
             }
+            if (interrupted(
+                    "MANIFEST_LOCK_MARKER_AFTER_WRITE_BEFORE_FLUSH")) {
+                CloseHandle(handle);
+                return std::nullopt;
+            }
             if (!FlushFileBuffers(handle)) {
                 const DWORD nativeError = GetLastError();
                 CloseHandle(handle);
                 detail = DurableNativeError("LockExclusive", canonical,
                                             static_cast<int>(nativeError));
+                return std::nullopt;
+            }
+            if (interrupted(
+                    "MANIFEST_LOCK_MARKER_AFTER_FLUSH_BEFORE_READBACK")) {
+                CloseHandle(handle);
                 return std::nullopt;
             }
             if (!GetFileSizeEx(handle, &size)) {
@@ -3558,6 +3626,10 @@ std::optional<PublicationLock> AcquirePublicationLock(
             CloseHandle(handle);
             detail = DurableNativeError(
                 "LockExclusive", canonical, ERROR_INVALID_DATA);
+            return std::nullopt;
+        }
+        if (interrupted("MANIFEST_LOCK_MARKER_AFTER_READBACK")) {
+            CloseHandle(handle);
             return std::nullopt;
         }
         const auto handleIdentity = WindowsIdentityFromHandle(
@@ -3734,12 +3806,28 @@ std::optional<PublicationLock> AcquirePublicationLock(
             }
             if (::ftruncate(descriptor, 0) != 0 ||
                 ::pwrite(descriptor, marker.data(), marker.size(), 0) !=
-                    static_cast<ssize_t>(marker.size()) ||
-                ::fsync(descriptor) != 0) {
+                    static_cast<ssize_t>(marker.size())) {
                 const int nativeError = errno;
                 ::close(descriptor);
                 detail = DurableNativeError("LockExclusive", canonical,
                                             nativeError);
+                return std::nullopt;
+            }
+            if (interrupted(
+                    "MANIFEST_LOCK_MARKER_AFTER_WRITE_BEFORE_FLUSH")) {
+                ::close(descriptor);
+                return std::nullopt;
+            }
+            if (::fsync(descriptor) != 0) {
+                const int nativeError = errno;
+                ::close(descriptor);
+                detail = DurableNativeError("LockExclusive", canonical,
+                                            nativeError);
+                return std::nullopt;
+            }
+            if (interrupted(
+                    "MANIFEST_LOCK_MARKER_AFTER_FLUSH_BEFORE_READBACK")) {
+                ::close(descriptor);
                 return std::nullopt;
             }
             if (::fstat(descriptor, &handleStatus) != 0) {
@@ -3757,6 +3845,10 @@ std::optional<PublicationLock> AcquirePublicationLock(
             readback != marker) {
             ::close(descriptor);
             detail = "durable lock marker mismatch";
+            return std::nullopt;
+        }
+        if (interrupted("MANIFEST_LOCK_MARKER_AFTER_READBACK")) {
+            ::close(descriptor);
             return std::nullopt;
         }
         if (::lstat(canonical.c_str(), &pathStatus) != 0 ||
@@ -3831,6 +3923,7 @@ bool RetirePublicationLock(
         reinterpret_cast<const std::uint8_t*>(marker.data()), marker.size()});
     const std::vector steps = PlanTerrainWindowsLockRetirement();
     bool handleClosed = false;
+    HANDLE retirementGuard = INVALID_HANDLE_VALUE;
     const bool executed = ExecuteTerrainWindowsDurableSteps(
         steps,
         [&](const TerrainWindowsDurableStep& step,
@@ -3919,12 +4012,40 @@ bool RetirePublicationLock(
                 }
                 return true;
             }
+            case TerrainWindowsDurableAction::PIN_RETIREMENT_PATH: {
+                retirementGuard = CreateFileW(
+                    lock.Retired.c_str(), DELETE | GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL |
+                        FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                if (retirementGuard == INVALID_HANDLE_VALUE) {
+                    const DWORD nativeError = GetLastError();
+                    stepDetail = DurableNativeError(
+                        "RetireLock", lock.Retired,
+                        static_cast<int>(nativeError));
+                    return false;
+                }
+                const auto guardIdentity = WindowsIdentityFromHandle(
+                    retirementGuard, lock.Retired, "RetireLock",
+                    stepDetail);
+                if (!guardIdentity.has_value() ||
+                    *guardIdentity != lock.Identity) {
+                    CloseHandle(retirementGuard);
+                    retirementGuard = INVALID_HANDLE_VALUE;
+                    if (stepDetail.empty()) {
+                        stepDetail =
+                            "retired lock path identity changed before delete";
+                    }
+                    return false;
+                }
+                return true;
+            }
             case TerrainWindowsDurableAction::ACCEPT_DELETE_PENDING:
                 {
                 FILE_DISPOSITION_INFO disposition{};
                 disposition.DeleteFile = TRUE;
                 if (!SetFileInformationByHandle(
-                        lock.Handle, FileDispositionInfo, &disposition,
+                        retirementGuard, FileDispositionInfo, &disposition,
                         sizeof(disposition))) {
                     const DWORD nativeError = GetLastError();
                     stepDetail = DurableNativeError(
@@ -3942,6 +4063,16 @@ bool RetirePublicationLock(
                 }
             case TerrainWindowsDurableAction::CLOSE_LOCK_HANDLE:
                 lock.Abandon();
+                if (retirementGuard == INVALID_HANDLE_VALUE ||
+                    !CloseHandle(retirementGuard)) {
+                    const DWORD nativeError = GetLastError();
+                    retirementGuard = INVALID_HANDLE_VALUE;
+                    stepDetail = DurableNativeError(
+                        "RetireLock", lock.Retired,
+                        static_cast<int>(nativeError));
+                    return false;
+                }
+                retirementGuard = INVALID_HANDLE_VALUE;
                 handleClosed = true;
                 return true;
             default:
@@ -3950,6 +4081,9 @@ bool RetirePublicationLock(
             }
         },
         detail);
+    if (retirementGuard != INVALID_HANDLE_VALUE) {
+        CloseHandle(retirementGuard);
+    }
     if (!executed && !handleClosed) {
         lock.Abandon();
     }
@@ -3970,6 +4104,18 @@ bool RetirePublicationLock(
     if (fault("MANIFEST_AFTER_LOCK_RESERVATION_DURABLE") !=
         TerrainReferenceFaultAction::NONE) {
         detail = "injected fault MANIFEST_AFTER_LOCK_RESERVATION_DURABLE";
+        lock.Abandon();
+        return false;
+    }
+    struct stat refreshedHandleStatus {};
+    struct stat refreshedPathStatus {};
+    if (::fstat(lock.Descriptor, &refreshedHandleStatus) != 0 ||
+        ::lstat(lock.Canonical.c_str(), &refreshedPathStatus) != 0 ||
+        !S_ISREG(refreshedPathStatus.st_mode) ||
+        refreshedPathStatus.st_nlink != 1 ||
+        refreshedHandleStatus.st_dev != refreshedPathStatus.st_dev ||
+        refreshedHandleStatus.st_ino != refreshedPathStatus.st_ino) {
+        detail = "durable lock identity changed after retirement hook";
         lock.Abandon();
         return false;
     }
@@ -4032,6 +4178,7 @@ struct ManifestPublicationJournal {
     std::string BackupIdentity;
     std::string RollbackIdentity;
     std::string RunId;
+    std::string RecoveryCommand;
 };
 
 std::string SerializeManifestJournal(
@@ -4076,6 +4223,7 @@ std::string SerializeManifestJournal(
     json.Key("backupIdentity"); json.String(journal.BackupIdentity);
     json.Key("rollbackIdentity"); json.String(journal.RollbackIdentity);
     json.Key("runId"); json.String(journal.RunId);
+    json.Key("recoveryCommand"); json.String(journal.RecoveryCommand);
     json.ObjectEnd();
     return std::move(json).Take();
 }
@@ -4092,14 +4240,15 @@ std::optional<ManifestPublicationJournal> ParseManifestJournal(
         detail = "invalid publication journal JSON";
         return std::nullopt;
     }
-    constexpr std::array<std::string_view, 24> keys{
+    constexpr std::array<std::string_view, 25> keys{
         "version", "phase", "transactionId", "destination", "temp",
         "backup", "tempReservation", "backupReservation", "rollback",
         "rollbackReservation", "tempTombstone", "backupTombstone",
         "rollbackTombstone",
         "destinationTombstone", "journalRetired", "priorExists",
         "priorSha256", "priorMode", "intendedSha256", "intendedMode",
-        "tempIdentity", "backupIdentity", "rollbackIdentity", "runId"};
+        "tempIdentity", "backupIdentity", "rollbackIdentity", "runId",
+        "recoveryCommand"};
     if (!RejectUnknownMembers(*root, keys, "", issues)) {
         detail = "invalid publication journal member set";
         return std::nullopt;
@@ -4141,6 +4290,8 @@ std::optional<ManifestPublicationJournal> ParseManifestJournal(
     const JsonValue* rollbackIdentity =
         member("rollbackIdentity", JsonType::STRING);
     const JsonValue* runId = member("runId", JsonType::STRING);
+    const JsonValue* recoveryCommand =
+        member("recoveryCommand", JsonType::STRING);
     if (version == nullptr || phase == nullptr || transactionId == nullptr ||
         destination == nullptr || temp == nullptr || backup == nullptr ||
         tempReservation == nullptr || backupReservation == nullptr ||
@@ -4152,7 +4303,7 @@ std::optional<ManifestPublicationJournal> ParseManifestJournal(
         priorMode == nullptr || intendedSha256 == nullptr ||
         intendedMode == nullptr || tempIdentity == nullptr ||
         backupIdentity == nullptr || rollbackIdentity == nullptr ||
-        runId == nullptr) {
+        runId == nullptr || recoveryCommand == nullptr) {
         detail = "publication journal has missing member";
         return std::nullopt;
     }
@@ -4254,6 +4405,8 @@ std::optional<ManifestPublicationJournal> ParseManifestJournal(
         !ReadString(*rollbackIdentity, "/rollbackIdentity",
                     journal.RollbackIdentity, issues) ||
         !ReadString(*runId, "/runId", journal.RunId, issues) ||
+        !ReadString(*recoveryCommand, "/recoveryCommand",
+                    journal.RecoveryCommand, issues) ||
         !issues.empty()) {
         detail = "publication journal has invalid intended metadata";
         return std::nullopt;
@@ -4262,6 +4415,7 @@ std::optional<ManifestPublicationJournal> ParseManifestJournal(
         "SNAPSHOT", "PREPARED", "REPLACED", "COMMITTED"};
     if (std::ranges::find(phases, journal.Phase) == phases.end() ||
         journal.TransactionId.empty() || journal.RunId.empty() ||
+        journal.RecoveryCommand.empty() ||
         !IsLowerHexSha256(journal.IntendedSha256) ||
         journal.IntendedMode == 0u ||
         journal.TempReservation.empty() || journal.BackupReservation.empty() ||
@@ -4303,7 +4457,8 @@ bool IsDirectOwnedChild(
 bool WriteManifestJournal(
     const ManifestPublicationJournal& journal,
     const std::filesystem::path& canonicalJournal,
-    std::string& detail) {
+    std::string& detail,
+    const TerrainReferenceFaultInjector& injectFault = {}) {
     static std::atomic<std::uint64_t> updateSequence{0u};
     const std::filesystem::path update =
         canonicalJournal.parent_path() /
@@ -4311,6 +4466,9 @@ bool WriteManifestJournal(
                     journal.TransactionId,
                     updateSequence.fetch_add(1u, std::memory_order_relaxed));
     const std::string bytes = SerializeManifestJournal(journal);
+    std::string updateIdentity;
+    std::string updateHash;
+    std::optional<std::uint32_t> updateMode;
     const auto failWithCheckedUpdateCleanup = [&](std::string primaryDetail) {
         std::error_code statusError;
         const auto status = std::filesystem::symlink_status(update, statusError);
@@ -4321,13 +4479,11 @@ bool WriteManifestJournal(
             return false;
         }
         std::string cleanupDetail;
-        const auto identity = PhysicalIdentityNoFollow(update, cleanupDetail);
-        const auto hash = Sha256File(update, cleanupDetail);
-        const auto mode = PhysicalFileMode(update, cleanupDetail);
-        if (!identity.has_value() || !hash.has_value() || !mode.has_value() ||
+        if (updateIdentity.empty() || updateHash.empty() ||
+            !updateMode.has_value() ||
             !RemoveOwnedPhysical(
-                update, cleanupDetail, SerializePhysicalIdentity(*identity),
-                *hash, *mode)) {
+                update, cleanupDetail, updateIdentity,
+                updateHash, *updateMode)) {
             detail = std::format(
                 "RECOVERY_REQUIRED journal update retained path={} cause={} "
                 "cleanup={}",
@@ -4339,6 +4495,32 @@ bool WriteManifestJournal(
     };
     if (!WriteExclusiveText(update, bytes, PrivatePhysicalMode(), detail)) {
         return failWithCheckedUpdateCleanup(detail);
+    }
+    const auto createdIdentity = PhysicalIdentityNoFollow(update, detail);
+    const auto createdHash = Sha256File(update, detail);
+    updateMode = PhysicalFileMode(update, detail);
+    if (!createdIdentity.has_value() || !createdHash.has_value() ||
+        !updateMode.has_value()) {
+        return failWithCheckedUpdateCleanup(detail);
+    }
+    updateIdentity = SerializePhysicalIdentity(*createdIdentity);
+    updateHash = *createdHash;
+    if (injectFault) {
+        const TerrainReferenceFaultAction action = injectFault(
+            "MANIFEST_JOURNAL_UPDATE_AFTER_EXCLUSIVE_CREATE");
+        if (action != TerrainReferenceFaultAction::NONE) {
+            if (action == TerrainReferenceFaultAction::CRASH) {
+                detail = std::format(
+                    "RECOVERY_REQUIRED journal update retained path={} "
+                    "cause=injected fault "
+                    "MANIFEST_JOURNAL_UPDATE_AFTER_EXCLUSIVE_CREATE",
+                    update.generic_string());
+                return false;
+            }
+            return failWithCheckedUpdateCleanup(
+                "injected fault "
+                "MANIFEST_JOURNAL_UPDATE_AFTER_EXCLUSIVE_CREATE");
+        }
     }
     std::string readback;
     if (!ReadPhysicalText(update, readback, detail)) {
@@ -4352,11 +4534,120 @@ bool WriteManifestJournal(
         }
         return failWithCheckedUpdateCleanup(detail);
     }
-    if (!ReplacePhysicalFile(update, canonicalJournal, detail) ||
-        !SyncPhysicalDirectory(canonicalJournal.parent_path(), detail)) {
+    if (!ReplacePhysicalFile(update, canonicalJournal, detail)) {
         return failWithCheckedUpdateCleanup(detail);
     }
+    if (injectFault &&
+        injectFault("MANIFEST_JOURNAL_AFTER_RENAME_BEFORE_BARRIER") !=
+            TerrainReferenceFaultAction::NONE) {
+        detail = std::format(
+            "RECOVERY_REQUIRED publication journal rename durability "
+            "uncertain path={} cause=injected fault "
+            "MANIFEST_JOURNAL_AFTER_RENAME_BEFORE_BARRIER",
+            canonicalJournal.generic_string());
+        return false;
+    }
+    if (!SyncPhysicalDirectory(canonicalJournal.parent_path(), detail)) {
+        detail = std::format(
+            "RECOVERY_REQUIRED publication journal rename durability "
+            "uncertain path={} cause={}",
+            canonicalJournal.generic_string(), detail);
+        return false;
+    }
     return true;
+}
+
+bool PhysicalPathAbsent(const std::filesystem::path& path);
+std::string Sha256Text(std::string_view text);
+
+std::filesystem::path ManifestJournalAuthPath(
+    const std::filesystem::path& canonicalJournal) {
+    return canonicalJournal.parent_path() /
+        (canonicalJournal.filename().generic_string() + ".retired-auth");
+}
+
+std::string SerializeManifestJournalAuth(std::string_view journalBytes) {
+    return std::format(
+        "corsairs-journal-retired-auth-v1\nsha256={}\n{}",
+        Sha256Text(journalBytes), journalBytes);
+}
+
+std::optional<std::string> ReadManifestJournalAuth(
+    const std::filesystem::path& authPath,
+    std::string& detail) {
+    constexpr std::string_view prefix =
+        "corsairs-journal-retired-auth-v1\nsha256=";
+    std::string authBytes;
+    if (!ReadPhysicalText(authPath, authBytes, detail) ||
+        !authBytes.starts_with(prefix)) {
+        if (detail.empty()) {
+            detail = "invalid publication journal retirement authentication";
+        }
+        return std::nullopt;
+    }
+    const std::size_t hashBegin = prefix.size();
+    const std::size_t hashEnd = authBytes.find('\n', hashBegin);
+    if (hashEnd == std::string::npos || hashEnd - hashBegin != 64u) {
+        detail = "invalid publication journal retirement authentication";
+        return std::nullopt;
+    }
+    const std::string_view expectedHash{
+        authBytes.data() + hashBegin, hashEnd - hashBegin};
+    const std::string journalBytes = authBytes.substr(hashEnd + 1u);
+    if (!IsLowerHexSha256(expectedHash) ||
+        Sha256Text(journalBytes) != expectedHash) {
+        detail = "publication journal retirement authentication mismatch";
+        return std::nullopt;
+    }
+    const auto mode = PhysicalFileMode(authPath, detail);
+    const auto identity = PhysicalIdentityNoFollow(authPath, detail);
+    if (!mode.has_value() || *mode != PrivatePhysicalMode() ||
+        !identity.has_value()) {
+        detail = "publication journal retirement authentication is foreign";
+        return std::nullopt;
+    }
+    return journalBytes;
+}
+
+bool EnsureManifestJournalAuth(
+    const std::filesystem::path& canonicalJournal,
+    std::string_view journalBytes,
+    std::string& detail) {
+    const std::filesystem::path authPath =
+        ManifestJournalAuthPath(canonicalJournal);
+    const std::string expected = SerializeManifestJournalAuth(journalBytes);
+    if (PhysicalPathAbsent(authPath)) {
+        if (!WriteExclusiveText(
+                authPath, expected, PrivatePhysicalMode(), detail) ||
+            !SyncPhysicalDirectory(authPath.parent_path(), detail)) {
+            return false;
+        }
+    }
+    const auto recorded = ReadManifestJournalAuth(authPath, detail);
+    return recorded.has_value() && *recorded == journalBytes;
+}
+
+bool RemoveManifestJournalAuth(
+    const std::filesystem::path& canonicalJournal,
+    std::string_view journalBytes,
+    std::string& detail) {
+    const std::filesystem::path authPath =
+        ManifestJournalAuthPath(canonicalJournal);
+    if (PhysicalPathAbsent(authPath)) {
+        detail = "publication journal retirement authentication is missing";
+        return false;
+    }
+    const auto recorded = ReadManifestJournalAuth(authPath, detail);
+    const auto identity = PhysicalIdentityNoFollow(authPath, detail);
+    const auto mode = PhysicalFileMode(authPath, detail);
+    const std::string expected = SerializeManifestJournalAuth(journalBytes);
+    if (!recorded.has_value() || *recorded != journalBytes ||
+        !identity.has_value() || !mode.has_value()) {
+        return false;
+    }
+    return RemoveOwnedPhysical(
+        authPath, detail, SerializePhysicalIdentity(*identity),
+        Sha256Text(expected), *mode);
 }
 
 bool RetireManifestJournal(
@@ -4377,6 +4668,10 @@ bool RetireManifestJournal(
         if (detail.empty()) {
             detail = "canonical publication journal changed before retirement";
         }
+        return false;
+    }
+    if (!EnsureManifestJournalAuth(
+            canonicalJournal, journalBytes, detail)) {
         return false;
     }
 #if defined(_WIN32)
@@ -4409,6 +4704,40 @@ bool PhysicalPathAbsent(const std::filesystem::path& path) {
         std::filesystem::symlink_status(path, error);
     return status.type() == std::filesystem::file_type::not_found &&
         (!error || error == std::errc::no_such_file_or_directory);
+}
+
+std::vector<std::filesystem::path> CollectPublicationRecoveryPaths(
+    const std::filesystem::path& outputRoot,
+    const std::filesystem::path& primary = {}) {
+    std::vector<std::filesystem::path> paths;
+    const auto appendPresent = [&](const std::filesystem::path& path) {
+        if (path.empty()) return;
+        std::error_code error;
+        const std::filesystem::file_status status =
+            std::filesystem::symlink_status(path, error);
+        if (!error && status.type() != std::filesystem::file_type::not_found) {
+            paths.push_back(path.lexically_normal());
+        }
+    };
+    appendPresent(primary);
+    std::error_code iterationError;
+    for (std::filesystem::directory_iterator iterator{outputRoot, iterationError},
+         end;
+         !iterationError && iterator != end;
+         iterator.increment(iterationError)) {
+        if (iterator->path().filename().generic_string().starts_with(
+                ".garner.reference-albedo.")) {
+            appendPresent(iterator->path());
+        }
+    }
+    std::ranges::sort(paths, {}, [](const std::filesystem::path& path) {
+        return path.generic_string();
+    });
+    paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
+    if (paths.empty() && !primary.empty()) {
+        paths.push_back(primary.lexically_normal());
+    }
+    return paths;
 }
 
 bool VerifyPhysicalFile(
@@ -4733,6 +5062,8 @@ struct ManifestRecoveryResult {
     bool Ok{false};
     std::string Detail;
     std::filesystem::path Evidence;
+    std::vector<std::filesystem::path> EvidencePaths;
+    std::string RecoveryCommand;
 };
 
 ManifestRecoveryResult RecoverManifestPublication(
@@ -4742,7 +5073,18 @@ ManifestRecoveryResult RecoverManifestPublication(
     const TerrainReferenceOptions& options,
     const TerrainReferenceFaultInjector& injectFault = {}) {
     ManifestRecoveryResult result;
+    struct EvidenceScope {
+        ManifestRecoveryResult& Result;
+        const std::filesystem::path& OutputRoot;
+        ~EvidenceScope() {
+            if (!Result.Ok) {
+                Result.EvidencePaths = CollectPublicationRecoveryPaths(
+                    OutputRoot, Result.Evidence);
+            }
+        }
+    } evidenceScope{result, outputRoot};
     std::vector<std::filesystem::path> unexpectedRetired;
+    std::vector<std::filesystem::path> uncertainUpdates;
     std::error_code iterationError;
     for (std::filesystem::directory_iterator iterator{outputRoot, iterationError},
          end;
@@ -4755,6 +5097,10 @@ ManifestRecoveryResult RecoverManifestPublication(
             candidate.lexically_normal() != retiredJournal.lexically_normal() &&
             leaf != ".garner.reference-albedo.publish.lock.retired") {
             unexpectedRetired.push_back(candidate);
+        }
+        if (leaf.starts_with(
+                ".garner.reference-albedo.publish.update.")) {
+            uncertainUpdates.push_back(candidate);
         }
     }
     if (iterationError) {
@@ -4772,6 +5118,14 @@ ManifestRecoveryResult RecoverManifestPublication(
         result.Evidence = unexpectedRetired.front();
         return result;
     }
+    if (!uncertainUpdates.empty()) {
+        std::ranges::sort(uncertainUpdates);
+        result.Detail = std::format(
+            "uncertain publication journal update retained: {}",
+            uncertainUpdates.front().generic_string());
+        result.Evidence = uncertainUpdates.front();
+        return result;
+    }
     std::error_code canonicalError;
     std::error_code retiredError;
     const std::filesystem::file_status canonicalStatus =
@@ -4785,6 +5139,30 @@ ManifestRecoveryResult RecoverManifestPublication(
     bool retiredAbsent =
         retiredStatus.type() == std::filesystem::file_type::not_found &&
         (!retiredError || retiredError == std::errc::no_such_file_or_directory);
+    const std::filesystem::path authPath =
+        ManifestJournalAuthPath(canonicalJournal);
+    std::error_code authError;
+    const std::filesystem::file_status authStatus =
+        std::filesystem::symlink_status(authPath, authError);
+    const bool authAbsent =
+        authStatus.type() == std::filesystem::file_type::not_found &&
+        (!authError || authError == std::errc::no_such_file_or_directory);
+    std::optional<std::string> authenticatedJournalBytes;
+    if (!authAbsent) {
+        if (authError ||
+            authStatus.type() != std::filesystem::file_type::regular) {
+            result.Detail =
+                "publication journal retirement authentication is foreign";
+            result.Evidence = authPath;
+            return result;
+        }
+        authenticatedJournalBytes =
+            ReadManifestJournalAuth(authPath, result.Detail);
+        if (!authenticatedJournalBytes.has_value()) {
+            result.Evidence = authPath;
+            return result;
+        }
+    }
 #if defined(_WIN32)
     if (!canonicalAbsent && !retiredAbsent) {
         std::string canonicalBytes;
@@ -4794,6 +5172,9 @@ ManifestRecoveryResult RecoverManifestPublication(
             ReadPhysicalText(canonicalJournal, canonicalBytes, stateDetail)
             ? ParseManifestJournal(canonicalBytes, stateDetail)
             : std::nullopt;
+        if (canonicalParsed.has_value()) {
+            result.RecoveryCommand = canonicalParsed->RecoveryCommand;
+        }
         const std::string expectedReservation = canonicalParsed.has_value()
             ? WindowsMoveReservationRecord(
                   canonicalJournal, retiredJournal, "retire-journal",
@@ -4825,6 +5206,53 @@ ManifestRecoveryResult RecoverManifestPublication(
     }
 #endif
     if (canonicalAbsent && retiredAbsent) {
+        if (authenticatedJournalBytes.has_value()) {
+            auto authenticated = ParseManifestJournal(
+                *authenticatedJournalBytes, result.Detail);
+            if (authenticated.has_value()) {
+                result.RecoveryCommand = authenticated->RecoveryCommand;
+            }
+            const std::filesystem::path expectedDestination =
+                outputRoot / "garner.reference-albedo.json";
+            bool stateMatches = authenticated.has_value() &&
+                authenticated->Destination.lexically_normal() ==
+                    expectedDestination.lexically_normal() &&
+                authenticated->JournalRetired.lexically_normal() ==
+                    retiredJournal.lexically_normal();
+            if (stateMatches && authenticated->Phase == "COMMITTED") {
+                stateMatches = VerifyHashAndMode(
+                    authenticated->Destination,
+                    authenticated->IntendedSha256,
+                    authenticated->IntendedMode, result.Detail);
+                std::string manifestBytes;
+                stateMatches = stateMatches &&
+                    ReadPhysicalText(authenticated->Destination,
+                                     manifestBytes, result.Detail) &&
+                    ValidatePublicationManifest(
+                        manifestBytes, options, result.Detail).has_value();
+            }
+            else if (stateMatches && authenticated->PriorExists) {
+                stateMatches = VerifyHashAndMode(
+                    authenticated->Destination,
+                    authenticated->PriorSha256,
+                    authenticated->PriorMode, result.Detail);
+            }
+            else if (stateMatches) {
+                stateMatches = PhysicalPathAbsent(
+                    authenticated->Destination);
+            }
+            if (!stateMatches || !RemoveManifestJournalAuth(
+                    canonicalJournal, *authenticatedJournalBytes,
+                    result.Detail)) {
+                if (result.Detail.empty()) {
+                    result.Detail =
+                        "publication journal authentication-only recovery "
+                        "cannot verify final state";
+                }
+                result.Evidence = authPath;
+                return result;
+            }
+        }
         result.Ok = true;
         return result;
     }
@@ -4850,11 +5278,25 @@ ManifestRecoveryResult RecoverManifestPublication(
         result.Evidence = journalPath;
         return result;
     }
+    if (canonicalAbsent && !authenticatedJournalBytes.has_value()) {
+        result.Detail =
+            "retired publication journal lacks independent authentication";
+        result.Evidence = retiredJournal;
+        return result;
+    }
+    if (authenticatedJournalBytes.has_value() &&
+        *authenticatedJournalBytes != bytes) {
+        result.Detail =
+            "retired publication journal authentication does not match payload";
+        result.Evidence = journalPath;
+        return result;
+    }
     auto journal = ParseManifestJournal(bytes, result.Detail);
     if (!journal.has_value()) {
         result.Evidence = journalPath;
         return result;
     }
+    result.RecoveryCommand = journal->RecoveryCommand;
     auto journalIdentity = PhysicalIdentityNoFollow(journalPath, result.Detail);
     if (!journalIdentity.has_value()) {
         result.Evidence = journalPath;
@@ -5107,7 +5549,7 @@ ManifestRecoveryResult RecoverManifestPublication(
                 }
                 journal->RollbackIdentity = *reconciledIdentity;
                 if (!WriteManifestJournal(*journal, journalPath,
-                                          result.Detail)) {
+                                          result.Detail, injectFault)) {
                     result.Evidence = journalPath;
                     return result;
                 }
@@ -5244,6 +5686,11 @@ ManifestRecoveryResult RecoverManifestPublication(
         result.Evidence = cleanupJournal;
         return result;
     }
+    if (!RemoveManifestJournalAuth(
+            canonicalJournal, bytes, result.Detail)) {
+        result.Evidence = ManifestJournalAuthPath(canonicalJournal);
+        return result;
+    }
     result.Ok = true;
     return result;
 }
@@ -5280,12 +5727,19 @@ TerrainPublicationResult RecoverProductionManifestBeforeBuild(
         result.Status = TerrainPublicationStatus::RECOVERY_REQUIRED;
         result.Detail = recovered.Detail;
         result.RecoveryBackup = recovered.Evidence;
+        result.RecoveryPaths = recovered.EvidencePaths;
+        result.RecoveryCommand = recovered.RecoveryCommand.empty()
+            ? TerrainReferenceRecoveryCommand(options)
+            : recovered.RecoveryCommand;
         return result;
     }
     if (!RetirePublicationLock(*lock, {}, detail)) {
         result.Status = TerrainPublicationStatus::RECOVERY_REQUIRED;
         result.Detail = detail;
         result.RecoveryBackup = lockPath;
+        result.RecoveryPaths =
+            CollectPublicationRecoveryPaths(options.Output, lockPath);
+        result.RecoveryCommand = TerrainReferenceRecoveryCommand(options);
         return result;
     }
     result.Status = TerrainPublicationStatus::OK;
@@ -5466,7 +5920,8 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
     const std::filesystem::path retiredJournalPath =
         outputRoot / ".garner.reference-albedo.publish.json.retired";
     std::string detail;
-    auto lock = AcquirePublicationLock(lockPath, retiredLockPath, detail);
+    auto lock = AcquirePublicationLock(
+        lockPath, retiredLockPath, detail, injectFault);
     if (!lock.has_value()) {
         result.Detail = detail;
         return result;
@@ -5480,7 +5935,10 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
         result.Status = TerrainPublicationStatus::RECOVERY_REQUIRED;
         result.Detail = startupRecovery.Detail;
         result.RecoveryBackup = startupRecovery.Evidence;
-        result.RecoveryCommand = recoveryCommand;
+        result.RecoveryPaths = startupRecovery.EvidencePaths;
+        result.RecoveryCommand = startupRecovery.RecoveryCommand.empty()
+            ? recoveryCommand
+            : startupRecovery.RecoveryCommand;
         return result;
     }
 
@@ -5491,6 +5949,8 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
             result.Status = TerrainPublicationStatus::RECOVERY_REQUIRED;
             result.Detail = retirementDetail;
             result.RecoveryBackup = lockPath;
+            result.RecoveryPaths =
+                CollectPublicationRecoveryPaths(outputRoot, lockPath);
             result.RecoveryCommand = recoveryCommand;
             return result;
         }
@@ -5528,6 +5988,7 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
     journal.IntendedSha256 = Sha256Text(json);
     journal.IntendedMode = PrivatePhysicalMode();
     journal.RunId = *runId;
+    journal.RecoveryCommand = recoveryCommand;
 
     std::error_code destinationError;
     const std::filesystem::file_status destinationStatus =
@@ -5549,6 +6010,8 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
             result.Status = TerrainPublicationStatus::RECOVERY_REQUIRED;
             result.Detail = priorHash.has_value() ? detail : hashDetail;
             result.RecoveryBackup = destination;
+            result.RecoveryPaths =
+                CollectPublicationRecoveryPaths(outputRoot, destination);
             result.RecoveryCommand = recoveryCommand;
             return result;
         }
@@ -5560,6 +6023,8 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
         result.Status = TerrainPublicationStatus::RECOVERY_REQUIRED;
         result.Detail = "publication destination is a symlink or non-regular path";
         result.RecoveryBackup = destination;
+        result.RecoveryPaths =
+            CollectPublicationRecoveryPaths(outputRoot, destination);
         result.RecoveryCommand = recoveryCommand;
         return result;
     }
@@ -5572,6 +6037,17 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
         TerrainPublicationResult failed;
         failed.Status = TerrainPublicationStatus::WRITE_FAILED;
         failed.Detail = std::move(message);
+        if (failed.Detail.starts_with("RECOVERY_REQUIRED")) {
+            lock->Abandon();
+            failed.Status = TerrainPublicationStatus::RECOVERY_REQUIRED;
+            failed.RecoveryBackup = PhysicalPathAbsent(journalPath)
+                ? outputRoot
+                : journalPath;
+            failed.RecoveryPaths = CollectPublicationRecoveryPaths(
+                outputRoot, failed.RecoveryBackup);
+            failed.RecoveryCommand = recoveryCommand;
+            return failed;
+        }
         if (action == TerrainReferenceFaultAction::CRASH) {
             lock->Abandon();
             if (committed) {
@@ -5579,12 +6055,18 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
                 failed.RecoveryCommand = recoveryCommand;
             }
             failed.RecoveryBackup = journalDurable ? journalPath : destination;
+            if (failed.Status == TerrainPublicationStatus::RECOVERY_REQUIRED) {
+                failed.RecoveryPaths = CollectPublicationRecoveryPaths(
+                    outputRoot, failed.RecoveryBackup);
+            }
             return failed;
         }
         if (committed) {
             lock->Abandon();
             failed.Status = TerrainPublicationStatus::RECOVERY_REQUIRED;
             failed.RecoveryBackup = journalPath;
+            failed.RecoveryPaths =
+                CollectPublicationRecoveryPaths(outputRoot, journalPath);
             failed.RecoveryCommand = recoveryCommand;
             return failed;
         }
@@ -5599,7 +6081,10 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
                 failed.Detail += std::format("; rollback failed: {}",
                                              recovered.Detail);
                 failed.RecoveryBackup = recovered.Evidence;
-                failed.RecoveryCommand = recoveryCommand;
+                failed.RecoveryPaths = recovered.EvidencePaths;
+                failed.RecoveryCommand = recovered.RecoveryCommand.empty()
+                    ? recoveryCommand
+                    : recovered.RecoveryCommand;
                 return failed;
             }
         }
@@ -5609,6 +6094,8 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
             failed.Detail += std::format("; lock retirement failed: {}",
                                          retirementDetail);
             failed.RecoveryBackup = lockPath;
+            failed.RecoveryPaths =
+                CollectPublicationRecoveryPaths(outputRoot, lockPath);
             failed.RecoveryCommand = recoveryCommand;
         }
         return failed;
@@ -5624,7 +6111,7 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
         return failure(std::format("injected fault {}", point), action);
     };
 
-    if (!WriteManifestJournal(journal, journalPath, detail)) {
+    if (!WriteManifestJournal(journal, journalPath, detail, injectFault)) {
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
     journalDurable = true;
@@ -5644,7 +6131,7 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
     journal.TempIdentity = SerializePhysicalIdentity(*tempIdentity);
-    if (!WriteManifestJournal(journal, journalPath, detail)) {
+    if (!WriteManifestJournal(journal, journalPath, detail, injectFault)) {
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
     if (exclusiveCreateAction != TerrainReferenceFaultAction::NONE) {
@@ -5676,7 +6163,7 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
             return failure(detail, TerrainReferenceFaultAction::FAIL);
         }
         journal.BackupIdentity = SerializePhysicalIdentity(*backupIdentity);
-        if (!WriteManifestJournal(journal, journalPath, detail)) {
+        if (!WriteManifestJournal(journal, journalPath, detail, injectFault)) {
             return failure(detail, TerrainReferenceFaultAction::FAIL);
         }
     }
@@ -5700,7 +6187,7 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
     }
 
     journal.Phase = "PREPARED";
-    if (!WriteManifestJournal(journal, journalPath, detail)) {
+    if (!WriteManifestJournal(journal, journalPath, detail, injectFault)) {
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
     if (auto injected =
@@ -5722,7 +6209,7 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
     }
 
     journal.Phase = "REPLACED";
-    if (!WriteManifestJournal(journal, journalPath, detail)) {
+    if (!WriteManifestJournal(journal, journalPath, detail, injectFault)) {
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
     if (auto injected =
@@ -5741,7 +6228,7 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
     }
 
     journal.Phase = "COMMITTED";
-    if (!WriteManifestJournal(journal, journalPath, detail)) {
+    if (!WriteManifestJournal(journal, journalPath, detail, injectFault)) {
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
     committed = true;
@@ -5785,6 +6272,10 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
         }
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
+    if (!RemoveManifestJournalAuth(
+            journalPath, retiredJournalBytes, detail)) {
+        return failure(detail, TerrainReferenceFaultAction::FAIL);
+    }
     if (!RetirePublicationLock(*lock, injectFault, detail)) {
         result.Status = TerrainPublicationStatus::RECOVERY_REQUIRED;
         result.Detail = detail;
@@ -5822,9 +6313,17 @@ int RunTerrainReference(
                           ? "RECOVERY_REQUIRED "
                           : "WRITE_FAILED ")
                   << recovery.Detail;
-            if (!recovery.RecoveryBackup.empty()) {
+            if (!recovery.RecoveryPaths.empty()) {
+                for (const auto& path : recovery.RecoveryPaths) {
+                    error << " evidence=" << path.generic_string();
+                }
+            }
+            else if (!recovery.RecoveryBackup.empty()) {
                 error << " evidence="
                       << recovery.RecoveryBackup.generic_string();
+            }
+            if (!recovery.RecoveryCommand.empty()) {
+                error << " command=" << recovery.RecoveryCommand;
             }
             error << '\n';
             return 1;
@@ -6093,7 +6592,12 @@ int RunTerrainReference(
                       ? "RECOVERY_REQUIRED "
                       : "WRITE_FAILED ")
               << publication.Detail;
-        if (!publication.RecoveryBackup.empty()) {
+        if (!publication.RecoveryPaths.empty()) {
+            for (const auto& path : publication.RecoveryPaths) {
+                error << " evidence=" << path.generic_string();
+            }
+        }
+        else if (!publication.RecoveryBackup.empty()) {
             error << " backup=" << publication.RecoveryBackup.generic_string();
         }
         if (!publication.RecoveryCommand.empty()) {
@@ -6148,7 +6652,7 @@ TerrainReferenceDependencies MakeProductionTerrainReferenceDependencies() {
             if (!context->Options.has_value()) {
                 return TerrainPublicationResult{
                     TerrainPublicationStatus::WRITE_FAILED,
-                    "production publication has no validated options", {}, {}};
+                    "production publication has no validated options", {}, {}, {}};
             }
             return PublishTerrainReferenceManifestForTesting(
                 destination, json, *context->Options, {});

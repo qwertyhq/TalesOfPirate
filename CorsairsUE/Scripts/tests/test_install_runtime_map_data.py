@@ -10,6 +10,9 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
+if os.name != "nt":
+    import fcntl
+
 from CorsairsUE.Scripts import install_runtime_map_data
 
 
@@ -331,6 +334,18 @@ class RuntimeMapInstallerTests(unittest.TestCase):
             "WRITE_FAILED invalid manifest JSON: non-Unicode scalar at "
             "/source/map/path")
 
+    def test_parser_is_total_for_deep_manifest_and_journal(self):
+        fixture = ManifestFixture()
+        self.addCleanup(fixture.close)
+        deep = (b"[" * 2048) + b"0" + (b"]" * 2048)
+        fixture.manifest_path.write_bytes(deep)
+        with self.assertRaises(install_runtime_map_data.InstallError) as manifest:
+            install_runtime_map_data.validate_manifest(fixture.manifest_path)
+        self.assertEqual(manifest.exception.status, "WRITE_FAILED")
+        with self.assertRaises(install_runtime_map_data.InstallError) as journal:
+            install_runtime_map_data._parse_journal(deep, fixture.target)
+        self.assertEqual(journal.exception.status, "RECOVERY_REQUIRED")
+
     def test_strict_parser_required_key_and_type_matrix(self):
         fixture = ManifestFixture()
         self.addCleanup(fixture.close)
@@ -520,7 +535,8 @@ class RuntimeMapInstallerTests(unittest.TestCase):
         self.assertEqual(
             set(journal),
             {"version", "phase", "transactionId", "manifestPath",
-             "manifestSha256", "journalRetired", "entries"})
+             "manifestSha256", "recoveryCommand", "journalRetired",
+             "entries"})
         for key, entry in journal["entries"].items():
             self.assertEqual(
                 set(entry),
@@ -586,7 +602,7 @@ class RuntimeMapInstallerTests(unittest.TestCase):
                         self.entry_identity(path) == tuple(identity) and
                         self.entry_mode(path) == mode)
 
-            def remove_owned(self, path):
+            def remove_owned(self, path, **_recorded):
                 self.calls.append(("remove", Path(path).name))
                 self.state.pop(Path(path))
 
@@ -664,175 +680,52 @@ class RuntimeMapInstallerTests(unittest.TestCase):
         self.assertEqual(
             foreign_fs.state, {Path("reserve.block"): b"payload"})
 
-    def test_windows_remove_owned_state_machine_readonly_and_swap_behavior(self):
-        fixture = ManifestFixture()
-        self.addCleanup(fixture.close)
-
-        class FakeKernel32:
-            def __init__(self, owner):
-                self.owner = owner
-
-            def GetFileAttributesW(self, path):
-                candidate = Path(path)
-                self.owner.calls.append(("get-attributes", candidate.name))
-                return self.owner.attributes.get(candidate, 0xFFFFFFFF)
-
-            def SetFileAttributesW(self, path, attributes):
-                candidate = Path(path)
-                self.owner.calls.append(
-                    ("set-attributes", candidate.name, attributes))
-                self.owner.attributes[candidate] = attributes
-                return 1
-
-            def DeleteFileW(self, path):
-                candidate = Path(path)
-                self.owner.calls.append(("delete", candidate.name))
-                if self.owner.fail_delete:
-                    return 0
-                try:
-                    candidate.unlink()
-                except OSError:
-                    return 0
-                self.owner.attributes.pop(candidate, None)
-                return 1
-
-        class FakeWindowsFs:
-            FILE_ATTRIBUTE_REPARSE_POINT = 0x400
-            FILE_ATTRIBUTE_READONLY = 0x1
-            FILE_ATTRIBUTE_NORMAL = 0x80
-            INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
-
+        class ReservationSwapFs(RecordingWindowsFs):
             def __init__(self):
-                self.calls = []
-                self.attributes = {}
-                self.fail_delete = False
-                self.kernel32 = FakeKernel32(self)
-                self.ctypes = SimpleNamespace(get_last_error=lambda: 5)
+                super().__init__()
+                self.identities = {
+                    Path("stage.block"): (7, 8, 9),
+                    Path("reserve.block"): (4, 5, 6),
+                }
 
-            _reservation_bytes = staticmethod(
-                install_runtime_map_data.WindowsDurableFs._reservation_bytes)
+            def entry_identity(self, path):
+                return self.identities[Path(path)]
 
-            def _error(self, operation, path, native):
-                return install_runtime_map_data.DurableFsError(
-                    f"{operation}:{Path(path).name}:{native}")
-
-            @staticmethod
-            def physical_identity(path):
-                return install_runtime_map_data._physical_identity(Path(path))
-
-            @staticmethod
-            def physical_bytes(path):
-                return Path(path).read_bytes()
-
-            @staticmethod
-            def physical_hash(path):
-                return install_runtime_map_data._sha256_file(Path(path))
-
-            @staticmethod
-            def physical_mode(path):
-                return install_runtime_map_data._observable_mode(
-                    Path(path).lstat())
+            def remove_owned(self, path, **recorded):
+                candidate = Path(path)
+                if "expected_identity" not in recorded:
+                    self.state.pop(candidate)
+                    self.identities.pop(candidate)
+                    return
+                self.identities[candidate] = (40, 50, 60)
+                if (tuple(recorded.get("expected_identity", ())) !=
+                        self.identities[candidate]):
+                    raise install_runtime_map_data.DurableFsError(
+                        "foreign reservation identity")
+                self.state.pop(candidate)
 
             def reserve_move_target(self, source, reserved, kind, tx, digest):
-                self.calls.append(("reserve", Path(source).name,
-                                   Path(reserved).name, kind))
-                Path(reserved).write_bytes(self._reservation_bytes(
-                    source, reserved, kind, tx, digest))
-                self.attributes[Path(reserved)] = self.FILE_ATTRIBUTE_NORMAL
+                super().reserve_move_target(source, reserved, kind, tx, digest)
+                self.identities[Path(reserved)] = (4, 5, 6)
 
             def replace_same_volume(self, source, destination):
-                self.calls.append(("replace", Path(source).name,
-                                   Path(destination).name))
-                attributes = self.attributes.pop(Path(source))
-                os.replace(source, destination)
-                self.attributes[Path(destination)] = attributes
+                super().replace_same_volume(source, destination)
+                self.identities[Path(destination)] = self.identities.pop(
+                    Path(source))
 
-        transaction_id = "0011223344556677-00000001"
-        kind = "remove-owned-test"
-
-        def exercise(label, pre_move=False, post_move=False):
-            source = fixture.target / f"{label}.source"
-            tombstone = fixture.target / f"{label}.tombstone"
-            source.write_bytes(b"owned-payload")
-            os.chmod(source, 0o600)
-            identity = install_runtime_map_data._physical_identity(source)
-            digest = hashlib.sha256(b"owned-payload").hexdigest()
-            durable_fs = FakeWindowsFs()
-            durable_fs.attributes[source] = durable_fs.FILE_ATTRIBUTE_READONLY
-            if pre_move:
-                durable_fs.reserve_move_target(
-                    source, tombstone, kind, transaction_id, digest)
-                durable_fs.calls.clear()
-            if post_move:
-                durable_fs.replace_same_volume(source, tombstone)
-                durable_fs.calls.clear()
-            install_runtime_map_data.WindowsDurableFs.remove_owned(
-                durable_fs, source, tombstone,
-                transaction_id=transaction_id, kind=kind,
-                source_hash=digest, expected_mode=0o600,
-                expected_identity=identity)
-            self.assertFalse(source.exists())
-            self.assertFalse(tombstone.exists())
-            self.assertIn(("set-attributes", tombstone.name,
-                           durable_fs.FILE_ATTRIBUTE_NORMAL), durable_fs.calls)
-            self.assertEqual(durable_fs.calls[-1], ("delete", tombstone.name))
-            return durable_fs.calls
-
-        fresh_calls = exercise("fresh")
-        self.assertEqual(fresh_calls[0][0], "reserve")
-        self.assertEqual(fresh_calls[1][0], "replace")
-        pre_move_calls = exercise("pre-move", pre_move=True)
-        self.assertEqual(pre_move_calls[0], ("delete", "pre-move.tombstone"))
-        self.assertIn(("reserve", "pre-move.source", "pre-move.tombstone",
-                       kind), pre_move_calls)
-        post_move_calls = exercise("post-move", post_move=True)
-        self.assertNotIn("reserve", [call[0] for call in post_move_calls])
-
-        source = fixture.target / "swap.source"
-        tombstone = fixture.target / "swap.tombstone"
-        source.write_bytes(b"owned-payload")
-        os.chmod(source, 0o600)
-        identity = install_runtime_map_data._physical_identity(source)
-        digest = hashlib.sha256(b"owned-payload").hexdigest()
-        durable_fs = FakeWindowsFs()
-        durable_fs.attributes[source] = durable_fs.FILE_ATTRIBUTE_NORMAL
-
-        def swap(_point):
-            source.unlink()
-            source.write_bytes(b"foreign-sentinel")
-            os.chmod(source, 0o600)
-            durable_fs.attributes[source] = durable_fs.FILE_ATTRIBUTE_NORMAL
-            return None
-
-        with self.assertRaises(install_runtime_map_data.DurableFsError):
-            install_runtime_map_data.WindowsDurableFs.remove_owned(
-                durable_fs, source, tombstone,
-                transaction_id=transaction_id, kind=kind,
-                source_hash=digest, expected_mode=0o600,
-                expected_identity=identity, fault=swap,
-                fault_point="after-reservation")
-        self.assertEqual(source.read_bytes(), b"foreign-sentinel")
-        self.assertTrue(tombstone.exists())  # exact reservation retained
-
-        source = fixture.target / "delete-fail.source"
-        tombstone = fixture.target / "delete-fail.tombstone"
-        source.write_bytes(b"owned-payload")
-        os.chmod(source, 0o600)
-        identity = install_runtime_map_data._physical_identity(source)
-        durable_fs = FakeWindowsFs()
-        durable_fs.attributes[source] = durable_fs.FILE_ATTRIBUTE_READONLY
-        durable_fs.replace_same_volume(source, tombstone)
-        durable_fs.fail_delete = True
-        with self.assertRaises(install_runtime_map_data.DurableFsError):
-            install_runtime_map_data.WindowsDurableFs.remove_owned(
-                durable_fs, source, tombstone,
-                transaction_id=transaction_id, kind=kind,
-                source_hash=digest, expected_mode=0o600,
-                expected_identity=identity)
-        self.assertTrue(tombstone.exists())
+        swapped_record = ReservationSwapFs()
+        swapped_record.state[Path("reserve.block")] = b"typed-reservation"
+        with self.assertRaisesRegex(
+                install_runtime_map_data.DurableFsError,
+                "foreign reservation identity"):
+            install_runtime_map_data._finalize_windows_entries(
+                swapped_record, [entry])
         self.assertEqual(
-            durable_fs.attributes[tombstone],
-            durable_fs.FILE_ATTRIBUTE_READONLY)
+            swapped_record.state[Path("reserve.block")],
+            b"typed-reservation")
+
+    def test_windows_remove_owned_state_machine_readonly_and_swap_behavior(self):
+        self._exercise_windows_runtime_mock()
 
     def test_deterministic_comparison_normalizes_only_run_and_rss(self):
         fixture = ManifestFixture()
@@ -1009,8 +902,9 @@ class RuntimeMapInstallerTests(unittest.TestCase):
             def __init__(self):
                 self.lock = None
 
-            def lock_exclusive(self, canonical, retired):
-                self.lock = super().lock_exclusive(canonical, retired)
+            def lock_exclusive(self, canonical, retired, fault=None):
+                self.lock = super().lock_exclusive(
+                    canonical, retired, fault=fault)
                 return self.lock
 
             def remove_owned(self, path, *args, **kwargs):
@@ -1037,8 +931,9 @@ class RuntimeMapInstallerTests(unittest.TestCase):
             def __init__(self):
                 self.lock = None
 
-            def lock_exclusive(self, canonical, retired):
-                self.lock = super().lock_exclusive(canonical, retired)
+            def lock_exclusive(self, canonical, retired, fault=None):
+                self.lock = super().lock_exclusive(
+                    canonical, retired, fault=fault)
                 return self.lock
 
         durable_fs = TrackingFs()
@@ -1150,6 +1045,69 @@ class RuntimeMapInstallerTests(unittest.TestCase):
                 self.assertEqual(
                     install_runtime_map_data.install_runtime_map_data(
                         fixture.manifest_path, fixture.target), "OK")
+
+    @unittest.skipIf(os.name == "nt", "POSIX prior-mode matrix fixture")
+    def test_pair_boundaries_cover_absent_nondefault_and_partial_prior(self):
+        for prior_state in ("absent", "nondefault", "partial"):
+            for action in ("fail", "crash"):
+                for point in (
+                    "INSTALL_AFTER_BLOCK_REPLACE",
+                    "INSTALL_AFTER_METADATA_REPLACE",
+                ):
+                    with self.subTest(
+                            prior_state=prior_state, action=action, point=point):
+                        fixture = ManifestFixture()
+                        try:
+                            block = fixture.target / "garner.block.raw"
+                            metadata = fixture.target / "garner.terrain.json"
+                            if prior_state != "absent":
+                                block.write_bytes(b"prior-block")
+                                os.chmod(block, 0o640)
+                            if prior_state == "nondefault":
+                                metadata.write_bytes(b"prior-metadata")
+                                os.chmod(metadata, 0o604)
+                            expected = {
+                                block: ((b"prior-block", 0o640)
+                                        if prior_state != "absent" else None),
+                                metadata: ((b"prior-metadata", 0o604)
+                                           if prior_state == "nondefault"
+                                           else None),
+                            }
+                            reached = []
+
+                            def interrupt(candidate):
+                                if candidate == point and not reached:
+                                    reached.append(candidate)
+                                    return action
+                                return None
+
+                            with self.assertRaises(
+                                    install_runtime_map_data.InstallError):
+                                install_runtime_map_data.install_runtime_map_data(
+                                    fixture.manifest_path, fixture.target,
+                                    fault=interrupt)
+                            self.assertEqual(reached, [point])
+                            if action == "crash":
+                                invalid = fixture.output / "invalid-restart.json"
+                                invalid.write_text("{}", encoding="utf-8")
+                                with self.assertRaises(
+                                        install_runtime_map_data.InstallError):
+                                    install_runtime_map_data.install_runtime_map_data(
+                                        invalid, fixture.target)
+                            for path, prior in expected.items():
+                                if prior is None:
+                                    self.assertFalse(path.exists())
+                                else:
+                                    self.assertEqual(path.read_bytes(), prior[0])
+                                    self.assertEqual(
+                                        stat.S_IMODE(path.stat().st_mode),
+                                        prior[1])
+                            self.assertEqual(
+                                install_runtime_map_data.install_runtime_map_data(
+                                    fixture.manifest_path, fixture.target),
+                                "OK")
+                        finally:
+                            fixture.close()
 
     def test_full_literal_install_fail_matrix_recovers_fresh_process(self):
         forward_points = (
@@ -1310,8 +1268,8 @@ class RuntimeMapInstallerTests(unittest.TestCase):
                 self.retired = 0
                 self.abandoned = 0
 
-            def lock_exclusive(self, canonical, retired):
-                del canonical, retired
+            def lock_exclusive(self, canonical, retired, fault=None):
+                del canonical, retired, fault
                 return self.lock
 
             def retire_lock(self, lock, fault=None):
@@ -1372,6 +1330,9 @@ class RuntimeMapInstallerTests(unittest.TestCase):
         self.assertEqual(calls, [("close", 73)])
 
     def test_windows_runtime_mock_flush_lock_retire_and_cross_volume(self):
+        self._exercise_windows_runtime_mock()
+
+    def _exercise_windows_runtime_mock(self):
         class Cell:
             def __init__(self, value=0):
                 self.value = value
@@ -1384,6 +1345,10 @@ class RuntimeMapInstallerTests(unittest.TestCase):
         class Basic:
             def __init__(self):
                 self.FileAttributes = 0
+
+        class Disposition:
+            def __init__(self):
+                self.DeleteFile = 0
 
         class Information:
             def __init__(self):
@@ -1427,6 +1392,13 @@ class RuntimeMapInstallerTests(unittest.TestCase):
         class Kernel:
             def __init__(self, owner):
                 self.owner = owner
+
+            def _bound_path(self, handle):
+                identity = self.owner.handle_identities[handle]
+                return next(
+                    candidate for candidate, observed
+                    in self.owner.identities.items()
+                    if observed == identity)
 
             def CreateFileW(
                     self, path, access, share, _security, disposition,
@@ -1480,7 +1452,7 @@ class RuntimeMapInstallerTests(unittest.TestCase):
                 return 1
 
             def GetFileSizeEx(self, handle, output):
-                output.value = len(self.owner.state[self.owner.handles[handle]])
+                output.value = len(self.owner.state[self._bound_path(handle)])
                 self.owner.calls.append(("size", handle, output.value))
                 return 1
 
@@ -1505,7 +1477,7 @@ class RuntimeMapInstallerTests(unittest.TestCase):
                 return 1
 
             def ReadFile(self, handle, buffer, count, read, _overlap):
-                payload = self.owner.state[self.owner.handles[handle]][:count]
+                payload = self.owner.state[self._bound_path(handle)][:count]
                 buffer.raw = payload
                 read.value = len(payload)
                 self.owner.calls.append(("read", handle, len(payload)))
@@ -1514,7 +1486,7 @@ class RuntimeMapInstallerTests(unittest.TestCase):
             def GetFileInformationByHandleEx(
                     self, handle, _kind, output, _size):
                 output.FileAttributes = self.owner.attributes[
-                    self.owner.handles[handle]]
+                    self._bound_path(handle)]
                 self.owner.calls.append(("get-basic", handle))
                 return 1
 
@@ -1535,8 +1507,15 @@ class RuntimeMapInstallerTests(unittest.TestCase):
                 return 1
 
             def SetFileInformationByHandle(
-                    self, handle, _kind, info, _size):
-                self.owner.attributes[self.owner.handles[handle]] = (
+                    self, handle, kind, info, _size):
+                if kind == 4:
+                    if not info.DeleteFile:
+                        raise AssertionError("delete disposition must be true")
+                    self.owner.delete_pending_identity = (
+                        self.owner.handle_identities[handle])
+                    self.owner.calls.append(("set-disposition", handle))
+                    return 1
+                self.owner.attributes[self._bound_path(handle)] = (
                     info.FileAttributes)
                 self.owner.calls.append(
                     ("set-basic", handle, info.FileAttributes))
@@ -1601,6 +1580,7 @@ class RuntimeMapInstallerTests(unittest.TestCase):
                 self.FileAttributeTagInfo = Basic
                 self.ByHandleFileInformation = Information
                 self.FileBasicInfo = Basic
+                self.FileDispositionInfo = Disposition
                 self.Overlapped = object
                 self.kernel32 = Kernel(self)
 
@@ -1683,10 +1663,12 @@ class RuntimeMapInstallerTests(unittest.TestCase):
         self.assertIsNone(lock.handle)
         self.assertNotIn(canonical, durable_fs.state)
         self.assertNotIn(retired, durable_fs.state)
-        self.assertEqual(durable_fs.calls[-1], ("close", lock_handle))
-        self.assertLess(
-            durable_fs.calls.index(("delete-pending", retired.name)),
-            len(durable_fs.calls) - 1)
+        self.assertEqual(durable_fs.calls[-1][0], "close")
+        disposition_index = next(
+            index for index, call in enumerate(durable_fs.calls)
+            if call[0] == "set-disposition")
+        self.assertLess(disposition_index, len(durable_fs.calls) - 1)
+        self.assertIn(("close", lock_handle), durable_fs.calls)
 
         pre_move_fs = FakeWindowsFs()
         pre_move_owner = pre_move_fs.lock_exclusive(canonical, retired)
@@ -1707,6 +1689,82 @@ class RuntimeMapInstallerTests(unittest.TestCase):
         replacement_owner = stale_fs.lock_exclusive(canonical, retired)
         self.assertNotIn(retired, stale_fs.state)
         stale_fs.abandon_lock(replacement_owner)
+
+        retiring = FakeWindowsFs()
+        retirement_owner = retiring.lock_exclusive(canonical, retired)
+        displaced_retired = fixture.target / ".retired-old-owner"
+        foreign_retired_identity = (1, 2, 799)
+        retirement_swapped = []
+
+        def swap_retired_after_verify(point):
+            if (point == "INSTALL_AFTER_LOCK_MOVE_TO_RETIRED" and
+                    not retirement_swapped):
+                retiring.state[displaced_retired] = retiring.state.pop(retired)
+                retiring.attributes[displaced_retired] = (
+                    retiring.attributes.pop(retired))
+                retiring.identities[displaced_retired] = (
+                    retiring.identities.pop(retired))
+                retiring.links[displaced_retired] = retiring.links.pop(retired)
+                retiring.state[retired] = retirement_owner.marker
+                retiring.attributes[retired] = retiring.FILE_ATTRIBUTE_NORMAL
+                retiring.identities[retired] = foreign_retired_identity
+                retiring.links[retired] = 1
+                retirement_swapped.append(point)
+
+        with self.assertRaises(install_runtime_map_data.DurableFsError):
+            retiring.retire_lock(
+                retirement_owner, swap_retired_after_verify)
+        self.assertEqual(
+            retirement_swapped, ["INSTALL_AFTER_LOCK_MOVE_TO_RETIRED"])
+        self.assertEqual(retiring.state[retired], retirement_owner.marker)
+        self.assertEqual(retiring.identities[retired], foreign_retired_identity)
+        self.assertEqual(
+            retiring.state[displaced_retired], retirement_owner.marker)
+
+        deleting = FakeWindowsFs()
+        owned = fixture.target / ".owned-delete"
+        displaced = fixture.target / ".owned-delete.displaced"
+        deleting.state[owned] = b"same-bytes"
+        deleting.attributes[owned] = deleting.FILE_ATTRIBUTE_NORMAL
+        deleting.identities[owned] = (1, 2, 700)
+        deleting.links[owned] = 1
+        original_identity = deleting.identities[owned]
+        replacement_identity = (1, 2, 701)
+        swapped = []
+
+        def swap_after_verify(point):
+            if point == "TEST_WINDOWS_REMOVE_AFTER_VERIFY" and not swapped:
+                deleting.state[displaced] = deleting.state.pop(owned)
+                deleting.attributes[displaced] = deleting.attributes.pop(owned)
+                deleting.identities[displaced] = deleting.identities.pop(owned)
+                deleting.links[displaced] = deleting.links.pop(owned)
+                deleting.state[owned] = b"same-bytes"
+                deleting.attributes[owned] = deleting.FILE_ATTRIBUTE_NORMAL
+                deleting.identities[owned] = replacement_identity
+                deleting.links[owned] = 1
+                swapped.append(point)
+
+        with self.assertRaises(install_runtime_map_data.DurableFsError):
+            deleting.remove_owned(
+                owned,
+                source_hash=hashlib.sha256(b"same-bytes").hexdigest(),
+                expected_mode=deleting.FILE_ATTRIBUTE_NORMAL,
+                expected_identity=original_identity,
+                fault=swap_after_verify,
+                fault_point="TEST_WINDOWS_REMOVE_AFTER_VERIFY")
+        self.assertEqual(swapped, ["TEST_WINDOWS_REMOVE_AFTER_VERIFY"])
+        self.assertEqual(deleting.state[owned], b"same-bytes")
+        self.assertEqual(deleting.identities[owned], replacement_identity)
+        self.assertNotIn(displaced, deleting.state)
+        disposition = [call for call in deleting.calls
+                       if call[0] == "set-disposition"]
+        self.assertEqual(len(disposition), 1)
+        delete_open = next(
+            call for call in deleting.calls
+            if call[0] == "create-file" and call[1] == owned.name)
+        self.assertEqual(delete_open[3],
+                         deleting.FILE_SHARE_READ |
+                         deleting.FILE_SHARE_WRITE)
 
         foreign = FakeWindowsFs()
         foreign._volume_serial = lambda path: (
@@ -1745,6 +1803,244 @@ class RuntimeMapInstallerTests(unittest.TestCase):
         self.assertTrue(canonical.exists())
         self.assertTrue(retired.exists())
 
+    @unittest.skipIf(os.name == "nt", "POSIX update-swap fixture")
+    def test_journal_update_swap_is_retained_and_blocks_fresh_startup(self):
+        fixture = ManifestFixture()
+        self.addCleanup(fixture.close)
+
+        class SwapJournalUpdateFs(install_runtime_map_data.PosixDurableFs):
+            def __init__(self):
+                self.update = None
+                self.displaced = None
+
+            def replace_same_volume(self, source, destination):
+                if (self.update is None and source.name.startswith(
+                        ".garner-runtime-install.journal.")):
+                    self.update = source
+                    self.displaced = Path(str(source) + ".owned")
+                    os.replace(source, self.displaced)
+                    source.write_bytes(b"foreign-update-sentinel")
+                    os.chmod(source, 0o600)
+                    raise install_runtime_map_data.DurableFsError(
+                        "injected journal update replacement")
+                return super().replace_same_volume(source, destination)
+
+        swapping = SwapJournalUpdateFs()
+        with self.assertRaises(install_runtime_map_data.InstallError):
+            install_runtime_map_data.install_runtime_map_data(
+                fixture.manifest_path, fixture.target, durable_fs=swapping)
+        self.assertIsNotNone(swapping.update)
+        self.assertEqual(
+            swapping.update.read_bytes(), b"foreign-update-sentinel")
+
+        with self.assertRaises(install_runtime_map_data.InstallError) as caught:
+            install_runtime_map_data.install_runtime_map_data(
+                fixture.manifest_path, fixture.target)
+        self.assertEqual(caught.exception.status, "RECOVERY_REQUIRED")
+        self.assertIn(swapping.update, caught.exception.recovery_paths)
+        self.assertEqual(
+            swapping.update.read_bytes(), b"foreign-update-sentinel")
+
+    @unittest.skipIf(os.name == "nt", "POSIX barrier-failure fixture")
+    def test_journal_rename_before_barrier_is_recovery_required(self):
+        fixture = ManifestFixture()
+        self.addCleanup(fixture.close)
+        journal = fixture.target / install_runtime_map_data._JOURNAL_NAME
+
+        class FailFirstJournalBarrier(install_runtime_map_data.PosixDurableFs):
+            def __init__(self):
+                self.failed = False
+
+            def sync_directory_or_equivalent(
+                    self, directory, entries_to_finalize=()):
+                if not self.failed and journal.exists():
+                    self.failed = True
+                    raise install_runtime_map_data.DurableFsError(
+                        "journal rename durability uncertain")
+                return super().sync_directory_or_equivalent(
+                    directory, entries_to_finalize)
+
+        durable_fs = FailFirstJournalBarrier()
+        with self.assertRaises(install_runtime_map_data.InstallError) as caught:
+            install_runtime_map_data.install_runtime_map_data(
+                fixture.manifest_path, fixture.target, durable_fs=durable_fs)
+        self.assertTrue(durable_fs.failed)
+        self.assertEqual(caught.exception.status, "RECOVERY_REQUIRED")
+        self.assertTrue(journal.exists())
+        self.assertEqual(
+            install_runtime_map_data.install_runtime_map_data(
+                fixture.manifest_path, fixture.target), "OK")
+
+    def test_retired_journal_requires_independently_recorded_hash(self):
+        fixture = ManifestFixture()
+        self.addCleanup(fixture.close)
+        retired = fixture.target / install_runtime_map_data._RETIRED_JOURNAL_NAME
+        second_manifest, _ = fixture.create_second_run()
+        reached = []
+
+        def crash(point):
+            if point == "INSTALL_AFTER_JOURNAL_RETIRE" and not reached:
+                reached.append(point)
+                return "crash"
+            return None
+
+        with self.assertRaises(install_runtime_map_data.InstallError):
+            install_runtime_map_data.install_runtime_map_data(
+                fixture.manifest_path, fixture.target, fault=crash)
+        self.assertEqual(reached, ["INSTALL_AFTER_JOURNAL_RETIRE"])
+        journal = json.loads(retired.read_text("utf-8"))
+        journal["manifestPath"] = second_manifest.as_posix()
+        journal["manifestSha256"] = hashlib.sha256(
+            second_manifest.read_bytes()).hexdigest()
+        changed = json.dumps(
+            journal, ensure_ascii=False, separators=(",", ":")).encode()
+        retired.write_bytes(changed)
+
+        with self.assertRaises(install_runtime_map_data.InstallError) as caught:
+            install_runtime_map_data.install_runtime_map_data(
+                second_manifest, fixture.target)
+        self.assertEqual(caught.exception.status, "RECOVERY_REQUIRED")
+        self.assertEqual(retired.read_bytes(), changed)
+
+    def test_journal_rejects_lone_surrogate_before_runtime_mutation(self):
+        fixture = ManifestFixture()
+        self.addCleanup(fixture.close)
+        block = fixture.target / "garner.block.raw"
+        metadata = fixture.target / "garner.terrain.json"
+        block.write_bytes(b"old-block")
+        metadata.write_bytes(b"old-metadata")
+        reached = []
+
+        def crash(point):
+            if point == "INSTALL_AFTER_PREPARED_JOURNAL_DURABLE" and not reached:
+                reached.append(point)
+                return "crash"
+            return None
+
+        with self.assertRaises(install_runtime_map_data.InstallError):
+            install_runtime_map_data.install_runtime_map_data(
+                fixture.manifest_path, fixture.target, fault=crash)
+        journal_path = fixture.target / install_runtime_map_data._JOURNAL_NAME
+        journal = json.loads(journal_path.read_text("utf-8"))
+        journal["manifestPath"] = "\ud800"
+        journal_path.write_bytes(json.dumps(
+            journal, ensure_ascii=True, separators=(",", ":")).encode())
+
+        with self.assertRaises(install_runtime_map_data.InstallError) as caught:
+            install_runtime_map_data.install_runtime_map_data(
+                fixture.manifest_path, fixture.target)
+        self.assertEqual(caught.exception.status, "RECOVERY_REQUIRED")
+        self.assertEqual(block.read_bytes(), b"old-block")
+        self.assertEqual(metadata.read_bytes(), b"old-metadata")
+
+    def test_startup_reports_recorded_command_and_plural_evidence(self):
+        fixture = ManifestFixture()
+        self.addCleanup(fixture.close)
+        (fixture.target / "garner.block.raw").write_bytes(b"old-block")
+        (fixture.target / "garner.terrain.json").write_bytes(b"old-metadata")
+        second_manifest, _ = fixture.create_second_run()
+        reached = []
+
+        def crash(point):
+            if (point == "INSTALL_AFTER_PAIR_REPLACED_JOURNAL_DURABLE" and
+                    not reached):
+                reached.append(point)
+                return "crash"
+            return None
+
+        with self.assertRaises(install_runtime_map_data.InstallError):
+            install_runtime_map_data.install_runtime_map_data(
+                fixture.manifest_path, fixture.target, fault=crash)
+        journal_path = fixture.target / install_runtime_map_data._JOURNAL_NAME
+        recorded = json.loads(journal_path.read_text("utf-8"))
+        expected_command = install_runtime_map_data._recovery_command(
+            fixture.manifest_path, fixture.target)
+        self.assertEqual(recorded["recoveryCommand"], expected_command)
+
+        recovery_reached = []
+
+        def fail_recovery(point):
+            if point == "INSTALL_RECOVERY_BLOCK_REPLACE" and not recovery_reached:
+                recovery_reached.append(point)
+                return "fail"
+            return None
+
+        with self.assertRaises(install_runtime_map_data.InstallError) as caught:
+            install_runtime_map_data.install_runtime_map_data(
+                second_manifest, fixture.target, fault=fail_recovery)
+        self.assertEqual(caught.exception.status, "RECOVERY_REQUIRED")
+        self.assertEqual(caught.exception.recovery_command, expected_command)
+        self.assertGreaterEqual(len(caught.exception.recovery_paths), 3)
+        self.assertIn(journal_path, caught.exception.recovery_paths)
+
+    @unittest.skipIf(os.name == "nt", "POSIX retained-identity fixture")
+    def test_posix_remove_owned_preserves_exact_bytes_path_replacement(self):
+        fixture = ManifestFixture()
+        self.addCleanup(fixture.close)
+        durable_fs = install_runtime_map_data.PosixDurableFs()
+        owned = fixture.target / ".owned-cleanup"
+        displaced = fixture.target / ".owned-cleanup.displaced"
+        payload = b"same-bytes"
+        owned.write_bytes(payload)
+        os.chmod(owned, 0o600)
+        recorded_identity = install_runtime_map_data._physical_identity(owned)
+        recorded_hash = hashlib.sha256(payload).hexdigest()
+        replacement_identity = []
+
+        def swap(_point):
+            os.replace(owned, displaced)
+            owned.write_bytes(payload)
+            os.chmod(owned, 0o600)
+            replacement_identity.append(
+                install_runtime_map_data._physical_identity(owned))
+
+        with self.assertRaises(install_runtime_map_data.DurableFsError):
+            durable_fs.remove_owned(
+                owned,
+                source_hash=recorded_hash,
+                expected_mode=0o600,
+                expected_identity=recorded_identity,
+                fault=swap,
+                fault_point="TEST_AFTER_OWNED_VERIFY",
+            )
+
+        self.assertEqual(owned.read_bytes(), payload)
+        self.assertEqual(
+            install_runtime_map_data._physical_identity(owned),
+            replacement_identity[0])
+        self.assertEqual(displaced.read_bytes(), payload)
+
+    @unittest.skipIf(os.name == "nt", "POSIX retained-lock fixture")
+    def test_posix_lock_retirement_preserves_exact_bytes_path_replacement(self):
+        fixture = ManifestFixture()
+        self.addCleanup(fixture.close)
+        durable_fs = install_runtime_map_data.PosixDurableFs()
+        canonical = fixture.target / ".garner-runtime-install.lock"
+        retired = fixture.target / ".garner-runtime-install.lock.retired"
+        displaced = fixture.target / ".garner-runtime-install.lock.displaced"
+        lock = durable_fs.lock_exclusive(canonical, retired)
+        replacement_identity = []
+
+        def swap(point):
+            if (point == "INSTALL_AFTER_LOCK_RESERVATION_DURABLE" and
+                    not replacement_identity):
+                os.replace(canonical, displaced)
+                canonical.write_bytes(lock.marker)
+                os.chmod(canonical, 0o600)
+                replacement_identity.append(
+                    install_runtime_map_data._physical_identity(canonical))
+
+        with self.assertRaises((install_runtime_map_data.DurableFsError,
+                                OSError)):
+            durable_fs.retire_lock(lock, swap)
+
+        self.assertTrue(canonical.exists())
+        self.assertEqual(canonical.read_bytes(), lock.marker)
+        self.assertEqual(
+            install_runtime_map_data._physical_identity(canonical),
+            replacement_identity[0])
+        self.assertEqual(displaced.read_bytes(), lock.marker)
+
     @unittest.skipIf(os.name == "nt", "POSIX exact marker fixture")
     def test_durable_fs_lock_rejects_marker_with_trailing_bytes(self):
         fixture = ManifestFixture()
@@ -1774,11 +2070,76 @@ class RuntimeMapInstallerTests(unittest.TestCase):
 
         with self.assertRaises(install_runtime_map_data.DurableFsError):
             durable_fs.lock_exclusive(canonical, retired)
-
         self.assertEqual(canonical.read_bytes(), b"")
         self.assertEqual(
             install_runtime_map_data._physical_identity(canonical),
             original_identity)
+
+    @unittest.skipIf(os.name == "nt", "POSIX marker durability fixture")
+    def test_lock_marker_internal_faults_are_replayable(self):
+        points = (
+            "INSTALL_LOCK_MARKER_AFTER_WRITE_BEFORE_FLUSH",
+            "INSTALL_LOCK_MARKER_AFTER_FLUSH_BEFORE_READBACK",
+            "INSTALL_LOCK_MARKER_AFTER_READBACK",
+        )
+        for point in points:
+            with self.subTest(point=point):
+                fixture = ManifestFixture()
+                try:
+                    durable_fs = install_runtime_map_data.PosixDurableFs()
+                    canonical = fixture.target / ".garner-runtime-install.lock"
+                    retired = fixture.target / ".garner-runtime-install.lock.retired"
+                    marker = (
+                        f"corsairs-durable-lock-v1\npath={canonical.as_posix()}\n"
+                        .encode())
+                    reached = []
+
+                    def interrupt(candidate):
+                        if candidate == point and not reached:
+                            reached.append(candidate)
+                            return "crash"
+                        return None
+
+                    with self.assertRaises(
+                            install_runtime_map_data._InjectedFault):
+                        durable_fs.lock_exclusive(
+                            canonical, retired, fault=interrupt)
+                    self.assertEqual(reached, [point])
+                    self.assertEqual(canonical.read_bytes(), marker)
+                    replayed = durable_fs.lock_exclusive(canonical, retired)
+                    durable_fs.retire_lock(replayed)
+                    self.assertFalse(canonical.exists())
+                finally:
+                    fixture.close()
+
+    @unittest.skipIf(os.name == "nt", "POSIX stale-waiter fixture")
+    def test_stale_waiter_never_becomes_new_canonical_owner(self):
+        fixture = ManifestFixture()
+        self.addCleanup(fixture.close)
+        durable_fs = install_runtime_map_data.PosixDurableFs()
+        canonical = fixture.target / ".garner-runtime-install.lock"
+        retired = fixture.target / ".garner-runtime-install.lock.retired"
+        owner = durable_fs.lock_exclusive(canonical, retired)
+        stale = os.open(canonical, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+        old_identity = os.fstat(stale).st_ino
+        try:
+            with self.assertRaises(BlockingIOError):
+                fcntl.flock(stale, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            durable_fs.retire_lock(owner)
+            fcntl.flock(stale, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            replacement = durable_fs.lock_exclusive(canonical, retired)
+            try:
+                self.assertNotEqual(
+                    old_identity, os.fstat(replacement.descriptor).st_ino)
+                self.assertEqual(
+                    install_runtime_map_data._physical_identity(canonical),
+                    (os.fstat(replacement.descriptor).st_dev,
+                     os.fstat(replacement.descriptor).st_ino,
+                     os.fstat(replacement.descriptor).st_nlink))
+            finally:
+                durable_fs.retire_lock(replacement)
+        finally:
+            os.close(stale)
 
     def test_corrupt_journal_schema_is_recovery_required(self):
         fixture = ManifestFixture()
