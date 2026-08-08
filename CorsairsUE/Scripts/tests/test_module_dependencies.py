@@ -10,6 +10,24 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class ModuleDependencyTests(unittest.TestCase):
+    def test_runtime_terrain_sha256_uses_commoncrypto_on_mac(self):
+        runtime = (ROOT / "CorsairsUE/Source/CorsairsGame/Private/Tests/"
+                   "CorsairsReferenceTerrainRuntimeTests.cpp").read_text(
+                       encoding="utf-8")
+        self.assertIn(
+            "#if PLATFORM_MAC\n#include <CommonCrypto/CommonDigest.h>\n#endif",
+            runtime,
+        )
+        self.assertIn("Data == nullptr || SizeBytes <= 0", runtime)
+        self.assertIn("SizeBytes > static_cast<int64>(MAX_uint32)", runtime)
+        self.assertIn("CC_SHA256(", runtime)
+        self.assertIn("static_cast<CC_LONG>(SizeBytes)", runtime)
+        self.assertIn("Signature.Signature) != nullptr", runtime)
+        self.assertIn("FPlatformMisc::GetSHA256Signature(", runtime)
+        self.assertIn("if (!bComputed)", runtime)
+        self.assertIn("Signature.ToString().ToLower()", runtime)
+        self.assertIn("IsLowerHex(OutSha256, 64)", runtime)
+
     def test_runtime_terrain_nanite_check_uses_cooked_data_api(self):
         runtime = (ROOT / "CorsairsUE/Source/CorsairsGame/Private/Tests/"
                    "CorsairsReferenceTerrainRuntimeTests.cpp").read_text(

@@ -20,6 +20,10 @@
 #include "Misc/SecureHash.h"
 #include "UObject/SoftObjectPath.h"
 
+#if PLATFORM_MAC
+#include <CommonCrypto/CommonDigest.h>
+#endif
+
 DEFINE_LOG_CATEGORY_STATIC(LogCorsairsReferenceTerrainRuntime, Log, All);
 
 namespace
@@ -63,6 +67,35 @@ namespace
 		return true;
 	}
 
+	bool Sha256Bytes(const uint8* Data, const int64 SizeBytes, FString& OutSha256)
+	{
+		if (Data == nullptr || SizeBytes <= 0 ||
+			SizeBytes > static_cast<int64>(MAX_uint32))
+		{
+			return false;
+		}
+
+		FSHA256Signature Signature;
+#if PLATFORM_MAC
+		const bool bComputed = CC_SHA256(
+			Data,
+			static_cast<CC_LONG>(SizeBytes),
+			Signature.Signature) != nullptr;
+#else
+		const bool bComputed = FPlatformMisc::GetSHA256Signature(
+			Data,
+			static_cast<uint32>(SizeBytes),
+			Signature);
+#endif
+		if (!bComputed)
+		{
+			return false;
+		}
+
+		OutSha256 = Signature.ToString().ToLower();
+		return IsLowerHex(OutSha256, 64);
+	}
+
 	bool ReadRuntimeInput(const TCHAR* RelativePath, FRuntimeInput& Out)
 	{
 		Out.RelativePath = RelativePath;
@@ -72,19 +105,12 @@ namespace
 		{
 			return false;
 		}
-		if (Bytes.Num() > static_cast<int64>(MAX_uint32))
+		if (!Sha256Bytes(Bytes.GetData(), Bytes.Num(), Out.Sha256))
 		{
 			return false;
 		}
-		FSHA256Signature Signature;
-		if (!FPlatformMisc::GetSHA256Signature(
-			Bytes.GetData(), static_cast<uint32>(Bytes.Num()), Signature))
-		{
-			return false;
-		}
-		Out.Sha256 = Signature.ToString().ToLower();
 		Out.SizeBytes = Bytes.Num();
-		return IsLowerHex(Out.Sha256, 64);
+		return true;
 	}
 
 	FString RuntimeInputJson(const FRuntimeInput& Input)
