@@ -476,8 +476,8 @@ Also require deterministic PNG bytes, rejection of a wrong row length, rejection
 - [ ] **Step 2: Verify RED**
 
 ```bash
-cmake --build tools/AssetConverter/build --target AssetConverterTests -j4
-./tools/AssetConverter/build/AssetConverterTests
+nice -n 10 cmake --build tools/AssetConverter/build --target AssetConverterTests -j4
+nice -n 10 ./tools/AssetConverter/build/AssetConverterTests
 ```
 
 Expected compile failure because the streaming writer is absent.
@@ -489,10 +489,10 @@ Add `find_package(ZLIB REQUIRED)` and link `ZLIB::ZLIB`. `Open` writes PNG signa
 - [ ] **Step 4: Verify GREEN**
 
 ```bash
-cmake -S tools/AssetConverter -B tools/AssetConverter/build \
+nice -n 10 cmake -S tools/AssetConverter -B tools/AssetConverter/build \
   -DCMAKE_BUILD_TYPE=Debug
-cmake --build tools/AssetConverter/build --target AssetConverterTests -j4
-ctest --test-dir tools/AssetConverter/build --output-on-failure
+nice -n 10 cmake --build tools/AssetConverter/build --target AssetConverterTests -j4
+nice -n 10 ctest --test-dir tools/AssetConverter/build --output-on-failure
 ```
 
 - [ ] **Step 5: Commit**
