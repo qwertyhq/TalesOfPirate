@@ -37,6 +37,7 @@ add_library(AssetConverterLib STATIC
     src/MapSectionReader.cpp
     src/StreamingMapWriter.cpp
     src/SceneObjParser.cpp
+    src/SceneParity.cpp
     src/MapWriter.cpp
     src/TextureResolver.cpp
     src/JsonWriter.cpp
@@ -94,6 +95,7 @@ add_executable(AssetConverterTests
     tests/TestGltfSkeletonWriter.cpp
     tests/TestLmoParser.cpp
     tests/TestMapParser.cpp
+    tests/TestSceneParity.cpp
     tests/TestMapSectionReader.cpp
     tests/TestStreamingMapWriter.cpp
     tests/TestTextureResolver.cpp

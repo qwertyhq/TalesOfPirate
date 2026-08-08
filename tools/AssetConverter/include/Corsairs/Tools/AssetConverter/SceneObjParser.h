@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <compare>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -17,6 +18,7 @@ enum class SceneObjStatus : std::uint32_t {
     VERSION_UNSUPPORTED,
     SECTION_TABLE_TRUNCATED,
     BODY_TRUNCATED,
+    INTEGER_OVERFLOW,
 };
 
 [[nodiscard]] std::string_view ToString(SceneObjStatus status);
@@ -63,7 +65,8 @@ struct SceneObjInfo {
 
     // Старшие два бита TypeId — тип объекта, остальное — идентификатор модели.
     [[nodiscard]] std::int16_t Type() const {
-        return static_cast<std::int16_t>((TypeId >> 14) & 0x0003);
+        return static_cast<std::int16_t>(
+            (static_cast<std::uint16_t>(TypeId) >> 14u) & 0x0003u);
     }
 
     [[nodiscard]] std::int16_t Id() const {
@@ -80,25 +83,31 @@ static_assert(sizeof(SceneObjInfo) == 20, "SceneObjInfo: раскладка на
 // CSceneObjFile::ReadSectionObjInfo в sources/Client/src/Scene/Nodes/Object/.
 inline constexpr std::int32_t kWorldUnitsPerTile = 100;
 
+struct SceneSourceKey {
+    std::uint32_t SectionIndex{0};
+    std::uint32_t SlotIndex{0};
+    std::uint64_t ByteOffset{0};
+
+    auto operator<=>(const SceneSourceKey&) const = default;
+};
+
 // Размещённый объект вместе с координатами секции, в которой он найден.
 //
 // ВАЖНО: `Info.X` / `Info.Y` на диске — координаты ОТНОСИТЕЛЬНО начала своей
 // секции. Мировые координаты дают `WorldX()` / `WorldY()`. Запись сырых
 // значений собрала бы всю карту в кучу у начала координат.
 struct PlacedObject {
-    SceneObjInfo Info;
-    std::int32_t SectionX;
-    std::int32_t SectionY;
-    std::int32_t SectionWidth;
-    std::int32_t SectionHeight;
+    SceneObjInfo Info{};
+    std::uint32_t SectionX{0};
+    std::uint32_t SectionY{0};
+    std::uint32_t SectionWidth{0};
+    std::uint32_t SectionHeight{0};
+    SceneSourceKey Source{};
 
-    [[nodiscard]] std::int32_t WorldX() const {
-        return Info.X + SectionX * SectionWidth * kWorldUnitsPerTile;
-    }
-
-    [[nodiscard]] std::int32_t WorldY() const {
-        return Info.Y + SectionY * SectionHeight * kWorldUnitsPerTile;
-    }
+    [[nodiscard]] std::optional<std::int32_t> TryWorldX() const;
+    [[nodiscard]] std::optional<std::int32_t> TryWorldY() const;
+    [[nodiscard]] std::int32_t WorldX() const;
+    [[nodiscard]] std::int32_t WorldY() const;
 };
 
 struct SceneObjects {
