@@ -52,6 +52,8 @@ add_library(AssetConverterLib STATIC
     src/TerrainCatalog.cpp
     src/TerrainTextureCache.cpp
     src/TerrainTextureSampling.cpp
+    src/TerrainPageBaker.cpp
+    src/ProcessMetrics.cpp
     src/StbImageDecoder.cpp
     ${CORSAIRS_REPO_ROOT}/sources/Libraries/sqlite3/sqlite3.c
 )
@@ -65,6 +67,9 @@ target_link_libraries(AssetConverterLib PRIVATE
     ZLIB::ZLIB
     ${CMAKE_DL_LIBS}
 )
+if(WIN32)
+    target_link_libraries(AssetConverterLib PRIVATE Psapi)
+endif()
 corsairs_set_target_options(AssetConverterLib)
 
 add_executable(AssetConverter src/Main.cpp)
@@ -93,6 +98,7 @@ add_executable(AssetConverterTests
     tests/TestTerrainLayers.cpp
     tests/TestTerrainCatalog.cpp
     tests/TestTerrainTextureSampling.cpp
+    tests/TestTerrainPageBaker.cpp
 )
 target_link_libraries(AssetConverterTests PRIVATE AssetConverterLib)
 target_include_directories(AssetConverterTests PRIVATE tests)
@@ -104,3 +110,21 @@ target_compile_definitions(AssetConverterTests
     PRIVATE CORSAIRS_REPO_ROOT="${CORSAIRS_REPO_ROOT}")
 
 add_test(NAME AssetConverterTests COMMAND AssetConverterTests)
+
+add_executable(
+    TerrainPageBudgetProbe
+    tests/TerrainPageBudgetProbe.cpp)
+target_link_libraries(
+    TerrainPageBudgetProbe
+    PRIVATE AssetConverterLib)
+corsairs_set_target_options(TerrainPageBudgetProbe)
+add_test(
+    NAME TerrainPageBudget
+    COMMAND TerrainPageBudgetProbe
+        --repo-root
+        ${CORSAIRS_REPO_ROOT})
+set_tests_properties(
+    TerrainPageBudget
+    PROPERTIES
+    WORKING_DIRECTORY
+        ${CORSAIRS_REPO_ROOT})
