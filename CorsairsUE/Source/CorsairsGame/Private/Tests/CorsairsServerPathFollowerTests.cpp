@@ -43,6 +43,39 @@ bool FCorsairsServerPathFollowerTest::RunTest(const FString&)
 		Follower.GetPosition(), FIntPoint(300, 400));
 	TestFalse(TEXT("endpoint stops playback"), Follower.IsActive());
 
+	// Mutation: округлять _position после каждого Advance. Накопление
+	// субсантиметровое расстояние тогда потеряет carry между вызовами.
+	FCorsairsServerPathFollower FractionalFollower;
+	FractionalFollower.Accept({FIntPoint(0, 0), FIntPoint(3, 0)});
+	for (int32 Index = 0; Index < 5; ++Index)
+	{
+		FractionalFollower.Advance(0.2);
+	}
+	TestEqual(TEXT("five sub-centimeter advances retain accumulated carry"),
+		FractionalFollower.GetPosition(), FIntPoint(1, 0));
+	TestTrue(TEXT("fractional carry keeps path active"),
+		FractionalFollower.IsActive());
+
+	// Mutation: хранить internal position как FIntPoint. После 0.6 + 0.6
+	// cm надо израсходовать 0.4 cm до corner и оставить 0.2 cm на +map-Y.
+	FCorsairsServerPathFollower FractionalCornerFollower;
+	FractionalCornerFollower.Accept({
+		FIntPoint(0, 0),
+		FIntPoint(1, 0),
+		FIntPoint(1, 2),
+	});
+	FractionalCornerFollower.Advance(0.6);
+	FractionalCornerFollower.Advance(0.6);
+	TestEqual(TEXT("fractional corner retains the post-corner remainder"),
+		FractionalCornerFollower.GetPosition(), FIntPoint(1, 0));
+	TestTrue(TEXT("fractional corner turns toward map-Y"),
+		FMath::IsNearlyEqual(
+			FractionalCornerFollower.GetFacingYaw(),
+			-90.0));
+	FractionalCornerFollower.Advance(0.8);
+	TestEqual(TEXT("fractional corner carry continues on second segment"),
+		FractionalCornerFollower.GetPosition(), FIntPoint(1, 1));
+
 	const FIntPoint Terminal(17, 29);
 	Follower.Reconcile(Terminal);
 	TestEqual(TEXT("terminal reconciliation snaps exactly"),

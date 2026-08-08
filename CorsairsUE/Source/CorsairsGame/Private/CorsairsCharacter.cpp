@@ -66,15 +66,15 @@ ACorsairsCharacter::ACorsairsCharacter()
 void ACorsairsCharacter::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	if (!ServerPathFollower.IsActive() ||
-		!FMath::IsFinite(ServerMovementSpeedCmPerSecond) ||
-		ServerMovementSpeedCmPerSecond <= 0.0)
+	if (!_serverPathFollower.IsActive() ||
+		!FMath::IsFinite(_serverMovementSpeedCmPerSecond) ||
+		_serverMovementSpeedCmPerSecond <= 0.0)
 	{
 		return;
 	}
 
-	const FIntPoint SourcePosition = ServerPathFollower.Advance(
-		ServerMovementSpeedCmPerSecond * static_cast<double>(DeltaSeconds));
+	const FIntPoint SourcePosition = _serverPathFollower.Advance(
+		_serverMovementSpeedCmPerSecond * static_cast<double>(DeltaSeconds));
 	ApplyServerPathPosition(SourcePosition, true);
 }
 
@@ -97,22 +97,25 @@ void ACorsairsCharacter::HandleServerMovementChanged(
 			return;
 		}
 
-		ServerPathFollower.Accept(Event.Waypoints);
-		ServerMovementSpeedCmPerSecond = Event.MovementSpeedCmPerSecond;
-		ApplyServerPathPosition(ServerPathFollower.GetPosition(), true);
+#if WITH_DEV_AUTOMATION_TESTS
+		++_serverPathAcceptCount;
+#endif
+		_serverPathFollower.Accept(Event.Waypoints);
+		_serverMovementSpeedCmPerSecond = Event.MovementSpeedCmPerSecond;
+		ApplyServerPathPosition(_serverPathFollower.GetPosition(), true);
 		return;
 	}
 
-	ServerPathFollower.Reconcile(Event.Endpoint);
-	ServerMovementSpeedCmPerSecond = 0.0;
-	ApplyServerPathPosition(ServerPathFollower.GetPosition(), false);
-	ServerPathFollower.Stop();
+	_serverPathFollower.Reconcile(Event.Endpoint);
+	_serverMovementSpeedCmPerSecond = 0.0;
+	ApplyServerPathPosition(_serverPathFollower.GetPosition(), false);
+	_serverPathFollower.Stop();
 }
 
 void ACorsairsCharacter::StopServerPathFollower()
 {
-	ServerPathFollower.Stop();
-	ServerMovementSpeedCmPerSecond = 0.0;
+	_serverPathFollower.Stop();
+	_serverMovementSpeedCmPerSecond = 0.0;
 }
 
 void ACorsairsCharacter::ApplyServerPathPosition(
@@ -133,7 +136,7 @@ void ACorsairsCharacter::ApplyServerPathPosition(
 	{
 		SetActorLocationAndRotation(
 			Location,
-			FRotator(0.0, ServerPathFollower.GetFacingYaw(), 0.0),
+			FRotator(0.0, _serverPathFollower.GetFacingYaw(), 0.0),
 			false,
 			nullptr,
 			ETeleportType::TeleportPhysics);

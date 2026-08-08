@@ -4,6 +4,7 @@
 #include "CorsairsGameMode.h"
 #include "CorsairsPlayerCharacter.h"
 
+#include "Components/CapsuleComponent.h"
 #include "CorsairsNet/include/Packet.h"
 #include "CorsairsSession.h"
 #include "Engine/World.h"
@@ -157,7 +158,9 @@ namespace
 			Local->AttachSession(Session);
 
 			FString GroundError;
-			const TArray<uint8> GroundBytes = {0x00, 0x00, 0x00, 0x00};
+			// Один source-tile: (0..49,0..49)=10, (50..99,0..49)=20,
+			// (0..49,50..99)=30, (50..99,50..99)=40 cm.
+			const TArray<uint8> GroundBytes = {0x02, 0x04, 0x06, 0x08};
 			if (!Test->TestTrue(
 					TEXT("routing fixture loads ground"),
 					GameMode->LoadCharacterGroundFromBytesForTests(
@@ -272,6 +275,8 @@ bool FCorsairsLocalDeliveredOnceTest::RunTest(const FString&)
 	Fixture.TestWorld.TickTestWorld(0.1f);
 	TestEqual(TEXT("manual local AcceptedPath leaves pawn under prediction"),
 		Fixture.Local->GetActorLocation(), Start);
+	TestEqual(TEXT("manual local path never enters inherited follower"),
+		Fixture.Local->GetServerPathAcceptCountForTests(), 0);
 
 	FCorsairsWorldActor Target;
 	Target.WorldId = 99;
@@ -295,6 +300,8 @@ bool FCorsairsLocalDeliveredOnceTest::RunTest(const FString&)
 	TestEqual(TEXT("one local server path transition advances by event speed"),
 		Fixture.Local->GetActorLocation(),
 		FVector(20.0, 0.0, Start.Z));
+	TestEqual(TEXT("local server path reaches inherited follower exactly once"),
+		Fixture.Local->GetServerPathAcceptCountForTests(), 1);
 	TestTrue(TEXT("skill lock stays active while follower moves"),
 		Fixture.Session->IsMovementAuthorityLocked());
 	Fixture.ForwardErrors(this);
@@ -333,34 +340,47 @@ bool FCorsairsRemoteByWorldIdTest::RunTest(const FString&)
 	}
 
 	const FVector FirstBefore = FirstRemote->GetActorLocation();
-	const double GroundedZ = SecondRemote->GetActorLocation().Z;
+	TestEqual(TEXT("second remote starts at its distinct first ground height"),
+		SecondRemote->GetActorLocation(), FVector(20.0, -20.0, 98.0));
+	TestEqual(TEXT("second remote starts with capsule bottom at 10 cm"),
+		SecondRemote->GetActorLocation().Z -
+			SecondRemote->GetCapsuleComponent()->GetScaledCapsuleHalfHeight(),
+		10.0);
 	Fixture.Session->OnMovementChanged.Broadcast(MakeAcceptedPath(
 		Second.WorldId,
 		false,
 		true,
 		ServerSpeedCmPerSecond,
 		{Second.Position, FIntPoint(70, 20)}));
-	Fixture.TestWorld.TickTestWorld(0.1f);
+	Fixture.TestWorld.TickTestWorld(0.25f);
 	TestEqual(TEXT("unaddressed remote stays at its accepted position"),
 		FirstRemote->GetActorLocation(), FirstBefore);
-	TestEqual(TEXT("addressed remote follows only its server waypoint path"),
+	TestEqual(TEXT("addressed remote follows waypoint at 20 cm ground height"),
 		SecondRemote->GetActorLocation(),
-		FVector(40.0, -20.0, GroundedZ));
+		FVector(70.0, -20.0, 108.0));
+	TestEqual(TEXT("accepted waypoint preserves 20 cm capsule bottom"),
+		SecondRemote->GetActorLocation().Z -
+			SecondRemote->GetCapsuleComponent()->GetScaledCapsuleHalfHeight(),
+		20.0);
 	TestTrue(TEXT("remote path applies map-Y inverted facing"),
 		FMath::IsNearlyEqual(SecondRemote->GetActorRotation().Yaw, 0.0));
 
-	const FIntPoint RejectedEndpoint(30, 30);
+	const FIntPoint RejectedEndpoint(30, 70);
 	Fixture.Session->OnMovementChanged.Broadcast(MakeTerminal(
 		Second.WorldId,
 		ECorsairsMovementEventType::Rejected,
 		RejectedEndpoint));
-	TestEqual(TEXT("remote rejection reconciles exact grounded endpoint"),
+	TestEqual(TEXT("remote rejection reconciles into 30 cm ground cell"),
 		SecondRemote->GetActorLocation(),
-		FVector(30.0, -30.0, GroundedZ));
+		FVector(30.0, -70.0, 118.0));
+	TestEqual(TEXT("rejected endpoint preserves 30 cm capsule bottom"),
+		SecondRemote->GetActorLocation().Z -
+			SecondRemote->GetCapsuleComponent()->GetScaledCapsuleHalfHeight(),
+		30.0);
 	Fixture.TestWorld.TickTestWorld(0.5f);
 	TestEqual(TEXT("rejected remote no longer replays old path"),
 		SecondRemote->GetActorLocation(),
-		FVector(30.0, -30.0, GroundedZ));
+		FVector(30.0, -70.0, 118.0));
 
 	const FVector BeforeZeroSpeed = SecondRemote->GetActorLocation();
 	Fixture.Session->OnMovementChanged.Broadcast(MakeAcceptedPath(

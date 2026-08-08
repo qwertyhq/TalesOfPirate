@@ -17,9 +17,9 @@ private:
 	void StartCurrentSegment();
 	void UpdateFacing(const FVector2d& Target);
 
-	TArray<FIntPoint> Path;
-	int32 SegmentIndex = 0;
-	FVector2d Position = FVector2d::ZeroVector;
-	double FacingYaw = 0.0;
-	bool bActive = false;
+	TArray<FIntPoint> _path;
+	int32 _segmentIndex = 0;
+	FVector2d _position = FVector2d::ZeroVector;
+	double _facingYaw = 0.0;
+	bool _isActive = false;
 };

@@ -3,37 +3,37 @@
 void FCorsairsServerPathFollower::Accept(
 	const TConstArrayView<FIntPoint> Waypoints)
 {
-	Path.Reset();
-	Path.Append(Waypoints.GetData(), Waypoints.Num());
-	SegmentIndex = 0;
-	bActive = false;
-	if (Path.IsEmpty())
+	_path.Reset();
+	_path.Append(Waypoints.GetData(), Waypoints.Num());
+	_segmentIndex = 0;
+	_isActive = false;
+	if (_path.IsEmpty())
 	{
 		return;
 	}
 
-	Position = FVector2d(Path[0].X, Path[0].Y);
+	_position = FVector2d(_path[0].X, _path[0].Y);
 	StartCurrentSegment();
 }
 
 FIntPoint FCorsairsServerPathFollower::Advance(const double DistanceCm)
 {
-	if (!bActive || !FMath::IsFinite(DistanceCm) || DistanceCm <= 0.0)
+	if (!_isActive || !FMath::IsFinite(DistanceCm) || DistanceCm <= 0.0)
 	{
 		return GetPosition();
 	}
 
 	double Remaining = DistanceCm;
-	while (bActive)
+	while (_isActive)
 	{
-		const FIntPoint& Endpoint = Path[SegmentIndex + 1];
+		const FIntPoint& Endpoint = _path[_segmentIndex + 1];
 		const FVector2d Target(Endpoint.X, Endpoint.Y);
-		const FVector2d Delta = Target - Position;
+		const FVector2d Delta = Target - _position;
 		const double SegmentLength = Delta.Length();
 		if (SegmentLength <= SMALL_NUMBER)
 		{
-			Position = Target;
-			++SegmentIndex;
+			_position = Target;
+			++_segmentIndex;
 			StartCurrentSegment();
 			continue;
 		}
@@ -41,13 +41,13 @@ FIntPoint FCorsairsServerPathFollower::Advance(const double DistanceCm)
 		UpdateFacing(Target);
 		if (Remaining < SegmentLength)
 		{
-			Position += Delta * (Remaining / SegmentLength);
+			_position += Delta * (Remaining / SegmentLength);
 			break;
 		}
 
-		Position = Target;
+		_position = Target;
 		Remaining -= SegmentLength;
-		++SegmentIndex;
+		++_segmentIndex;
 		StartCurrentSegment();
 	}
 
@@ -57,60 +57,60 @@ FIntPoint FCorsairsServerPathFollower::Advance(const double DistanceCm)
 void FCorsairsServerPathFollower::Reconcile(const FIntPoint Endpoint)
 {
 	Stop();
-	Position = FVector2d(Endpoint.X, Endpoint.Y);
+	_position = FVector2d(Endpoint.X, Endpoint.Y);
 }
 
 void FCorsairsServerPathFollower::Stop()
 {
-	Path.Reset();
-	SegmentIndex = 0;
-	bActive = false;
+	_path.Reset();
+	_segmentIndex = 0;
+	_isActive = false;
 }
 
 FIntPoint FCorsairsServerPathFollower::GetPosition() const
 {
 	return FIntPoint(
-		FMath::RoundToInt(Position.X),
-		FMath::RoundToInt(Position.Y));
+		FMath::RoundToInt(_position.X),
+		FMath::RoundToInt(_position.Y));
 }
 
 double FCorsairsServerPathFollower::GetFacingYaw() const
 {
-	return FacingYaw;
+	return _facingYaw;
 }
 
 bool FCorsairsServerPathFollower::IsActive() const
 {
-	return bActive;
+	return _isActive;
 }
 
 void FCorsairsServerPathFollower::StartCurrentSegment()
 {
-	while (SegmentIndex + 1 < Path.Num())
+	while (_segmentIndex + 1 < _path.Num())
 	{
-		const FIntPoint& Endpoint = Path[SegmentIndex + 1];
+		const FIntPoint& Endpoint = _path[_segmentIndex + 1];
 		const FVector2d Target(Endpoint.X, Endpoint.Y);
-		if ((Target - Position).SizeSquared() > SMALL_NUMBER)
+		if ((Target - _position).SizeSquared() > SMALL_NUMBER)
 		{
 			UpdateFacing(Target);
-			bActive = true;
+			_isActive = true;
 			return;
 		}
-		Position = Target;
-		++SegmentIndex;
+		_position = Target;
+		++_segmentIndex;
 	}
 
-	bActive = false;
+	_isActive = false;
 }
 
 void FCorsairsServerPathFollower::UpdateFacing(const FVector2d& Target)
 {
-	const FVector2d Delta = Target - Position;
+	const FVector2d Delta = Target - _position;
 	if (Delta.SizeSquared() <= SMALL_NUMBER)
 	{
 		return;
 	}
 
-	FacingYaw = FRotator::NormalizeAxis(FMath::RadiansToDegrees(
+	_facingYaw = FRotator::NormalizeAxis(FMath::RadiansToDegrees(
 		FMath::Atan2(-Delta.Y, Delta.X)));
 }

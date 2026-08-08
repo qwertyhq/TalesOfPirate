@@ -27,6 +27,13 @@ public:
 		const FCorsairsCharacterGround* InGround);
 	void HandleServerMovementChanged(const FCorsairsMovementEvent& Event);
 
+#if WITH_DEV_AUTOMATION_TESTS
+	int32 GetServerPathAcceptCountForTests() const
+	{
+		return _serverPathAcceptCount;
+	}
+#endif
+
 protected:
 	bool PlayAppearanceAnimation(const FSoftObjectPath& AnimationPath);
 	void HideVisibleParts();
@@ -38,8 +45,12 @@ protected:
 	}
 
 	const FCorsairsCharacterGround* CharacterGround = nullptr;
-	FCorsairsServerPathFollower ServerPathFollower;
-	double ServerMovementSpeedCmPerSecond = 0.0;
+	FCorsairsServerPathFollower _serverPathFollower;
+	double _serverMovementSpeedCmPerSecond = 0.0;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	int32 _serverPathAcceptCount = 0;
+#endif
 
 private:
 	void ApplyServerPathPosition(FIntPoint SourcePosition, bool bApplyFacing);
