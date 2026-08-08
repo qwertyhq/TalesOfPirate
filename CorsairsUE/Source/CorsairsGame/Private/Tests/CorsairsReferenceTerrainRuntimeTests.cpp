@@ -6,6 +6,7 @@
 #include "Engine/StaticMeshActor.h"
 #include "Engine/Texture2D.h"
 #include "Engine/World.h"
+#include "GameFramework/GameModeBase.h"
 #include "GameFramework/WorldSettings.h"
 #include "HAL/PlatformMisc.h"
 #include "Internationalization/Regex.h"
@@ -148,13 +149,13 @@ bool FCorsairsReferenceTerrainRuntimeTest::RunTest(const FString&)
 	TestEqual(TEXT("cooked material shading"), Material->GetShadingModels(),
 		FMaterialShadingModelField(MSM_Unlit));
 	TestTrue(TEXT("cooked mesh Nanite"), Mesh->GetNaniteSettings().bEnabled);
-	TestEqual(TEXT("cooked mesh material slot"), Mesh->GetMaterial(0), Instance);
-	TestEqual(TEXT("cooked instance parent"), Instance->Parent.Get(), Material);
+	TestTrue(TEXT("cooked mesh material slot"), Mesh->GetMaterial(0) == Instance);
+	TestTrue(TEXT("cooked instance parent"), Instance->Parent.Get() == Material);
 	UTexture* BoundTexture = nullptr;
 	TestTrue(TEXT("cooked BaseColorTexture parameter"),
 		Instance->GetTextureParameterValue(
 			FMaterialParameterInfo(TEXT("BaseColorTexture")), BoundTexture));
-	TestEqual(TEXT("cooked texture binding"), BoundTexture, Texture);
+	TestTrue(TEXT("cooked texture binding"), BoundTexture == Texture);
 
 	AStaticMeshActor* Reference = nullptr;
 	int32 ReferenceCount = 0;
@@ -176,8 +177,9 @@ bool FCorsairsReferenceTerrainRuntimeTest::RunTest(const FString&)
 		TestTrue(TEXT("cooked actor location"), Reference->GetActorLocation().Equals(
 			FVector(217600.0, -268800.0, 0.0), 0.01));
 		UStaticMeshComponent* Component = Reference->GetStaticMeshComponent();
-		TestEqual(TEXT("cooked component mesh"), Component->GetStaticMesh(), Mesh);
-		TestEqual(TEXT("cooked component material"), Component->GetMaterial(0), Instance);
+		TestTrue(TEXT("cooked component mesh"), Component->GetStaticMesh() == Mesh);
+		TestTrue(TEXT("cooked component material"),
+			Component->GetMaterial(0) == Instance);
 		FVector Origin;
 		FVector Extent;
 		Reference->GetActorBounds(false, Origin, Extent);

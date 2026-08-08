@@ -66,8 +66,8 @@ namespace
 		{
 			return FString();
 		}
-		const UMetaData* Metadata = Object->GetOutermost()->GetMetaData();
-		return Metadata != nullptr ? Metadata->GetValue(Object, Key) : FString();
+		FMetaData& Metadata = Object->GetOutermost()->GetMetaData();
+		return Metadata.GetValue(Object, Key);
 	}
 
 	bool StrictOverlap(const FBox& First, const FBox& Second)
@@ -124,8 +124,10 @@ bool FCorsairsReferenceTerrainActorTest::RunTest(const FString&)
 		return false;
 	}
 
-	TestEqual(TEXT("texture source width"), Texture->Source.GetSizeX(), 4096);
-	TestEqual(TEXT("texture source height"), Texture->Source.GetSizeY(), 4096);
+	TestEqual(TEXT("texture source width"),
+		static_cast<int32>(Texture->Source.GetSizeX()), 4096);
+	TestEqual(TEXT("texture source height"),
+		static_cast<int32>(Texture->Source.GetSizeY()), 4096);
 	TestEqual(TEXT("texture source format"), Texture->Source.GetFormat(), TSF_BGRA8);
 	TestTrue(TEXT("texture source hash metadata"),
 		MetadataValue(Texture, TEXT("Corsairs.SourceSha256")).Len() == 64);
@@ -178,14 +180,14 @@ bool FCorsairsReferenceTerrainActorTest::RunTest(const FString&)
 		TestTrue(TEXT("A drives opacity mask"), Opacity != nullptr &&
 			Opacity->Expression == Sample && Opacity->MaskA);
 	}
-	TestEqual(TEXT("instance parent"), Instance->Parent.Get(), Material);
+	TestTrue(TEXT("instance parent"), Instance->Parent.Get() == Material);
 	UTexture* BoundTexture = nullptr;
 	TestTrue(TEXT("instance texture parameter exists"),
 		Instance->GetTextureParameterValue(
 			FMaterialParameterInfo(TEXT("BaseColorTexture")), BoundTexture));
-	TestEqual(TEXT("instance texture binding"), BoundTexture, Texture);
+	TestTrue(TEXT("instance texture binding"), BoundTexture == Texture);
 	TestTrue(TEXT("mesh Nanite enabled"), Mesh->GetNaniteSettings().bEnabled);
-	TestEqual(TEXT("mesh material slot 0"), Mesh->GetMaterial(0), Instance);
+	TestTrue(TEXT("mesh material slot 0"), Mesh->GetMaterial(0) == Instance);
 	TestTrue(TEXT("mesh glTF hash metadata"),
 		MetadataValue(Mesh, TEXT("Corsairs.SourceGltfSha256")).Len() == 64);
 	TestTrue(TEXT("mesh bin hash metadata"),
@@ -218,8 +220,9 @@ bool FCorsairsReferenceTerrainActorTest::RunTest(const FString&)
 	TestTrue(TEXT("reference actor location"), Reference->GetActorLocation().Equals(
 		FVector(217600.0, -268800.0, 0.0), 0.01));
 	UStaticMeshComponent* Component = Reference->GetStaticMeshComponent();
-	TestEqual(TEXT("component mesh"), Component->GetStaticMesh(), Mesh);
-	TestEqual(TEXT("component material slot 0"), Component->GetMaterial(0), Instance);
+	TestTrue(TEXT("component mesh"), Component->GetStaticMesh() == Mesh);
+	TestTrue(TEXT("component material slot 0"),
+		Component->GetMaterial(0) == Instance);
 	FVector Origin;
 	FVector Extent;
 	Reference->GetActorBounds(false, Origin, Extent);
