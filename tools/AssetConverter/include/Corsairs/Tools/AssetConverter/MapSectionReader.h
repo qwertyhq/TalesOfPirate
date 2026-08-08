@@ -2,12 +2,14 @@
 
 #include "Corsairs/Tools/AssetConverter/MapParser.h"
 #include "Corsairs/Tools/AssetConverter/TerrainPage.h"
+#include "Corsairs/Tools/AssetConverter/TerrainSurface.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace Corsairs::Tools::AssetConverter {
@@ -68,6 +70,25 @@ private:
     std::size_t _tilesPerSection{0};
     std::size_t _sectionBytes{0};
     MapReadStats _stats;
+};
+
+class MapSectionTileSource final : public IMapTileSource {
+public:
+    explicit MapSectionTileSource(MapSectionReader& reader);
+
+    [[nodiscard]] std::size_t GridWidth() const override;
+    [[nodiscard]] std::size_t GridHeight() const override;
+    TerrainTileRead ReadTile(
+        std::int32_t tileX,
+        std::int32_t tileY) override;
+    [[nodiscard]] const std::string& LastError() const override;
+
+private:
+    MapSectionReader& _reader;
+    std::optional<MapSection> _cachedSection;
+    std::int32_t _cachedSectionX{-1};
+    std::int32_t _cachedSectionY{-1};
+    std::string _error;
 };
 
 } // namespace Corsairs::Tools::AssetConverter

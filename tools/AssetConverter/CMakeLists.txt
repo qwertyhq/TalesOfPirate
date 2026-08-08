@@ -35,6 +35,7 @@ add_library(AssetConverterLib STATIC
     src/LmoParser.cpp
     src/MapParser.cpp
     src/MapSectionReader.cpp
+    src/TerrainSurface.cpp
     src/StreamingMapWriter.cpp
     src/SceneObjParser.cpp
     src/SceneParity.cpp
@@ -96,6 +97,7 @@ add_executable(AssetConverterTests
     tests/TestLmoParser.cpp
     tests/TestMapParser.cpp
     tests/TestSceneParity.cpp
+    tests/TestTerrainSurface.cpp
     tests/TestMapSectionReader.cpp
     tests/TestStreamingMapWriter.cpp
     tests/TestTextureResolver.cpp

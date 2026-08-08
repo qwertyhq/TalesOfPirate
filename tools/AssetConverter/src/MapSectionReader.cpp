@@ -348,4 +348,71 @@ const MapReadStats& MapSectionReader::Stats() const noexcept {
     return _stats;
 }
 
+MapSectionTileSource::MapSectionTileSource(MapSectionReader& reader)
+    : _reader(reader) {
+}
+
+std::size_t MapSectionTileSource::GridWidth() const {
+    const MapFileHeader& header = _reader.Header();
+    return static_cast<std::size_t>(header.Width / header.SectionWidth) *
+           static_cast<std::size_t>(header.SectionWidth);
+}
+
+std::size_t MapSectionTileSource::GridHeight() const {
+    const MapFileHeader& header = _reader.Header();
+    return static_cast<std::size_t>(header.Height / header.SectionHeight) *
+           static_cast<std::size_t>(header.SectionHeight);
+}
+
+TerrainTileRead MapSectionTileSource::ReadTile(
+    std::int32_t tileX,
+    std::int32_t tileY) {
+    if (tileX < 0 || tileY < 0 ||
+        static_cast<std::size_t>(tileX) >= GridWidth() ||
+        static_cast<std::size_t>(tileY) >= GridHeight()) {
+        return {};
+    }
+
+    const MapFileHeader& header = _reader.Header();
+    const std::int32_t sectionX = tileX / header.SectionWidth;
+    const std::int32_t sectionY = tileY / header.SectionHeight;
+    if (!_cachedSection.has_value() || _cachedSectionX != sectionX ||
+        _cachedSectionY != sectionY) {
+        MapDiagnostics diagnostics;
+        auto section = _reader.ReadSection(
+            static_cast<std::uint32_t>(sectionX),
+            static_cast<std::uint32_t>(sectionY),
+            diagnostics);
+        if (!section.has_value()) {
+            if (_error.empty()) {
+                _error = std::format(
+                    "{}: {}",
+                    ToString(diagnostics.Status),
+                    diagnostics.Detail);
+            }
+            return {};
+        }
+
+        _cachedSection = std::move(*section);
+        _cachedSectionX = sectionX;
+        _cachedSectionY = sectionY;
+    }
+
+    if (!_cachedSection->Present) {
+        return {};
+    }
+
+    const std::size_t localX = static_cast<std::size_t>(
+        tileX % header.SectionWidth);
+    const std::size_t localY = static_cast<std::size_t>(
+        tileY % header.SectionHeight);
+    const std::size_t tileIndex =
+        localY * static_cast<std::size_t>(header.SectionWidth) + localX;
+    return TerrainTileRead{_cachedSection->Tiles[tileIndex], true};
+}
+
+const std::string& MapSectionTileSource::LastError() const {
+    return _error;
+}
+
 } // namespace Corsairs::Tools::AssetConverter
