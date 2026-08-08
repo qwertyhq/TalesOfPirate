@@ -10,32 +10,50 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class ModuleDependencyTests(unittest.TestCase):
-    def test_runtime_terrain_failure_diagnostics_cover_cooked_state(self):
+    def test_runtime_terrain_nanite_uses_disk_asset_registry_metadata(self):
         runtime = (ROOT / "CorsairsUE/Source/CorsairsGame/Private/Tests/"
                    "CorsairsReferenceTerrainRuntimeTests.cpp").read_text(
                        encoding="utf-8")
-        for field in (
-            "CORSAIRS_TERRAIN_RUNTIME_DIAGNOSTIC=",
-            "renderDataPresent",
-            "renderDataInitialized",
-            "lodCount",
-            "lod0Vertices",
-            "lod0Triangles",
-            "meshHasValidRenderData",
-            "meshHasValidNaniteData",
-            "naniteProjectEnabled",
-            "actorTransform",
-            "rootIsStaticMeshComponent",
-            "componentRegistered",
-            "relativeTransform",
-            "worldTransform",
-            "meshLocalBounds",
-            "meshBoundsByRelativeTransform",
-            "componentCalcBoundsByRelativeTransform",
-            "actorBounds",
+        game_rules = (
+            ROOT / "CorsairsUE/Source/CorsairsGame/CorsairsGame.Build.cs"
+        ).read_text(encoding="utf-8")
+        public_dependencies = game_rules.split(
+            "PublicDependencyModuleNames.AddRange", 1)[1].split("});", 1)[0]
+
+        self.assertIn('#include "AssetRegistry/AssetRegistryModule.h"', runtime)
+        self.assertIn("GetAssetByObjectPath(", runtime)
+        self.assertIn("/*bIncludeOnlyOnDiskAssets=*/ true", runtime)
+        self.assertIn('GetTagValue(TEXT("NaniteEnabled")', runtime)
+        self.assertIn('FString(TEXT("True"))', runtime)
+        self.assertNotIn("HasValidNaniteData()", runtime)
+        self.assertEqual(
+            game_rules.count(
+                'PrivateDependencyModuleNames.Add("AssetRegistry");'),
+            1,
+        )
+        self.assertNotIn('"AssetRegistry"', public_dependencies)
+
+    def test_runtime_terrain_transform_uses_serialized_root_state(self):
+        runtime = (ROOT / "CorsairsUE/Source/CorsairsGame/Private/Tests/"
+                   "CorsairsReferenceTerrainRuntimeTests.cpp").read_text(
+                       encoding="utf-8")
+        self.assertIn("GetRootComponent() == Component", runtime)
+        self.assertIn("GetAttachParent() == nullptr", runtime)
+        self.assertIn("const FTransform RelativeTransform =", runtime)
+        self.assertIn("Component->GetRelativeTransform()", runtime)
+        self.assertIn("Component->CalcBounds(RelativeTransform).GetBox()", runtime)
+        for forbidden in (
+            "GetActorLocation()",
+            "GetActorBounds(",
+            "GetActorTransform()",
+            "GetComponentTransform()",
+            "ConditionalUpdateComponentToWorld",
+            "RegisterComponent",
+            "InitializeActorsForPlay",
+            "BeginPlay",
         ):
-            with self.subTest(field=field):
-                self.assertIn(field, runtime)
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, runtime)
 
     def test_runtime_terrain_sha256_uses_commoncrypto_on_mac(self):
         runtime = (ROOT / "CorsairsUE/Source/CorsairsGame/Private/Tests/"
@@ -54,13 +72,6 @@ class ModuleDependencyTests(unittest.TestCase):
         self.assertIn("if (!bComputed)", runtime)
         self.assertIn("Signature.ToString().ToLower()", runtime)
         self.assertIn("IsLowerHex(OutSha256, 64)", runtime)
-
-    def test_runtime_terrain_nanite_check_uses_cooked_data_api(self):
-        runtime = (ROOT / "CorsairsUE/Source/CorsairsGame/Private/Tests/"
-                   "CorsairsReferenceTerrainRuntimeTests.cpp").read_text(
-                       encoding="utf-8")
-        self.assertIn("HasValidNaniteData()", runtime)
-        self.assertNotIn("GetNaniteSettings()", runtime)
 
     def test_contract_enum_uses_equality_not_python_alias_spelling(self):
         entrypoint = ROOT / "CorsairsUE/Scripts/import_reference_terrain.py"

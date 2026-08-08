@@ -22,6 +22,8 @@ public class CorsairsGame : ModuleRules
 			"JsonUtilities",
 		});
 
+		PrivateDependencyModuleNames.Add("AssetRegistry");
+
 		// Source-only Editor builds remain valid before Task 7 has generated
 		// runtime terrain data. Packaging acceptance independently requires all
 		// three files and audits their exact UFS members.
