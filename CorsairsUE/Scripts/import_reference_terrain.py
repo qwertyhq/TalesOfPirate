@@ -25,6 +25,10 @@ def _enum_leaf(value) -> str:
     return str(value).rsplit(".", 1)[-1]
 
 
+def _contract_enum(value, expected_enum, literal: str) -> str:
+    return literal if value == expected_enum else _enum_leaf(value)
+
+
 def _class_path(value) -> str:
     if value is None:
         return ""
@@ -143,22 +147,45 @@ def inspect_reference_state(manifest: dict):
             "sourceFormat": _metadata(texture, "Corsairs.SourceFormat"),
             "sourceSha256": _metadata(texture, "Corsairs.SourceSha256"),
             "srgb": bool(texture.get_editor_property("srgb")),
-            "compression": _enum_leaf(texture.get_editor_property("compression_settings")),
-            "filter": _enum_leaf(texture.get_editor_property("filter")),
-            "addressX": _enum_leaf(texture.get_editor_property("address_x")),
-            "addressY": _enum_leaf(texture.get_editor_property("address_y")),
-            "mipGenSettings": _enum_leaf(texture.get_editor_property("mip_gen_settings")),
-            "lodGroup": _enum_leaf(texture.get_editor_property("lod_group")),
+            "compression": _contract_enum(
+                texture.get_editor_property("compression_settings"),
+                unreal.TextureCompressionSettings.TC_DEFAULT, "TC_DEFAULT"),
+            "filter": _contract_enum(
+                texture.get_editor_property("filter"),
+                unreal.TextureFilter.TF_BILINEAR, "TF_BILINEAR"),
+            "addressX": _contract_enum(
+                texture.get_editor_property("address_x"),
+                unreal.TextureAddress.TA_CLAMP, "TA_CLAMP"),
+            "addressY": _contract_enum(
+                texture.get_editor_property("address_y"),
+                unreal.TextureAddress.TA_CLAMP, "TA_CLAMP"),
+            "mipGenSettings": _contract_enum(
+                texture.get_editor_property("mip_gen_settings"),
+                unreal.TextureMipGenSettings.TMGS_FROM_TEXTURE_GROUP,
+                "TMGS_FROM_TEXTURE_GROUP"),
+            "lodGroup": _contract_enum(
+                texture.get_editor_property("lod_group"),
+                unreal.TextureGroup.TEXTUREGROUP_WORLD, "TEXTUREGROUP_WORLD"),
             "lodBias": int(texture.get_editor_property("lod_bias")),
             "neverStream": bool(texture.get_editor_property("never_stream")),
         },
         "material": {
             "objectPath": _asset_package_path(material),
-            "blendMode": _enum_leaf(material.get_editor_property("blend_mode")),
-            "shadingModel": _enum_leaf(material.get_editor_property("shading_model")),
+            "blendMode": _contract_enum(
+                material.get_editor_property("blend_mode"),
+                unreal.BlendMode.BLEND_MASKED, "BLEND_MASKED"),
+            "shadingModel": _contract_enum(
+                material.get_editor_property("shading_model"),
+                unreal.MaterialShadingModel.MSM_UNLIT, "MSM_UNLIT"),
             "parameterName": str(sampler.get_editor_property("parameter_name")),
-            "samplerType": _enum_leaf(sampler.get_editor_property("sampler_type")),
-            "samplerSource": _enum_leaf(sampler.get_editor_property("sampler_source")),
+            "samplerType": _contract_enum(
+                sampler.get_editor_property("sampler_type"),
+                unreal.MaterialSamplerType.SAMPLERTYPE_COLOR,
+                "SAMPLERTYPE_COLOR"),
+            "samplerSource": _contract_enum(
+                sampler.get_editor_property("sampler_source"),
+                unreal.SamplerSourceMode.SSM_FROM_TEXTURE_ASSET,
+                "SSM_FROM_TEXTURE_ASSET"),
             "rgbOutput": "MP_EMISSIVE_COLOR",
             "alphaOutput": "MP_OPACITY_MASK",
             "usageFlags": sorted([

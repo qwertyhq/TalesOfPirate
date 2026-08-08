@@ -10,6 +10,41 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class ModuleDependencyTests(unittest.TestCase):
+    def test_contract_enum_uses_equality_not_python_alias_spelling(self):
+        entrypoint = ROOT / "CorsairsUE/Scripts/import_reference_terrain.py"
+        probe = f"""
+import runpy
+import sys
+import types
+
+class EnumValue:
+    def __init__(self, spelling, identity):
+        self.spelling = spelling
+        self.identity = identity
+
+    def __eq__(self, other):
+        return isinstance(other, EnumValue) and self.identity == other.identity
+
+    def __str__(self):
+        return self.spelling
+
+sys.modules["unreal"] = types.ModuleType("unreal")
+namespace = runpy.run_path({str(entrypoint)!r}, run_name="ue_enum_probe")
+contract_enum = namespace["_contract_enum"]
+actual_alias = EnumValue("TextureCompressionSettings.DEFAULT", 0)
+expected_alias = EnumValue("TextureCompressionSettings.TC_DEFAULT", 0)
+mismatch = EnumValue("TextureCompressionSettings.NORMALMAP", 1)
+assert contract_enum(actual_alias, expected_alias, "TC_DEFAULT") == "TC_DEFAULT"
+assert contract_enum(mismatch, expected_alias, "TC_DEFAULT") == "NORMALMAP"
+"""
+        completed = subprocess.run(
+            [sys.executable, "-I", "-B", "-c", probe],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_vector_tolerance_is_finite_componentwise_and_inclusive(self):
         entrypoint = ROOT / "CorsairsUE/Scripts/import_reference_terrain.py"
         probe = f"""
