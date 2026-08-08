@@ -74,6 +74,7 @@ public:
             detail = "не удалось открыть PNG: " + PathToUtf8(_path);
             return false;
         }
+        _ownsOpenedOutput = true;
 
         if (deflateInit(&_zstream, Z_DEFAULT_COMPRESSION) != Z_OK) {
             detail = "zlib не инициализировал поток PNG";
@@ -181,6 +182,7 @@ public:
             return Fail(detail, "не удалось закрыть PNG");
         }
 
+        _ownsOpenedOutput = false;
         _finished = true;
         return true;
     }
@@ -283,8 +285,11 @@ private:
         if (_stream.is_open()) {
             _stream.close();
         }
-        std::error_code ec;
-        std::filesystem::remove(_path, ec);
+        if (_ownsOpenedOutput) {
+            std::error_code ec;
+            std::filesystem::remove(_path, ec);
+            _ownsOpenedOutput = false;
+        }
     }
 
     std::filesystem::path _path;
@@ -297,6 +302,7 @@ private:
     std::size_t _rowBytes{0};
     std::size_t _peakRgbaRowBytes{0};
     bool _zlibInitialized{false};
+    bool _ownsOpenedOutput{false};
     bool _finished{false};
     bool _failed{false};
 };

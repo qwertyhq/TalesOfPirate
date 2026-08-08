@@ -201,6 +201,22 @@ CORSAIRS_TEST(StreamingPng_DestructorRemovesFileWhenFinishWasNotCalled) {
     REQUIRE(!std::filesystem::exists(path));
 }
 
+CORSAIRS_TEST(StreamingPng_OpenFailurePreservesPreExistingDirectoryTarget) {
+    std::filesystem::create_directories(TempDir());
+    const auto path = TempDir() / "existing-directory.png";
+    std::filesystem::remove_all(path);
+    REQUIRE(std::filesystem::create_directory(path));
+
+    std::string detail;
+    const auto writer = AC::StreamingPngWriter::Open(path, 1, 1, detail);
+    REQUIRE(writer == nullptr);
+    REQUIRE(!detail.empty());
+    REQUIRE(std::filesystem::exists(path));
+    REQUIRE(std::filesystem::is_directory(path));
+
+    std::filesystem::remove(path);
+}
+
 CORSAIRS_TEST(StreamingPng_RejectsZeroDimensionsAndOverflow) {
     std::filesystem::create_directories(TempDir());
     std::string detail;
