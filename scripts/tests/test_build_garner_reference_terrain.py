@@ -220,6 +220,37 @@ class OrchestratorContractTests(unittest.TestCase):
         self.assertFalse(build._normalized_relative("CorsairsUE/Data/file/"))
         self.assertTrue(build._normalized_relative("CorsairsUE/Data/file"))
 
+    def test_unrealpak_extract_uses_ue58_positional_output_and_relative_filter(self):
+        unrealpak = Path("/Engine/Binaries/Mac/UnrealPak")
+        container = Path("/archive/CorsairsUE-Mac.pak")
+        output = Path("/evidence/extracted/member")
+        member = "../../../CorsairsUE/Data/Heights/garner.block.raw"
+        command, extracted = build._unrealpak_extract_plan(
+            unrealpak, container, output, member)
+        self.assertEqual(command.name, "cook-package")
+        self.assertEqual(command.argv, (
+            "nice", "-n", "10", str(unrealpak), str(container),
+            "-Extract", str(output),
+            "-Filter=CorsairsUE/Data/Heights/garner.block.raw",
+        ))
+        self.assertEqual(command.argv.count("-Extract"), 1)
+        self.assertEqual(sum(
+            item.startswith("-Filter=") for item in command.argv), 1)
+        self.assertEqual(
+            extracted,
+            output / "CorsairsUE/Data/Heights/garner.block.raw")
+        for invalid in (
+            "CorsairsUE/Data/Heights/garner.block.raw",
+            "../../../",
+            "../../../../CorsairsUE/Data/Heights/garner.block.raw",
+            "../../../CorsairsUE/Data/../Heights/garner.block.raw",
+            "../../../CorsairsUE//Data/Heights/garner.block.raw",
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(build.Task8Error):
+                    build._unrealpak_extract_plan(
+                        unrealpak, container, output, invalid)
+
     def test_clean_checkout_orders_installer_before_game_build_and_cook(self):
         seen = []
 

@@ -1412,6 +1412,7 @@ def write_inventory_report(
     return report
 
 
+_UNREALPAK_MOUNT_PREFIX = "../../../"
 _UNREALPAK_MOUNT = re.compile(
     r'^\s*(?:LogPakFile:\s*Display:\s*)?Listing .+ with mount point '
     r'"(?P<mount>[^\"]+)"\s*$',
@@ -1433,7 +1434,7 @@ def parse_unrealpak_list(output: str) -> list[dict[str, Any]]:
         for index, line in enumerate(lines)
         if (match := _UNREALPAK_MOUNT.search(line)) is not None
     ]
-    if len(mounts) != 1 or mounts[0][1] != "../../../":
+    if len(mounts) != 1 or mounts[0][1] != _UNREALPAK_MOUNT_PREFIX:
         raise Task8Error("UnrealPak emitted missing or ambiguous mount point")
     summaries = [
         (index, int(match.group("count")))
@@ -1453,7 +1454,7 @@ def parse_unrealpak_list(output: str) -> list[dict[str, Any]]:
             raise Task8Error(f"UnrealPak emitted invalid member path: {relative}")
         member_lines.append(index)
         members.append({
-            "path": "../../../" + relative,
+            "path": _UNREALPAK_MOUNT_PREFIX + relative,
             "sizeBytes": int(match.group("size")),
         })
     members.sort(key=lambda item: item["path"])
@@ -1466,6 +1467,26 @@ def parse_unrealpak_list(output: str) -> list[dict[str, Any]]:
     if summaries[0][1] != unique_count:
         raise Task8Error("UnrealPak member count differs from terminal summary")
     return members
+
+
+def _unrealpak_extract_plan(
+    unrealpak: Path,
+    container: Path,
+    output_root: Path,
+    canonical_member: str,
+) -> tuple[CommandSpec, Path]:
+    if (type(canonical_member) is not str or
+            not canonical_member.startswith(_UNREALPAK_MOUNT_PREFIX)):
+        raise Task8Error("UnrealPak extraction member lacks canonical mount")
+    relative = canonical_member[len(_UNREALPAK_MOUNT_PREFIX):]
+    if not _normalized_relative(relative):
+        raise Task8Error("UnrealPak extraction member is not normalized")
+    return (
+        CommandSpec("cook-package", _nice(
+            str(unrealpak), str(container), "-Extract", str(output_root),
+            f"-Filter={relative}")),
+        output_root / PurePosixPath(relative),
+    )
 
 
 def parse_runtime_observation_event(
@@ -1628,13 +1649,11 @@ def prepare_package_evidence(
         _mkdir_exclusive(member_root)
         refuse_competing_processes(process_probe())
         require_healthy_thermal(*thermal_probe())
-        result = transaction.run_owned_command(CommandSpec(
-            "cook-package", _nice(
-                str(unrealpak), str(physical), f"-Extract={member_root}",
-                f"-Filter={member_path}")))
+        extract_command, extracted = _unrealpak_extract_plan(
+            unrealpak, physical, member_root, member_path)
+        result = transaction.run_owned_command(extract_command)
         if result.returncode != 0:
             raise Task8Error(f"UnrealPak extraction failed: {result.stderr.strip()}")
-        extracted = member_root / PurePosixPath(member_path[9:])
         extracted_evidence = _evidence(extracted, repo_root)
         source = repo_root / "CorsairsUE" / PurePosixPath(relative)
         source_evidence = _evidence(source, repo_root)
