@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import unreal                                        # noqa: E402
 from report import Reporter, RefuseIfEditorOpen      # noqa: E402
+from reference_terrain_rules import assert_legacy_target_allowed  # noqa: E402
 
 MATERIAL_PATH = "/Game/Terrain/Materials"
 MATERIAL_NAME = "M_Terrain"
@@ -41,12 +42,14 @@ TEXTURE_PARAM = "Diffuse"
 def create_base_material(report):
     """Создаёт материал с параметром текстуры, если его ещё нет."""
     full = f"{MATERIAL_PATH}/{MATERIAL_NAME}"
+    assert_legacy_target_allowed("setup_terrain_material", full)
     existing = unreal.load_asset(full)
     if isinstance(existing, unreal.Material):
         report.line("базовый материал: уже есть")
         return existing
 
     tools = unreal.AssetToolsHelpers.get_asset_tools()
+    assert_legacy_target_allowed("setup_terrain_material", full)
     material = tools.create_asset(MATERIAL_NAME, MATERIAL_PATH,
                                   unreal.Material, unreal.MaterialFactoryNew())
     if material is None:
@@ -55,27 +58,38 @@ def create_base_material(report):
 
     library = unreal.MaterialEditingLibrary
 
+    assert_legacy_target_allowed("setup_terrain_material", full)
     sampler = library.create_material_expression(
         material, unreal.MaterialExpressionTextureSampleParameter2D, -400, 0)
+    assert_legacy_target_allowed("setup_terrain_material", full)
     sampler.set_editor_property("parameter_name", unreal.Name(TEXTURE_PARAM))
 
+    assert_legacy_target_allowed("setup_terrain_material", full)
     library.connect_material_property(sampler, "RGB",
                                       unreal.MaterialProperty.MP_BASE_COLOR)
 
     # Рельеф не блестит: зеркальность в ноль, шероховатость почти в единицу.
+    assert_legacy_target_allowed("setup_terrain_material", full)
     roughness = library.create_material_expression(
         material, unreal.MaterialExpressionConstant, -400, 250)
+    assert_legacy_target_allowed("setup_terrain_material", full)
     roughness.set_editor_property("r", 0.9)
+    assert_legacy_target_allowed("setup_terrain_material", full)
     library.connect_material_property(roughness, "",
                                       unreal.MaterialProperty.MP_ROUGHNESS)
 
+    assert_legacy_target_allowed("setup_terrain_material", full)
     specular = library.create_material_expression(
         material, unreal.MaterialExpressionConstant, -400, 350)
+    assert_legacy_target_allowed("setup_terrain_material", full)
     specular.set_editor_property("r", 0.0)
+    assert_legacy_target_allowed("setup_terrain_material", full)
     library.connect_material_property(specular, "",
                                       unreal.MaterialProperty.MP_SPECULAR)
 
+    assert_legacy_target_allowed("setup_terrain_material", full)
     library.recompile_material(material)
+    assert_legacy_target_allowed("setup_terrain_material", full)
     unreal.EditorAssetLibrary.save_loaded_asset(material, only_if_is_dirty=False)
     report.line("базовый материал: создан")
     return material
@@ -87,10 +101,12 @@ def instance_for(report, base, texture_name, cache):
         return cache[texture_name]
 
     path = f"{MATERIAL_PATH}/MI_{texture_name}"
+    assert_legacy_target_allowed("setup_terrain_material", path)
     instance = unreal.load_asset(path)
 
     if not isinstance(instance, unreal.MaterialInstanceConstant):
         tools = unreal.AssetToolsHelpers.get_asset_tools()
+        assert_legacy_target_allowed("setup_terrain_material", path)
         instance = tools.create_asset(
             f"MI_{texture_name}", MATERIAL_PATH,
             unreal.MaterialInstanceConstant,
@@ -98,12 +114,15 @@ def instance_for(report, base, texture_name, cache):
         if instance is None:
             cache[texture_name] = None
             return None
+        assert_legacy_target_allowed("setup_terrain_material", path)
         unreal.MaterialEditingLibrary.set_material_instance_parent(instance, base)
 
     texture = unreal.load_asset(f"{TEXTURE_ROOT}/{texture_name}")
     if isinstance(texture, unreal.Texture2D):
+        assert_legacy_target_allowed("setup_terrain_material", path)
         unreal.MaterialEditingLibrary.set_material_instance_texture_parameter_value(
             instance, unreal.Name(TEXTURE_PARAM), texture)
+        assert_legacy_target_allowed("setup_terrain_material", path)
         unreal.EditorAssetLibrary.save_loaded_asset(instance, only_if_is_dirty=False)
     else:
         report.warn(f"текстуры нет: {texture_name}")
@@ -157,8 +176,14 @@ def main(report):
         materials = mesh.get_editor_property("static_materials")
         if not materials:
             continue
+        assert_legacy_target_allowed(
+            "setup_terrain_material", str(asset.package_name))
         materials[0].material_interface = instance
+        assert_legacy_target_allowed(
+            "setup_terrain_material", str(asset.package_name))
         mesh.set_editor_property("static_materials", materials)
+        assert_legacy_target_allowed(
+            "setup_terrain_material", str(asset.package_name))
         unreal.EditorAssetLibrary.save_loaded_asset(mesh, only_if_is_dirty=False)
         assigned += 1
 

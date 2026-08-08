@@ -13,9 +13,13 @@ public class CorsairsImport : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
-			"UnrealEd",
 			"Json",
 			"JsonUtilities",
+		});
+
+		PrivateDependencyModuleNames.AddRange(new string[]
+		{
+			"UnrealEd",
 		});
 	}
 }

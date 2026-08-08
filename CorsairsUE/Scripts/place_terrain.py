@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import unreal                                        # noqa: E402
 from report import Reporter, RefuseIfEditorOpen      # noqa: E402
+from reference_terrain_rules import assert_legacy_target_allowed  # noqa: E402
 
 TERRAIN_ROOT = "/Game/Terrain"
 
@@ -46,6 +47,8 @@ def main(report):
     removed = 0
     for actor in actor_subsystem.get_all_level_actors():
         if actor.get_actor_label().startswith("Terrain_"):
+            assert_legacy_target_allowed(
+                "place_terrain", actor.get_path_name())
             actor_subsystem.destroy_actor(actor)
             removed += 1
     if removed:
@@ -66,6 +69,7 @@ def main(report):
             skipped += 1
             continue
 
+        assert_legacy_target_allowed("place_terrain", level_path)
         actor = actor_subsystem.spawn_actor_from_class(
             unreal.StaticMeshActor, unreal.Vector(0.0, 0.0, 0.0),
             unreal.Rotator(0.0, 0.0, 0.0))
@@ -73,7 +77,10 @@ def main(report):
             skipped += 1
             continue
 
+        assert_legacy_target_allowed(
+            "place_terrain", str(asset.package_name))
         actor.static_mesh_component.set_static_mesh(mesh)
+        assert_legacy_target_allowed("place_terrain", actor.get_path_name())
         actor.set_actor_label(f"Terrain_{name}")
         placed += 1
 

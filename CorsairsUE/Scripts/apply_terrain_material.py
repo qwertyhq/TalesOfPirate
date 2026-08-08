@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import unreal                                   # noqa: E402
 from report import Reporter, RefuseIfEditorOpen  # noqa: E402
+from reference_terrain_rules import assert_legacy_target_allowed  # noqa: E402
 
 MATERIAL_PATH = "/Game/Terrain/Materials"
 
@@ -63,6 +64,9 @@ def main(report):
             missing_material.append(texture_name)
             continue
 
+        assert_legacy_target_allowed(
+            "apply_terrain_material",
+            actor.static_mesh_component.get_static_mesh().get_path_name())
         actor.static_mesh_component.set_material(0, instance)
         applied += 1
 
