@@ -1,4 +1,5 @@
 #include "Corsairs/Tools/AssetConverter/BinaryReader.h"
+#include "Corsairs/Tools/AssetConverter/GltfWriter.h"
 #include "Corsairs/Tools/AssetConverter/MapSectionReader.h"
 #include "Corsairs/Tools/AssetConverter/Sha256.h"
 #include "Corsairs/Tools/AssetConverter/TerrainPageBaker.h"
@@ -1260,15 +1261,21 @@ CORSAIRS_TEST(TerrainPageMeshWriter_RejectsSymlinkOutputDirectoryWithoutEscape) 
         }
     }
     else {
-        std::string detail;
+        std::string directDetail;
         const auto result = AC::WriteTerrainPageMesh(
-            FlatPage(), {0u, 0u}, linkedOutput, {}, detail);
+            FlatPage(), {0u, 0u}, linkedOutput, {}, directDetail);
         const std::filesystem::path trailingLinkedOutput{
             linkedOutput.generic_string() + "/"};
+        std::string trailingDetail;
         const auto trailingResult = AC::WriteTerrainPageMesh(
-            FlatPage(), {0u, 0u}, trailingLinkedOutput, {}, detail);
-        symlinkCasePassed = IsWriterFailure(result, detail) &&
-            IsWriterFailure(trailingResult, detail) &&
+            FlatPage(), {0u, 0u}, trailingLinkedOutput, {}, trailingDetail);
+        const std::filesystem::path dotLinkedOutput = linkedOutput / ".";
+        std::string dotDetail;
+        const auto dotResult = AC::WriteTerrainPageMesh(
+            FlatPage(), {0u, 0u}, dotLinkedOutput, {}, dotDetail);
+        symlinkCasePassed = IsWriterFailure(result, directDetail) &&
+            IsWriterFailure(trailingResult, trailingDetail) &&
+            IsWriterFailure(dotResult, dotDetail) &&
             PhysicalType(linkedOutput) == std::filesystem::file_type::symlink &&
             SnapshotUnchanged(*sentinelBefore) &&
             IsNoFile(outside / "garner.terrain_00_00.gltf") &&
@@ -1286,6 +1293,48 @@ CORSAIRS_TEST(TerrainPageMeshWriter_RejectsSymlinkOutputDirectoryWithoutEscape) 
     REQUIRE(symlinkCasePassed);
     REQUIRE(missingResult.Ok);
     REQUIRE(existingResult.Ok);
+}
+
+CORSAIRS_TEST(TerrainPageMeshWriter_CleansInjectedPostBinWriteFailure) {
+    ScopedTestDirectory temporary{"post-bin-failure"};
+    REQUIRE(temporary.Ready());
+    const std::filesystem::path outputDirectory = temporary.Path() / "output";
+    const std::filesystem::path expectedGltf =
+        outputDirectory / "garner.terrain_00_00.gltf";
+    const std::filesystem::path expectedBin =
+        outputDirectory / "garner.terrain_00_00.bin";
+
+    AC::TerrainPageMeshOptions options;
+    std::size_t callbackCalls = 0u;
+    bool callbackWroteBin = false;
+    bool callbackSawMesh = false;
+    std::filesystem::path callbackGltfPath;
+    options.TestOnlyWriteGltf =
+        [&](const AC::LgoGeomObj& object,
+            const std::filesystem::path& gltfPath,
+            std::string& callbackDetail) {
+            ++callbackCalls;
+            callbackSawMesh = !object.Mesh.Positions.empty() &&
+                !object.Mesh.Indices.empty();
+            callbackGltfPath = gltfPath;
+            std::filesystem::path binPath = gltfPath;
+            binPath.replace_extension(".bin");
+            callbackWroteBin = WriteTextFile(binPath, "partial-bin-sentinel");
+            callbackDetail = "injected post-bin WriteGltf failure";
+            return AC::GltfStatus::WRITE_FAILED;
+        };
+
+    std::string detail;
+    const auto result = AC::WriteTerrainPageMesh(
+        FlatPage(), {0u, 0u}, outputDirectory, options, detail);
+    REQUIRE_EQ(callbackCalls, 1u);
+    REQUIRE(callbackSawMesh);
+    REQUIRE(callbackWroteBin);
+    REQUIRE(callbackGltfPath == expectedGltf);
+    REQUIRE(IsWriterFailure(result, detail));
+    REQUIRE(detail.contains("injected post-bin WriteGltf failure"));
+    REQUIRE(IsNoFile(expectedGltf));
+    REQUIRE(IsNoFile(expectedBin));
 }
 
 CORSAIRS_TEST(TerrainPageMeshWriter_RejectsMalformedInputsAndCleansPartialPair) {

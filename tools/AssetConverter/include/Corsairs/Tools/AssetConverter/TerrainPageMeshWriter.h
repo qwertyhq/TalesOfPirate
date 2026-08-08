@@ -1,10 +1,12 @@
 #pragma once
 
+#include "Corsairs/Tools/AssetConverter/GltfWriter.h"
 #include "Corsairs/Tools/AssetConverter/TerrainPage.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 
 namespace Corsairs::Tools::AssetConverter {
@@ -23,6 +25,11 @@ struct TerrainPageMeshOptions {
     double MaxAbsCm{5.0};
     double MaxRmsCm{2.0};
     double MaxSharedBoundaryCm{0.0};
+    // Test-only paired writer; empty in production. Its status is advisory:
+    // physical pair validation and cleanup remain authoritative.
+    std::function<GltfStatus(
+        const LgoGeomObj&, const std::filesystem::path&, std::string&)>
+        TestOnlyWriteGltf;
 };
 
 struct TerrainPageMeshResult {

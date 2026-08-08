@@ -928,6 +928,11 @@ struct TerrainPageMeshOptions {
     double MaxAbsCm{5.0};
     double MaxRmsCm{2.0};
     double MaxSharedBoundaryCm{0.0};
+    // Test-only paired writer; empty in production. Its status is advisory:
+    // physical pair validation and cleanup remain authoritative.
+    std::function<GltfStatus(
+        const LgoGeomObj&, const std::filesystem::path&, std::string&)>
+        TestOnlyWriteGltf;
 };
 
 struct TerrainPageMeshResult {
@@ -947,6 +952,16 @@ TerrainPageMeshResult WriteTerrainPageMesh(
     const TerrainPageMeshOptions& options,
     std::string& detail);
 ```
+
+`TerrainPageMeshOptions::TestOnlyWriteGltf` is the only public Task 6 seam
+for deterministic paired-writer failures. Production callers, including Task
+7, must leave it empty. When present, Task 6 calls it exactly once instead of
+the real `WriteGltf`, after both physical output leaves were confirmed missing
+and `writeAttemptStarted` was set. It receives the completed `LgoGeomObj`, the
+final `.gltf` path, and `detail`, and may create a partial physical pair before
+returning a `GltfStatus`. The returned status is advisory: the normal failure
+cleanup and successful-pair validation use physical `symlink_status` state as
+authority.
 
 - [ ] **Step 1: Add the smallest RED tests**
 
@@ -1016,7 +1031,10 @@ Add focused tests for:
    bottom halo sample is accepted as height `-200` cm regardless of stale bytes
    in its `MapTile` slot. A failure after one member of the pair is written
    removes every regular `.gltf`/`.bin` file owned by that attempt; no stale
-   successful pair may remain.
+   successful pair may remain. Exercise that cleanup deterministically through
+   `TestOnlyWriteGltf`: write a regular `.bin`, return `WRITE_FAILED` before a
+   `.gltf` exists, require one callback invocation, an empty failure result,
+   actionable `detail`, and both physical leaves absent afterward.
 
 - [ ] **Step 2: Verify RED**
 
@@ -1119,7 +1137,10 @@ chooses the first candidate satisfying all three inclusive option limits.
 Emit local source positions `(x, -y, heightCm/100)` metres, normals `+Z`, and
 UV `(x/128, y/128)` through the existing `WriteGltf`; its established
 source-to-glTF conversion yields `(x,height,-y)`, normals `+Y`, and the paired
-`.bin`. Do not duplicate a second glTF serializer. The result paths are:
+`.bin`. Do not duplicate a second glTF serializer. An empty
+`TestOnlyWriteGltf` always selects this production path; a nonempty callback is
+test-only and occupies the same single call site after write ownership begins.
+The result paths are:
 
 ```text
 <outputDirectory>/garner.terrain_<pageX:02>_<pageY:02>.gltf

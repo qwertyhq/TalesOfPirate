@@ -665,7 +665,9 @@ TerrainPageMeshResult WriteTerrainPageMesh(
 
     writeAttemptStarted = true;
     const LgoGeomObj object = MakeGltfMesh(*selectedMesh);
-    const GltfStatus status = WriteGltf(object, gltfPath, detail);
+    const GltfStatus status = options.TestOnlyWriteGltf
+        ? options.TestOnlyWriteGltf(object, gltfPath, detail)
+        : WriteGltf(object, gltfPath, detail);
     if (status != GltfStatus::OK) {
         return fail("WriteGltf не записал terrain mesh pair");
     }
