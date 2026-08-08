@@ -134,6 +134,16 @@ class OrchestratorContractTests(unittest.TestCase):
         self.assertEqual(output_args, (expected,))
         self.assertEqual(Path(output_args[0].split("=", 1)[1]).name, "Mac")
 
+    def test_cook_package_finalizes_app_before_archive(self):
+        command = next(
+            item for item in build.production_commands(self.repo.root, TXN, HEAD)
+            if item.name == "cook-package")
+        cook_index = command.argv.index("-cook")
+        self.assertEqual(
+            command.argv[cook_index:cook_index + 5],
+            ("-cook", "-stage", "-pak", "-package", "-archive"))
+        self.assertEqual(command.argv.count("-package"), 1)
+
     def test_clean_checkout_orders_installer_before_game_build_and_cook(self):
         seen = []
 

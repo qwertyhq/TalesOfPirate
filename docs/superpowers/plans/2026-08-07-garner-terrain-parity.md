@@ -3671,7 +3671,7 @@ nice -n 10 "/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/RunUAT.sh" \
   -project="$PWD/CorsairsUE/CorsairsUE.uproject" \
   -noP4 -unattended -utf8output \
   -platform=Mac -clientconfig=Development \
-  -skipbuild -cook -stage -pak -archive \
+  -skipbuild -cook -stage -pak -package -archive \
   -map=/Game/Maps/Garner \
   -AdditionalCookerOptions=-SkipZenStore \
   -CookOutputDir="$PWD/artifacts/maps/package-run/$TXN_ID/cooked/Mac" \
@@ -3693,6 +3693,8 @@ The UAT forwarding argument above is literal: the emitted Cook commandlet argv
 contains exactly one `-SkipZenStore` and no `-ZenStore`. This keeps the
 run-private cook on the filesystem and out of UE's default Zen storage path.
 The literal `Mac` leaf also makes Cook and UAT Stage consume the same directory.
+The `-package` step finalizes that staged data into the self-contained Mac app
+before `-archive` copies the app into the run-private archive directory.
 
 The real orchestrator allocates a unique `package-run/<transaction-id>` rather
 than any shared directory. It treats the target receipt's `Launch` as the

@@ -233,7 +233,7 @@ def production_commands(
         CommandSpec("cook-package", _nice(
             uat, "BuildCookRun", f"-project={project}", "-noP4", "-unattended",
             "-utf8output", "-platform=Mac", "-clientconfig=Development",
-            "-skipbuild", "-cook", "-stage", "-pak", "-archive",
+            "-skipbuild", "-cook", "-stage", "-pak", "-package", "-archive",
             "-map=/Game/Maps/Garner",
             "-AdditionalCookerOptions=-SkipZenStore",
             f"-CookOutputDir={package_root / 'cooked' / 'Mac'}",
