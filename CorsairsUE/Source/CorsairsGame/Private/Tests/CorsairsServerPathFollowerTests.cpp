@@ -72,8 +72,10 @@ bool FCorsairsServerPathFollowerTest::RunTest(const FString&)
 		FMath::IsNearlyEqual(
 			FractionalCornerFollower.GetFacingYaw(),
 			-90.0));
-	FractionalCornerFollower.Advance(0.8);
-	TestEqual(TEXT("fractional corner carry continues on second segment"),
+	// С сохранёнными 0.2 cm следующий advance 0.4 даёт Y=0.6 -> 1;
+	// при потере остатка Y=0.4 -> 0.
+	FractionalCornerFollower.Advance(0.4);
+	TestEqual(TEXT("fractional corner carry changes rounded second-segment position"),
 		FractionalCornerFollower.GetPosition(), FIntPoint(1, 1));
 
 	const FIntPoint Terminal(17, 29);
