@@ -43,6 +43,7 @@ RECOVERY_PARENT = "artifacts/maps/reports/.garner-terrain-task8.recovery"
 EVIDENCE_PARENT = "artifacts/maps/reports/runs"
 PACKAGE_RUN_PARENT = "artifacts/maps/package-run"
 ARCHIVE_EXECUTABLE_TOKEN = "__TASK8_ARCHIVE_EXECUTABLE_FROM_RECEIPT__"
+RUNTIME_AUTOMATION_DIRECTORY = "reference-terrain-runtime"
 RUNTIME_TARGETS = (
     "CorsairsUE/Data/Heights/garner.block.raw",
     "CorsairsUE/Data/Heights/garner.terrain.json",
@@ -130,6 +131,14 @@ class CommandResult:
     returncode: int
     stdout: str = ""
     stderr: str = ""
+
+
+@dataclass(frozen=True)
+class OwnedDirectory:
+    path: Path
+    device: int
+    inode: int
+    owner_uid: int
 
 
 def lock_path(repo_root: Path | str) -> Path:
@@ -256,6 +265,7 @@ def resolve_runtime_command(
     command: CommandSpec,
     repo_root: Path | str,
     executable: dict[str, Any],
+    runtime_report_directory: OwnedDirectory,
 ) -> CommandSpec:
     """Bind runtime-smoke to the unique archive-inventory launch product."""
     if command.name != "runtime-smoke":
@@ -276,6 +286,11 @@ def resolve_runtime_command(
     argv = tuple(
         str(physical) if item == ARCHIVE_EXECUTABLE_TOKEN else item
         for item in command.argv)
+    report_root = _validate_runtime_report_directory(
+        runtime_report_directory, root, require_empty=True)
+    report_argument = f"-ReportExportPath={report_root}"
+    if argv.count(report_argument) != 1:
+        raise Task8Error("runtime command report directory differs")
     return CommandSpec(command.name, argv, command.env, command.timeout_seconds)
 
 
@@ -473,6 +488,93 @@ def _mkdir_exclusive(path: Path, mode: int = 0o700) -> None:
     if stat.S_IMODE(path.stat().st_mode) != mode:
         path.chmod(mode)
     _sync_directory(path.parent)
+
+
+def _runtime_report_path(repo_root: Path | str, transaction_id: str) -> Path:
+    root = Path(repo_root).resolve()
+    if not _TXN.fullmatch(transaction_id):
+        raise Task8Error("invalid runtime report transaction identity")
+    relative = (
+        f"{EVIDENCE_PARENT}/{transaction_id}/{RUNTIME_AUTOMATION_DIRECTORY}")
+    path = _contained(root, relative)
+    expected_parent = evidence_root(root, transaction_id)
+    if path != expected_parent / RUNTIME_AUTOMATION_DIRECTORY:
+        raise Task8Error("runtime report path is not canonical")
+    parent_info = _physical_directory(expected_parent)
+    if (parent_info.st_uid != os.geteuid() or
+            stat.S_IMODE(parent_info.st_mode) != 0o700):
+        raise Task8Error("transaction evidence root ownership/mode differs")
+    return path
+
+
+def _validate_runtime_report_directory(
+    owned: OwnedDirectory,
+    repo_root: Path | str,
+    *,
+    require_empty: bool,
+) -> Path:
+    if (type(owned) is not OwnedDirectory or not isinstance(owned.path, Path) or
+            type(owned.device) is not int or owned.device < 0 or
+            type(owned.inode) is not int or owned.inode <= 0 or
+            type(owned.owner_uid) is not int or owned.owner_uid < 0 or
+            type(require_empty) is not bool):
+        raise Task8Error("runtime report directory identity is malformed")
+    path = _runtime_report_path(repo_root, owned.path.parent.name)
+    if owned.path != path:
+        raise Task8Error("runtime report directory path differs")
+    flags = (os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) |
+             getattr(os, "O_NOFOLLOW", 0))
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise Task8Error(f"runtime report directory is not physical: {path}") from exc
+    try:
+        info = os.fstat(descriptor)
+        try:
+            path_info = path.lstat()
+        except OSError as exc:
+            raise Task8Error("runtime report directory path disappeared") from exc
+        identity = (info.st_dev, info.st_ino, info.st_uid)
+        expected_identity = (owned.device, owned.inode, owned.owner_uid)
+        if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(path_info.st_mode) or
+                identity != expected_identity or
+                (path_info.st_dev, path_info.st_ino, path_info.st_uid) != identity or
+                owned.owner_uid != os.geteuid() or
+                stat.S_IMODE(info.st_mode) != 0o700):
+            raise Task8Error("runtime report directory ownership/mode differs")
+        if require_empty and os.listdir(descriptor):
+            raise Task8Error("runtime report directory is not empty before launch")
+        try:
+            final_info = path.lstat()
+        except OSError as exc:
+            raise Task8Error("runtime report directory path disappeared") from exc
+        if (stat.S_ISLNK(final_info.st_mode) or
+                (final_info.st_dev, final_info.st_ino, final_info.st_uid) != identity):
+            raise Task8Error("runtime report directory identity changed")
+    finally:
+        os.close(descriptor)
+    return path
+
+
+def prepare_runtime_report_directory(
+    transaction: "OuterTransaction",
+) -> OwnedDirectory:
+    transaction._validate_journal()
+    transaction_id = transaction.journal["transactionId"]
+    path = _runtime_report_path(transaction.repo_root, transaction_id)
+    if path.exists() or path.is_symlink():
+        raise Task8Error(f"runtime report path already exists: {path}")
+    _mkdir_exclusive(path, 0o700)
+    info = _physical_directory(path)
+    owned = OwnedDirectory(
+        path=path,
+        device=info.st_dev,
+        inode=info.st_ino,
+        owner_uid=info.st_uid,
+    )
+    _validate_runtime_report_directory(
+        owned, transaction.repo_root, require_empty=True)
+    return owned
 
 
 class OuterTransaction:
@@ -1284,20 +1386,59 @@ def _evidence(path: Path, repo_root: Path, *, allow_empty: bool = False) -> dict
     }
 
 
+def _evidence_tree_files(root: Path) -> list[Path]:
+    def fail(error: OSError) -> None:
+        raise Task8Error(
+            f"automation evidence tree is unreadable: {error.filename}") from error
+
+    paths = []
+    try:
+        for directory, subdirs, names in os.walk(
+                root, topdown=True, onerror=fail, followlinks=False):
+            current = Path(directory)
+            _physical_directory(current)
+            subdirs.sort()
+            names.sort()
+            for name in subdirs:
+                _physical_directory(current / name)
+            for name in names:
+                path = current / name
+                _physical_regular(path, allow_empty=True)
+                paths.append(path)
+    except Task8Error:
+        raise
+    except OSError as exc:
+        raise Task8Error(
+            f"automation evidence tree changed while scanning: {root}") from exc
+    if len(paths) != len(set(paths)):
+        raise Task8Error("automation evidence file paths are not sorted unique")
+    return sorted(paths)
+
+
 def _evidence_set(
     root: Path, repo_root: Path, transaction_id: str, source_head: str,
+    *, expected_directory: OwnedDirectory | None = None,
 ) -> dict[str, Any]:
-    _physical_directory(root)
-    files = []
-    for directory, subdirs, names in os.walk(root, followlinks=False):
-        current = Path(directory)
-        for name in subdirs:
-            _physical_directory(current / name)
-        for name in names:
-            files.append(_evidence(current / name, repo_root, allow_empty=True))
-    files.sort(key=lambda item: item["path"])
+    if expected_directory is None:
+        _physical_directory(root)
+    else:
+        expected = _validate_runtime_report_directory(
+            expected_directory, repo_root, require_empty=False)
+        if root != expected:
+            raise Task8Error("automation evidence root differs from owned directory")
+        try:
+            _physical_regular(root / "index.json")
+        except OSError as exc:
+            raise Task8Error("runtime automation index.json is missing") from exc
+    paths = _evidence_tree_files(root)
+    files = [_evidence(path, repo_root, allow_empty=True) for path in paths]
     if not files:
         raise Task8Error(f"automation evidence is empty: {root}")
+    if _evidence_tree_files(root) != paths:
+        raise Task8Error("automation evidence tree changed during hashing")
+    if expected_directory is not None:
+        _validate_runtime_report_directory(
+            expected_directory, repo_root, require_empty=False)
     return {
         "transactionId": transaction_id,
         "sourceHead": source_head,
@@ -1844,6 +1985,8 @@ def _production_after_step(
     elif command.name == "cook-package":
         context["preparedPackage"] = prepare_package_evidence(
             transaction, source_head, context["gameBuild"])
+        context["runtimeReportDirectory"] = (
+            prepare_runtime_report_directory(transaction))
     elif command.name == "runtime-smoke":
         observation = parse_runtime_observation_event(
             result.stdout + "\n" + result.stderr, transaction_id, source_head)
@@ -1856,7 +1999,8 @@ def _production_after_step(
         context["runtimeObservationEvidence"] = _evidence(observation_path, root)
         context["runtimeAutomation"] = _evidence_set(
             reports / "reference-terrain-runtime",
-            root, transaction_id, source_head)
+            root, transaction_id, source_head,
+            expected_directory=context["runtimeReportDirectory"])
         context["package"] = finalize_package_evidence(
             context["preparedPackage"], observation)
         _set_phase(transaction, "PACKAGE_VERIFIED", "runtime-smoke")
@@ -1947,7 +2091,8 @@ def run_task8(
                 transaction, context, source_head, command, result),
             resolve_command=lambda command: resolve_runtime_command(
                 command, root,
-                context["preparedPackage"]["package"]["packagedExecutable"])
+                context["preparedPackage"]["package"]["packagedExecutable"],
+                context["runtimeReportDirectory"])
             if command.name == "runtime-smoke" else command)
         bundle = build_base_bundle(transaction, context, source_head)
         transaction.publish_bundle(

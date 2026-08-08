@@ -6,6 +6,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts import build_garner_reference_terrain as build
 
@@ -91,6 +92,9 @@ class OrchestratorContractTests(unittest.TestCase):
         self.assertEqual(commands[1].argv, commands[2].argv)
 
     def test_runtime_command_uses_receipt_inventory_executable(self):
+        transaction = build.OuterTransaction.begin(self.repo.root, TXN, HEAD)
+        self.addCleanup(transaction.close)
+        owned = build.prepare_runtime_report_directory(transaction)
         command = build.production_commands(self.repo.root, TXN, HEAD)[-1]
         self.assertIn(build.ARCHIVE_EXECUTABLE_TOKEN, command.argv)
         executable = {
@@ -101,11 +105,188 @@ class OrchestratorContractTests(unittest.TestCase):
             "sizeBytes": 1,
         }
         resolved = build.resolve_runtime_command(
-            command, self.repo.root, executable)
+            command, self.repo.root, executable, owned)
         self.assertNotIn(build.ARCHIVE_EXECUTABLE_TOKEN, resolved.argv)
         self.assertEqual(
             resolved.argv[3],
             str(self.repo.root / executable["path"]))
+
+    def test_runtime_report_directory_is_exact_owned_empty_and_hashed(self):
+        transaction = build.OuterTransaction.begin(self.repo.root, TXN, HEAD)
+        self.addCleanup(transaction.close)
+        owned = build.prepare_runtime_report_directory(transaction)
+        expected = (
+            build.evidence_root(self.repo.root, TXN) /
+            "reference-terrain-runtime")
+        self.assertEqual(owned.path, expected)
+        self.assertEqual(owned.device, expected.lstat().st_dev)
+        self.assertEqual(owned.inode, expected.lstat().st_ino)
+        self.assertEqual(owned.owner_uid, os.geteuid())
+        self.assertEqual(stat.S_IMODE(expected.lstat().st_mode), 0o700)
+        self.assertEqual(tuple(expected.iterdir()), ())
+
+        command = build.production_commands(self.repo.root, TXN, HEAD)[-1]
+        executable = {
+            "path": (
+                f"artifacts/maps/package-run/{TXN}/archive/Mac/Actual.app/"
+                "Contents/MacOS/ActualLaunch"),
+            "sha256": "c" * 64,
+            "sizeBytes": 1,
+        }
+        resolved = build.resolve_runtime_command(
+            command, self.repo.root, executable, owned)
+        self.assertEqual(
+            tuple(item for item in resolved.argv
+                  if item.startswith("-ReportExportPath=")),
+            (f"-ReportExportPath={expected}",),
+        )
+
+        index = expected / "index.json"
+        index.write_bytes(b'{"succeeded":1}\n')
+        evidence = build._evidence_set(
+            expected, self.repo.root, TXN, HEAD,
+            expected_directory=owned)
+        self.assertEqual(evidence["files"], [{
+            "path": index.relative_to(self.repo.root).as_posix(),
+            "sha256": hashlib.sha256(index.read_bytes()).hexdigest(),
+            "sizeBytes": index.stat().st_size,
+        }])
+
+        transaction.rollback()
+        transaction.finish()
+        self.assertEqual(index.read_bytes(), b'{"succeeded":1}\n')
+        self.assertFalse(build.recovery_root(self.repo.root, TXN).exists())
+
+    def test_runtime_report_directory_rejects_foreign_or_changed_leaf(self):
+        transaction = build.OuterTransaction.begin(self.repo.root, TXN, HEAD)
+        self.addCleanup(transaction.close)
+        path = (
+            build.evidence_root(self.repo.root, TXN) /
+            "reference-terrain-runtime")
+        symlink_target = build.evidence_root(self.repo.root, TXN) / "foreign"
+        symlink_target.mkdir()
+
+        cases = ("empty-directory", "nonempty-directory", "regular", "symlink")
+        for case in cases:
+            with self.subTest(case=case):
+                if case == "empty-directory":
+                    path.mkdir()
+                elif case == "nonempty-directory":
+                    path.mkdir()
+                    (path / "foreign.txt").write_bytes(b"foreign")
+                elif case == "regular":
+                    path.write_bytes(b"foreign")
+                else:
+                    path.symlink_to(symlink_target, target_is_directory=True)
+                try:
+                    with self.assertRaises(build.Task8Error):
+                        build.prepare_runtime_report_directory(transaction)
+                finally:
+                    if case == "nonempty-directory":
+                        self.assertEqual(
+                            (path / "foreign.txt").read_bytes(), b"foreign")
+                        (path / "foreign.txt").unlink()
+                        path.rmdir()
+                    elif case == "empty-directory":
+                        self.assertTrue(path.is_dir())
+                        path.rmdir()
+                    elif case == "regular":
+                        self.assertEqual(path.read_bytes(), b"foreign")
+                        path.unlink()
+                    else:
+                        self.assertTrue(path.is_symlink())
+                        path.unlink()
+
+        owned = build.prepare_runtime_report_directory(transaction)
+        command = build.production_commands(self.repo.root, TXN, HEAD)[-1]
+        executable = {
+            "path": (
+                f"artifacts/maps/package-run/{TXN}/archive/Mac/Actual.app/"
+                "Contents/MacOS/ActualLaunch"),
+            "sha256": "c" * 64,
+            "sizeBytes": 1,
+        }
+        (path / "unexpected").write_bytes(b"not-empty")
+        with self.assertRaises(build.Task8Error):
+            build.resolve_runtime_command(
+                command, self.repo.root, executable, owned)
+        (path / "unexpected").unlink()
+
+        path.chmod(0o755)
+        with self.assertRaises(build.Task8Error):
+            build.resolve_runtime_command(
+                command, self.repo.root, executable, owned)
+        path.chmod(0o700)
+
+        (path / "not-index.json").write_bytes(b"wrong report leaf")
+        with self.assertRaises(build.Task8Error):
+            build._evidence_set(
+                path, self.repo.root, TXN, HEAD,
+                expected_directory=owned)
+        (path / "not-index.json").unlink()
+
+        retired = path.with_name(path.name + ".retired-for-test")
+        path.rename(retired)
+        path.mkdir(mode=0o700)
+        with self.assertRaises(build.Task8Error):
+            build.resolve_runtime_command(
+                command, self.repo.root, executable, owned)
+
+    def test_cook_evidence_prepares_runtime_report_directory_before_runtime(self):
+        transaction = build.OuterTransaction.begin(self.repo.root, TXN, HEAD)
+        self.addCleanup(transaction.close)
+        context = {"gameBuild": {"target": "game"}}
+        order = []
+        owned = object()
+
+        def prepare_package(*_args):
+            order.append("package-evidence")
+            return {"package": "prepared"}
+
+        def prepare_report(*_args):
+            order.append("runtime-report-directory")
+            return owned
+
+        with mock.patch.object(
+                build, "prepare_package_evidence", side_effect=prepare_package), \
+                mock.patch.object(
+                    build, "prepare_runtime_report_directory",
+                    side_effect=prepare_report):
+            build._production_after_step(
+                transaction, context, HEAD,
+                build.CommandSpec("cook-package", ("unused",)),
+                build.CommandResult(0))
+
+        self.assertEqual(order, ["package-evidence", "runtime-report-directory"])
+        self.assertIs(context["runtimeReportDirectory"], owned)
+
+    def test_runtime_evidence_rejects_unreadable_nested_directory(self):
+        transaction = build.OuterTransaction.begin(self.repo.root, TXN, HEAD)
+        self.addCleanup(transaction.close)
+        owned = build.prepare_runtime_report_directory(transaction)
+        (owned.path / "index.json").write_bytes(b'{"succeeded":1}\n')
+        hidden = owned.path / "hidden"
+        hidden.mkdir(mode=0o700)
+        (hidden / "hidden.json").write_bytes(b'{"hidden":true}\n')
+        hidden.chmod(0)
+        try:
+            with self.assertRaises(build.Task8Error):
+                build._evidence_set(
+                    owned.path, self.repo.root, TXN, HEAD,
+                    expected_directory=owned)
+        finally:
+            hidden.chmod(0o700)
+        evidence = build._evidence_set(
+            owned.path, self.repo.root, TXN, HEAD,
+            expected_directory=owned)
+        self.assertEqual(
+            [item["path"] for item in evidence["files"]],
+            sorted((
+                (hidden / "hidden.json").relative_to(self.repo.root).as_posix(),
+                (owned.path / "index.json").relative_to(
+                    self.repo.root).as_posix(),
+            )),
+        )
 
     def test_cook_package_forwards_supported_skip_zen_switch(self):
         command = next(
