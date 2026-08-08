@@ -3005,6 +3005,37 @@ ActiveProcess := null or {
   "argvSha256": SHA-256 of NUL-delimited exact argv bytes
 }
 
+PhysicalDirIdentity := [device, inode, owner UID, permission mode], all exact
+  nonnegative integers with positive inode
+
+SandboxScratch := null or {
+  "state": one of "PLANNED", "RESERVED", "PREPARED", "COPIED",
+    "CLEANING", "CLEANED",
+  "bundleIdentifier": the exact `CFBundleIdentifier` derived from the archived
+    signed app and accepted by the rules below,
+  "containerRoot": normalized absolute physical path to the matching
+    current-user application container,
+  "containerRootIdentity": PhysicalDirIdentity,
+  "containerDataRoot": normalized absolute physical path to the matching
+    current-user application-container `Data` directory,
+  "containerDataIdentity": PhysicalDirIdentity,
+  "scratchParent": the exact physical automation reports root returned by the
+    signed packaged probe,
+  "scratchParentIdentity": PhysicalDirIdentity,
+  "reservationPath": exact
+    `<scratchParent>/.CorsairsTerrainTask8-<same-transaction-id>.reservation`,
+  "reservationIdentity": Physical regular-file identity
+    `[device,inode,owner UID,permission mode,size]` in `RESERVED` and later, or
+    [] in `PLANNED`,
+  "reservationSha256": expected 64-lowercase-hex typed-reservation hash,
+  "transactionRoot": exact
+    `<scratchParent>/CorsairsTerrainTask8-<same-transaction-id>`,
+  "reportRoot": exact `<transactionRoot>/reference-terrain-runtime`,
+  "transactionIdentity": PhysicalDirIdentity after its creation, or [] before,
+  "reportIdentity": PhysicalDirIdentity in `PREPARED` and later, or [] before,
+  "markerSha256": expected 64-lowercase-hex owner-marker hash in every state
+}
+
 {
   "schemaVersion": 1,
   "transactionId": 32 lowercase hex,
@@ -3015,7 +3046,7 @@ ActiveProcess := null or {
   "completedStep": one of "snapshot", "terrain-reference", "installer-1",
     "installer-2", "editor-build", "level-build", "import-1", "import-2",
     "checker", "editor-automation", "game-build", "cook-package",
-    "runtime-smoke", "base-validated", "base-published",
+    "runtime-report-probe", "runtime-smoke", "base-validated", "base-published",
   "evidenceRoot":
     "artifacts/maps/reports/runs/<same-transaction-id>",
   "packageRunRoot":
@@ -3031,6 +3062,7 @@ ActiveProcess := null or {
     "map": sorted exact pre-run suffix paths
   },
   "activeProcess": ActiveProcess,
+  "sandboxScratch": SandboxScratch,
   "intendedBundleSha256": 64 lowercase hex or "",
   "issues": []
 }
@@ -3159,7 +3191,7 @@ Task 7 manifest+installer -> Editor build
        -> builder -> import pass 1 -> import pass 2 -> read-only checker
        -> Editor automation -> Game build
        -> clean cook/package (reuse the just-built receipt)
-       -> packaged NullRHI runtime smoke
+       -> packaged sandbox-path probe -> packaged NullRHI runtime smoke
 ```
 
 If any command, report, hash, save, automation, cook, or runtime gate fails,
@@ -3177,14 +3209,151 @@ command; `TASK7_PUBLISHED` follows independent top-manifest rehash;
 installer 2 result `NOOP`, and runtime-pair
 rehash; `UNREAL_RUNNING` covers each Editor/build/cook/runtime child with the
 exact completed step; `EDITOR_VERIFIED` follows checker+Editor automation;
-`PACKAGE_VERIFIED` follows Game build, package audit, and packaged runtime
-smoke; `BUNDLE_PREPARED` records the validated temp hash before replace;
+`PACKAGE_VERIFIED` follows Game build, package audit, packaged sandbox probe,
+durable report copy/cleanup, and packaged runtime smoke; `BUNDLE_PREPARED`
+records the validated temp hash before replace;
 `BUNDLE_REPLACED` follows bundle replace plus reports-directory fsync; and
 `COMMITTED` is written only after reopening and validating the published bundle
 and every transitive input and after repeating the exact clean-checkout HEAD/
 status gate. `ROLLED_BACK` is recovery-only and is written only
 after the complete prior snapshot and family listings have been restored and
 revalidated; production never transitions to it.
+
+### Sandboxed packaged-runtime report handoff
+
+The archived Mac application remains signed with the sandbox enabled; Task 8
+must not re-sign it, remove or weaken an entitlement, or launch a different
+binary. Before runtime launch, the orchestrator maps the receipt-selected
+archive executable to its one enclosing `.app`, verifies that app with
+`/usr/bin/codesign --verify --deep --strict`, strictly parses exactly one plist
+from `/usr/bin/codesign -d --entitlements :-`, and requires the boolean
+`com.apple.security.app-sandbox=true`, and obtains exactly one signing
+`Identifier` from `/usr/bin/codesign -d --verbose=4`. It strictly parses that same app's
+physical `Contents/Info.plist` and obtains one nonempty `CFBundleIdentifier`;
+the identifier may contain only ASCII letters, digits, `.`, and `-`, may not
+begin or end with `.`, and has no empty component. A hard-coded bundle
+identifier, an environment-provided container path, an unsigned archive app,
+or a second app candidate is failure.
+
+The container path is derived rather than guessed. Before creating any scratch,
+the same inventory-bound executable is run once as the owned
+`runtime-report-probe` step with `-CorsairsTerrainSandboxProbe`, the same
+transaction/source arguments, and no `-ReportExportPath`. The existing
+`Corsairs.Terrain.ReferenceRuntime` test takes that mode before loading gameplay
+assets and emits exactly one canonical
+`CORSAIRS_TERRAIN_SANDBOX_JSON=` event. Its strict DTO contains only schema
+version 1, report type `garner-terrain-packaged-sandbox`, status `PASS`, the
+same transaction/source identities, the nonempty bundle ID from
+`FPlatformProcess::GetGameBundleId()`, the normalized absolute no-trailing-slash
+container `Data` root from `FPlatformProcess::UserHomeDir()`, the normalized
+absolute no-trailing-slash reports root from `FPaths::AutomationReportsDir()`,
+and empty `issues`. Zero, duplicate, noncanonical, or mismatched events fail.
+
+The host requires the probed bundle ID to equal both the archived
+`CFBundleIdentifier` and the signing `Identifier`, requires the reported
+container root to be a physical directory whose leaf is exactly `Data`, and
+requires the reported automation root to be a strict descendant of that root.
+It walks only those exact
+named components and requires each to be a no-follow physical directory owned
+by the effective UID and not group/world writable. It also strictly parses the
+physical non-hard-linked regular
+`<container-parent>/.com.apple.containermanagerd.metadata.plist`; both
+`MCMMetadataIdentifier` and `MCMMetadataCreator` must equal the same signed
+bundle ID. These OS-reported roots and the archived metadata/signature are the
+sole derivation inputs: Task 8 does not interpolate `$HOME`, hard-code a user or
+bundle ID, enumerate sibling containers, create a missing application
+container/reports root, follow a symlink, or fall back to the repository path.
+The exact container, `Data`, automation-root device/inode/owner/mode identities
+are reopened and compared before every scratch mutation.
+
+`SandboxProbeEvent` is a strict in-memory control DTO, not a base-bundle input.
+Its absolute values may persist only in the existing 0600 transaction-private
+`commands/runtime-report-probe.{stdout,stderr}.log`,
+`commands/runtime-smoke.{stdout,stderr}.log`, and the active outer journal
+needed for exact recovery; those ignored local artifacts are never copied into a
+report DTO, package wrapper, attestation, or base bundle. Every durable linked
+report uses only the sanitized relative/leaf fields below. Validators and
+mutation tests treat the raw probe parser separately from nested bundle
+validation and reject any linked `SandboxProbeEvent` or absolute container/home
+path.
+
+A canonical run-private `package/app-sandbox.json` records the signed app path,
+bundle identifier, `Info.plist` `FileEvidence`, the canonical strict entitlement
+plist `FileEvidence`, `codesignVerified=true`, `appSandbox=true`, and the container metadata
+identifier and creator observed before launch. It never copies or embeds the
+private container-manager metadata plist or any unfiltered user-container
+bytes. The cook report
+and package evidence contain the same `FileEvidence` for this strict
+attestation, and the base bundle reaches it through both nested validators. The
+attestation never publishes the absolute user-container path or user home.
+
+While the Task 8 lock is held, the orchestrator first durably journals a
+`PLANNED` `SandboxScratch` with all three trusted parent identities, empty child
+identities, and the deterministically expected typed-reservation/owner-marker
+hashes. It then exclusively creates its exact 0600 sibling reservation file,
+writes canonical JSON plus newline with exactly `schemaVersion=1`,
+`owner="garner-terrain-task8-reservation"`, the same transaction/source/bundle
+identities, and the exact transaction/report paths, flushes,
+fsyncs, reopens/re-hashes it, synchronizes the automation root, and durably
+journals `RESERVED` with its regular-file identity. Only then may it exclusively
+create the exact `CorsairsTerrainTask8-<transaction-id>` root below the probed
+automation reports root as a 0700 current-UID physical directory on the
+parent's device; it rewrites `RESERVED` durably with that directory identity
+before creating any child. Any pre-existing leaf
+of any type, symlink, foreign owner, non-0700 child, identity change,
+cross-device child, or nonempty report child fails closed and is never removed.
+The transaction root contains one 0600 physical non-hard-linked `owner.json`.
+Its bytes are the canonical JSON serialization plus newline of exactly
+`schemaVersion=1`, `owner="garner-terrain-task8"`, the same transaction ID,
+and the signed app's same bundle identifier. It is written exclusively,
+flushed, fsynced, and reopened/rehashed. The exact
+`reference-terrain-runtime` child is then exclusively created as a 0700
+current-UID physical directory, and the transaction root is fsynced before the
+journal may enter `PREPARED` with its exact identity. The packaged runtime
+receives only the resulting absolute `reportRoot` as `-ReportExportPath`.
+
+After the owned runtime process exits successfully and the one canonical
+runtime JSON event validates, the host requires a nonempty physical
+`reportRoot/index.json`, performs a strict no-follow full-tree scan with hard
+links, unreadable entries, sockets/devices, escapes, duplicate normalized
+paths, owner changes, and directory/file mutation rejected, and hashes every
+file. It then exclusively creates the canonical run-private
+`reports/runs/<transaction-id>/reference-terrain-runtime` as 0700 and recreates
+each source directory/file without following links. Each destination file is
+exclusive, receives the exact source permission bits, is flushed/fsynced and
+reopened; destination directories are fsynced bottom-up. A second source scan
+and a complete destination scan must have identical sorted relative paths,
+bytes, sizes, modes, and SHA-256 values. Only then may the durable journal enter
+`COPIED`, and only this verified canonical copy becomes the `EvidenceSet` and
+base-bundle input.
+
+Scratch cleanup is identity-bound and exact. In `PLANNED`, an absent root is a
+no-op and the only tolerated crash residue is the absent or exact expected
+typed reservation; no transaction root is accepted before that reservation
+verifies. In `RESERVED`, the exact durable reservation must match, and a root
+whose identity was not yet persisted may be absent or may be the exact empty
+0700 current-UID directory on the recorded parent device. A root with a
+persisted identity must exist with that identity. The recorded root may contain
+only the absent or exact durable marker and the absent or exact empty 0700
+report child; recovery removes only those deterministic partial states. In
+`PREPARED` or `COPIED`, recovery requires all exact trusted/root/report identities
+and the exact durable owner marker, scans every descendant no-follow, and
+removes only that one journaled transaction tree bottom-up. Before the first
+remove it durably enters `CLEANING`. It then synchronizes the probed automation
+reports root, removes the verified reservation last, synchronizes the parent
+again, verifies both exact paths absent, and durably enters
+`CLEANED`; `CLEANING` accepts either the exact remaining owned suffix or an
+already absent root, and `CLEANED` accepts only absence. Finally it durably
+resets `sandboxScratch` to null. Thus crashes after reservation/root/marker
+creation, after report
+creation, during removal, after root removal, or after parent sync all replay
+without guessing. A marker mismatch, unexpected descendant type, identity
+mismatch, missing root outside `PLANNED`, pre-root `RESERVED`, `CLEANING`, or
+`CLEANED`, or inability to synchronize
+cleanup is `RECOVERY_REQUIRED` and preserves outer journal/repository evidence.
+Startup recovery performs this cleanup after any recorded child is proven gone
+and before inner-owner or snapshot rollback; ordinary failure does the same.
+Neither rollback nor success completes while a non-null scratch record remains.
 
 Startup recovery under the lock is deterministic:
 
@@ -3207,7 +3376,8 @@ Startup recovery under the lock is deterministic:
   proceeds without signaling the absent/reused process; an unreadable or only
   partially matching identity is never killed and is `RECOVERY_REQUIRED`;
 - after the recorded child is gone, any nonterminal outer phase resolves the
-  exact Task 7 publisher and installer control paths in that order before
+  exact sandbox scratch state by the protocol above, then resolves the exact
+  Task 7 publisher and installer control paths in that order before
   restoring a top manifest or runtime target. Inner recovery is never skipped
   merely because the outer phase has advanced past `TASK7_PUBLISHED` or
   `RUNTIME_INSTALLED`; a failed inner recovery retains the outer journal and
@@ -3231,8 +3401,16 @@ lock-marker readback; after every snapshot file
 fsync; after recovery-directory fsync; after `SNAPSHOT`; after Task 7; after
 installer 1 and installer 2; before and after each nested-owner control-path
 scan, preflight, retry launch, retry wait, control-path absence check, and
-post-retry target validation; after each Editor/build/automation/cook/runtime
-step; after each package-family save/listing; after bundle-temp fsync/readback;
+post-retry target validation; after `runtime-report-probe`, sandbox-plan
+durability, reservation create/fsync/readback/parent-sync, first `RESERVED`,
+transaction-root creation, identity-bearing `RESERVED`, owner-marker
+fsync/readback, report-root creation, and `PREPARED`
+durability; after each runtime-report destination file fsync, after all copy
+directory barriers and source/destination revalidation, and after `COPIED`;
+before and after `CLEANING`, each scratch descendant removal, transaction-root
+removal, reservation removal, each automation-root synchronization, `CLEANED`, and the null scratch
+record becoming durable; after each Editor/build/automation/cook/runtime step; after each
+package-family save/listing; after bundle-temp fsync/readback;
 immediately before and after bundle `os.replace`; after reports-parent fsync;
 after `BUNDLE_REPLACED`; after published-bundle validation; after `COMMITTED`;
 after `ROLLED_BACK`; and during each restore or cleanup replace/remove/fsync. A crash action performs no
@@ -3244,6 +3422,12 @@ rollback or returns `RECOVERY_REQUIRED` without touching an owner-controlled
 target. It also covers a crash after an inner retry succeeds but before
 `ActiveProcess` is cleared; the next run observes the child gone and the four
 control paths absent, then completes the same outer rollback.
+The crash matrix also covers absent, `PLANNED`, pre/post-marker `RESERVED`,
+`PREPARED`, `COPIED`, `CLEANING`, post-remove/pre-parent-sync, and
+`CLEANED`/pre-null scratch states. A
+fresh invocation either removes only the exact owned scratch and completes the
+same outer rollback or returns `RECOVERY_REQUIRED`; foreign or pre-existing
+container paths and marker/identity changes remain byte-for-byte untouched.
 
 Only after the complete owned chain passes does it atomically publish
 `artifacts/maps/reports/garner-terrain-base.json`. That bundle contains
@@ -3261,6 +3445,7 @@ Editor automation report
 all files and five digests of the five final package families
 run-private Mac Editor and Game receipts and project build products
 cook/package report and packaged executable
+signed-app sandbox attestation
 packaged runtime automation and strict observation report
 ```
 
@@ -3303,6 +3488,42 @@ PackagedRuntimeFile := {
   "runtimeReportedSizeBytes": the same positive integer
 }
 
+SandboxProbeEvent := {
+  "schemaVersion": 1,
+  "reportType": "garner-terrain-packaged-sandbox",
+  "status": "PASS",
+  "transactionId": 32 lowercase hex,
+  "sourceHead": 40 lowercase hex,
+  "bundleIdentifier": nonempty validated signed bundle identifier,
+  "containerDataRoot": normalized absolute no-trailing-slash physical path,
+  "automationReportsRoot": normalized absolute no-trailing-slash physical path
+    strictly below `containerDataRoot`,
+  "issues": []
+}
+
+SandboxAttestation := {
+  "schemaVersion": 1,
+  "reportType": "garner-terrain-app-sandbox",
+  "status": "PASS",
+  "transactionId": 32 lowercase hex,
+  "sourceHead": 40 lowercase hex,
+  "appBundlePath": normalized repository-relative physical `.app` directory
+    enclosing the receipt-selected packaged executable,
+  "bundleIdentifier": the exact validated `CFBundleIdentifier`,
+  "signingIdentifier": the same bundle identifier,
+  "infoPlist": FileEvidence for that app's `Contents/Info.plist`,
+  "entitlementsPlist": run-private FileEvidence for the canonical strict plist
+    parsed from the archived app's signing information,
+  "codesignVerified": true,
+  "appSandbox": true,
+  "containerDataLeaf": "Data",
+  "automationReportsRelativePath": nonempty normalized relative path from the
+    probed container `Data` root,
+  "containerMetadataIdentifier": the same bundle identifier,
+  "containerMetadataCreator": the same bundle identifier,
+  "issues": []
+}
+
 PackageEvidence := {
   "transactionId": 32 lowercase hex,
   "sourceHead": 40 lowercase hex,
@@ -3314,6 +3535,7 @@ PackageEvidence := {
   "containers": sorted nonempty list[FileEvidence],
   "containerLists": sorted nonempty list[FileEvidence],
   "packagedExecutable": FileEvidence below this transaction archive root,
+  "sandboxAttestation": run-private FileEvidence for SandboxAttestation,
   "runtimeFiles": exactly three PackagedRuntimeFile records in the literal
     project-relative order above
 }
@@ -3369,6 +3591,7 @@ CookPackageReport := {
   "containerLists": sorted nonempty list[FileEvidence], each naming a
     ContainerListReport,
   "packagedExecutable": FileEvidence below this transaction archive root,
+  "sandboxAttestation": the same run-private FileEvidence as PackageEvidence,
   "runtimeFiles": exactly three CookRuntimeFile records in literal UFS order,
   "corsairsImportLeaks": [],
   "issues": []
@@ -3440,7 +3663,16 @@ three named paths with the matching engine `UnrealPak` into the run-private
 evidence root, and hashes those copies. The packaged runtime test independently
 reads the same three virtual paths and must report the same hashes.
 The orchestrator strictly parses each synthesized inventory/container-list/
-cook report before linking it. The packaged C++ test emits exactly one
+cook report and `SandboxAttestation` before linking it. Package inventory,
+container listing/extraction, and executable binding precede the probe, but no
+PASS `CookPackageReport` or `PackageEvidence` is written until the probe has
+produced and self-validated the sandbox attestation. Its validator reopens
+the archived `Info.plist` and run-private canonical entitlement plist, requires
+the `Info.plist` bundle identifier,
+the entitlement `com.apple.security.app-sandbox=true`, the two container
+metadata identifiers, and the enclosing archive app/executable relation to
+agree exactly; it also rehashes the run-private entitlement plist and archived
+`Info.plist`. The packaged C++ test emits exactly one
 canonical `CORSAIRS_TERRAIN_RUNTIME_JSON=` automation event containing the
 literal `RuntimeObservation` object; the orchestrator rejects zero, duplicate,
 noncanonical, truncated, or mismatched events and atomically writes the parsed
@@ -3453,7 +3685,8 @@ recomputes every package-family digest, requires exact transaction-root
 containment, requires all manifest/report identities to agree, and requires the
 checker's complete physical family evidence to equal import pass 2 and current
 disk at publication. It strictly reparses the two inventory reports, every
-container-list report, `CookPackageReport`, and `RuntimeObservation`; duplicated
+container-list report, `CookPackageReport`, `SandboxAttestation`, and
+`RuntimeObservation`; duplicated
 package fields must be byte-for-byte equal after canonical parsing. It also
 verifies the three source/staged/extracted/runtime hash identities and absence
 of `CorsairsImport` from receipts, stage/archive manifests, containers, and
@@ -3487,6 +3720,12 @@ test_clean_checkout_orders_installer_before_game_build_and_cook
 test_dirty_or_wrong_head_checkout_fails_before_mutation
 test_base_bundle_rehashes_every_input
 test_inventory_cook_and_runtime_report_mutation_matrices
+test_sandbox_attestation_mutation_matrix
+test_signed_bundle_derives_one_verified_application_container
+test_runtime_report_uses_owned_container_scratch_not_repository_path
+test_runtime_report_copy_rehashes_complete_no_follow_tree_and_modes
+test_sandbox_scratch_crash_matrix_recovers_only_exact_owned_tree
+test_foreign_or_mismatched_sandbox_scratch_fails_closed
 test_base_bundle_rejects_mutable_report_receipt_or_binary_path
 test_prior_bundle_inputs_remain_valid_after_later_run_failure
 test_base_bundle_publish_failure_preserves_previous_bytes
@@ -3520,8 +3759,21 @@ duplicate records and invalid PASS/FAIL issue relations, and assert the exact
 `code` plus JSON-pointer-like `field`. They prove that pass 2 cannot save equal
 primary bytes while adding/removing/changing a sidecar and still call itself
 zero-mutation. The base matrix also mutates every field in linked inventory,
-container-list, cook-package, and runtime-observation DTOs (updating the outer
+container-list, cook-package, sandbox-attestation, and runtime-observation DTOs
+(updating the outer
 file hash when necessary) and still requires the nested strict parser to fail.
+The separate in-memory sandbox-probe parser matrix deletes, mistypes, adds, and
+mutates every `SandboxProbeEvent` field and proves that it cannot be linked as a
+bundle/report evidence record.
+
+Sandbox tests use literal complete plist/report fixtures and mutate every
+attestation/probe field, signed bundle ID, sandbox entitlement, container
+metadata identifier/creator, path containment, owner/mode/device/inode, and
+marker byte. Tree tests include nested readable files, unreadable entries,
+symlink/hard-link/device leaves, lexical-order traps, source mutation during
+copy, destination mutation, and every named scratch failure/crash seam. They
+require exact relative-path/mode/size/hash equality after the durable copy and
+prove that pre-existing or foreign user-container content is never deleted.
 
 Rollback tests inject both an ordinary failure and a no-cleanup simulated crash
 at every named seam, start a fresh orchestrator for crash recovery, and compare
@@ -3679,15 +3931,36 @@ nice -n 10 "/Users/Shared/Epic Games/UE_5.8/Engine/Build/BatchFiles/RunUAT.sh" \
   -archivedirectory="$PWD/artifacts/maps/package-run/$TXN_ID/archive" \
   -MaxParallelActions=2
 
+# Bound by the orchestrator to the one receipt-selected executable from the
+# validated archive inventory; this is not a recursive/example-path lookup.
+PACKAGED_EXECUTABLE="<validated receipt-selected archive executable>"
 nice -n 10 \
-  "$PWD/artifacts/maps/package-run/$TXN_ID/archive/Mac/CorsairsUE.app/Contents/MacOS/CorsairsUE" \
+  "$PACKAGED_EXECUTABLE" \
+  -unattended -NullRHI -NoSound -stdout -FullStdOutLogOutput \
+  -CorsairsTerrainTransaction="$TXN_ID" \
+  -CorsairsTerrainSourceHead="$SOURCE_HEAD" \
+  -CorsairsTerrainSandboxProbe \
+  -ExecCmds="Automation RunTests Corsairs.Terrain.ReferenceRuntime" \
+  -TestExit="Automation Test Queue Empty"
+
+# The orchestrator alone sets these from the validated probe event and exact
+# durable journal; they are not environment/user inputs.
+PROBED_AUTOMATION_REPORTS_ROOT="<validated event automationReportsRoot>"
+SANDBOX_REPORT_ROOT="$PROBED_AUTOMATION_REPORTS_ROOT/CorsairsTerrainTask8-$TXN_ID/reference-terrain-runtime"
+nice -n 10 \
+  "$PACKAGED_EXECUTABLE" \
   -unattended -NullRHI -NoSound -stdout -FullStdOutLogOutput \
   -CorsairsTerrainTransaction="$TXN_ID" \
   -CorsairsTerrainSourceHead="$SOURCE_HEAD" \
   -ExecCmds="Automation RunTests Corsairs.Terrain.ReferenceRuntime" \
   -TestExit="Automation Test Queue Empty" \
-  -ReportExportPath="$TXN_REPORT_ROOT/reference-terrain-runtime"
+  -ReportExportPath="$SANDBOX_REPORT_ROOT"
 ```
+
+After the second packaged process exits, the host performs the exact durable
+no-follow copy/rehash protocol above into
+`$TXN_REPORT_ROOT/reference-terrain-runtime`; no engine process writes directly
+to that repository destination.
 
 The UAT forwarding argument above is literal: the emitted Cook commandlet argv
 contains exactly one `-SkipZenStore` and no `-ZenStore`. This keeps the
