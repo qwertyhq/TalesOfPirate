@@ -148,7 +148,7 @@ bool FCorsairsReferenceTerrainRuntimeTest::RunTest(const FString&)
 	TestEqual(TEXT("cooked material blend"), Material->BlendMode, BLEND_Masked);
 	TestEqual(TEXT("cooked material shading"), Material->GetShadingModels(),
 		FMaterialShadingModelField(MSM_Unlit));
-	TestTrue(TEXT("cooked mesh Nanite"), Mesh->GetNaniteSettings().bEnabled);
+	TestTrue(TEXT("cooked mesh Nanite"), Mesh->HasValidNaniteData());
 	TestTrue(TEXT("cooked mesh material slot"), Mesh->GetMaterial(0) == Instance);
 	TestTrue(TEXT("cooked instance parent"), Instance->Parent.Get() == Material);
 	UTexture* BoundTexture = nullptr;

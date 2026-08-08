@@ -10,6 +10,13 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class ModuleDependencyTests(unittest.TestCase):
+    def test_runtime_terrain_nanite_check_uses_cooked_data_api(self):
+        runtime = (ROOT / "CorsairsUE/Source/CorsairsGame/Private/Tests/"
+                   "CorsairsReferenceTerrainRuntimeTests.cpp").read_text(
+                       encoding="utf-8")
+        self.assertIn("HasValidNaniteData()", runtime)
+        self.assertNotIn("GetNaniteSettings()", runtime)
+
     def test_contract_enum_uses_equality_not_python_alias_spelling(self):
         entrypoint = ROOT / "CorsairsUE/Scripts/import_reference_terrain.py"
         probe = f"""
