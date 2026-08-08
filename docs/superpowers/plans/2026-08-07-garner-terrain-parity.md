@@ -1467,11 +1467,205 @@ subcommand; source inspection alone is not the gate.
    names, paths within the one run directory, and no eighth manifest or product.
    Ignore every callback-supplied hash: independently recompute all seven
    SHA-256 values and sizes from disk, then checked-add the sizes into
-   `metrics.totalOutputBytes`.
+   `metrics.totalOutputBytes`. Before any manifest publication, pass all seven
+   closed outputs to `DurabilizeRunProducts(durable_fs, ...)`, a command helper
+   composed only from the adapter operations below: fsync or
+   `FlushFileBuffers` every file, make the run-directory entries durable by the
+   platform contract, reopen and independently recompute every hash/size again,
+   and reject any changed/missing/eighth product.
 7. Build the DTO from the actual Task 2/5/6 results, not duplicated constants;
    include the complete independently rehashed provenance, serialize,
    parse-roundtrip, compare every DTO field, validate against `options.Output`,
    and only then invoke `AtomicPublish` exactly once.
+
+`durable_fs` is one cross-language behavioral contract, implemented as a narrow
+C++ adapter inside the command publisher and a narrow Python adapter inside the
+installer. Both expose the same audited operations: `OpenExclusiveTemp`,
+`FlushFile`, `ReserveMoveTarget`, `ReplaceSameVolume`,
+`SyncDirectoryOrEquivalent`, `RemoveOwned`, `RestoreMode`, `LockExclusive`, and
+the separate `RetireLock`. Every mutating, durability, mode-restoration, and
+locking primitive in top-manifest publication, installer publication, journal
+phases, rollback, recovery, and owned-artifact cleanup goes through the adapter;
+independent read/stat/hash/parse verification remains outside it. No production
+code outside that adapter may call raw `rename`/`os.replace`, `fsync`,
+`chmod`/mode mutation, delete, or a private platform shortcut around the
+injected seam.
+
+On POSIX, `OpenExclusiveTemp` uses a unique same-directory path with
+`O_CREAT|O_EXCL|O_NOFOLLOW`, mode 0600; `FlushFile` flushes any open language
+stream or reopens a closed owned output without following links, then performs
+`fsync(fd)` on an `O_RDWR` regular-file descriptor; `ReplaceSameVolume` first
+proves equal `st_dev` and then uses
+atomic `rename`/`os.replace`; and
+`SyncDirectoryOrEquivalent` opens the parent with `O_DIRECTORY|O_RDONLY` and
+`fsync`s it. `RestoreMode` is `fchmod` followed by `FlushFile`, and
+`RemoveOwned` is `unlink` followed by that same parent barrier.
+The real POSIX gate executes these operations on a temporary filesystem,
+including replace, rollback, directory fsync, and injected failure recovery.
+
+On Windows, the adapters use documented direct Win32 calls (Python through
+`ctypes.WinDLL(..., use_last_error=True)` with explicit `argtypes`/`restype`,
+C++ through the same APIs with immediate `GetLastError` capture):
+`CreateFileW(..., CREATE_NEW, ...)` for a same-directory exclusive regular temp,
+`FILE_FLAG_OPEN_REPARSE_POINT` plus `GetFileInformationByHandleEx` for
+reparse-point rejection, `FlushFileBuffers` on every writable file handle, and
+`MoveFileExW(source, destination,
+MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)` (`0x1|0x8`) for replacement.
+The adapter compares roots/serials with
+`GetVolumePathNameW`/`GetVolumeInformationW` before replacement, never sets
+`MOVEFILE_COPY_ALLOWED`, and never falls back to copy/delete. For the seven
+already-named private run outputs, `SyncDirectoryOrEquivalent(parent,
+entriesToFinalize)` first flushes each file, then uses the typed reservation
+contract below and moves each canonical file through that same-directory name
+and back with write-through `MoveFileExW`; stages/backups use the same entry-
+finalization mode. After `ReplaceSameVolume`, an empty entry set records
+that operation's write-through move as the equivalent barrier. Only after all
+canonical output names are restored and rehashed may the top manifest commit
+begin. A failure leaves only an unreferenced private run and cannot change the
+prior top manifest.
+
+Every Windows placeholder is created only by
+`ReserveMoveTarget(source, reserved, kind, transactionId, sourceHash)`. It uses
+`CREATE_NEW`, writes an exact versioned reservation record containing those
+fields plus both normalized paths, calls `FlushFileBuffers`, reopens without
+following reparse points, verifies the same file identity and byte-exact record,
+then closes it before `MoveFileExW`. All transaction reservation paths/records
+are fixed in `SNAPSHOT`; run-output reservations are derived only from the
+private run ID and canonical leaf. A crash before the move is therefore not an
+ambiguous empty file.
+
+Startup/current-call recovery applies one exact state table. Canonical source
+present plus the exact reservation record means pre-move: remove only that
+reservation and retry. Canonical source absent plus a non-reservation tombstone
+whose bytes/hash/identity match the recorded intended source means post-move:
+resume its documented cleanup/replacement. Canonical absent plus a reservation,
+canonical present plus a mismatched payload, an invalid record, or any
+unrecorded path is foreign/corrupt and fails closed. No raw existence heuristic
+or directory order chooses a state.
+
+Windows `RemoveOwned(path, tombstone)` never invents a path at deletion time.
+Before `SNAPSHOT`, the transaction derives each ordinary artifact tombstone
+from its transaction ID and durably records the normalized direct-child mapping
+in its journal; each lock and canonical journal instead has the one fixed
+retired path named literally in its flow below. `RemoveOwned`
+requires that mapping, completes `ReserveMoveTarget` with kind `remove-owned`,
+then moves the validated canonical path over the closed reservation with
+`MoveFileExW(...,
+MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)` and verifies the canonical
+path is absent. A pre-existing path is handled only by the exact state table;
+an unrecorded/foreign tombstone is never overwritten. For a closed ordinary
+artifact, read its tombstone
+attributes, clear only `FILE_ATTRIBUTE_READONLY` through audited
+`SetFileAttributesW` (use `FILE_ATTRIBUTE_NORMAL` only if no bit remains),
+capture/readback-verify the result, then call `DeleteFileW` and verify exact
+absence. This cleanup is replayable and successful return requires absence. The
+canonical journal is removed last. Startup under the lock checks both its exact
+canonical path and its one recorded/deterministic journal-tombstone path,
+then applies the exact state table: canonical plus its exact reservation is
+recoverable pre-move, while canonical absent plus its matching journal payload
+is post-move recovery. Two journal payloads, a mismatch, or any unrecorded/
+foreign candidate fails closed. Thus a crash after journal-to-tombstone remains
+discoverable.
+
+`RemoveOwned` may retire journal/backup evidence only after the committed new
+state or exact old state independently verifies. A crash may then leave only
+recorded tombstones, never resurrect a canonical target or erase evidence still
+required for recovery. `RestoreMode` is valid only on an unpublished owned
+temp/stage: Windows calls `SetFileAttributesW`, immediately captures its error,
+readback-verifies the recorded observable attributes, and then calls
+`FlushFileBuffers`; POSIX applies `fchmod` before the same final `FlushFile`.
+Only after that does `ReplaceSameVolume` publish the staged file. No critical
+path mutates canonical mode/attributes after replacement.
+
+POSIX and Windows locks use `fcntl`/`flock` and `LockFileEx` respectively, so
+kernel ownership is released on process death. `LockExclusive(canonical,
+fixedRetired)` opens/creates a no-link regular file, acquires the kernel lock,
+and establishes the exact versioned owner/canonical-path marker before any
+transaction work. For a new file it writes the marker, calls `FlushFile`
+(`FlushFileBuffers` on Windows), reopens without following links, requires the
+same file identity, and readback-verifies exact bytes. For an existing file it
+requires the same exact marker bytes. Only then compare the locked handle
+identity with a fresh no-follow lookup of the canonical path: POSIX compares
+device/inode from `fstat`/`lstat`; Windows compares volume serial/file ID from
+handle queries and opens the lock with delete sharing. Missing or mismatched
+identity releases/closes and retries the current path before retired-lock/
+journal inspection or mutation; a matching handle held by another process
+fails closed. Canonical lock-directory durability is not a safety precondition,
+but marker file-data durability/readback is mandatory for later retired-lock
+recovery.
+
+After identity matches and before journal inspection, validate and remove only
+the literal `fixedRetired` path left by an earlier crash. It must be a direct
+no-link regular file with either the exact typed `retire-lock` reservation or
+the exact lock marker. The reservation additionally records the locked handle's
+volume serial/file ID and marker hash: matching current identity means
+pre-move, so delete the reservation and retry retirement later; an exact old
+lock marker with a different file ID means post-move, so clean that retired
+lock. Any other combination is foreign and fails closed. On Windows, delete-
+pending/busy means close the new lock without transaction work and return
+retryable non-success. No glob chooses recovery state.
+
+`RetireLock` is distinct from `RemoveOwned`. It runs only after all shared-state
+cleanup/barriers are complete and while the exact handle remains locked. After
+one last handle-to-path identity check, POSIX moves canonical to the fixed
+retired path, unlinks/fsyncs that name, then closes the handle as its final
+operation. Windows completes `ReserveMoveTarget` with kind `retire-lock`, the
+lock generation ID, current file ID, and exact marker hash, then moves canonical
+over the closed reservation with same-volume `MoveFileExW(...,
+MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)`, verifies canonical absence
+and handle identity, and requires `DeleteFileW(fixedRetired)` to accept
+delete-pending. It does not require retired-path absence while the handle is
+open; `CloseHandle` is the final call and documented delete-on-close completes
+removal. A crash before acceptance is recovered from the exact retired path on
+the next acquisition. No filesystem call follows the final close. Every waiter
+repeats the post-acquire identity check, so an opener of the old inode/handle
+can never enter concurrently with an owner of a newly created lock path. A
+retirement failure is non-success, never a successful return with a lock
+artifact.
+
+Windows does not attempt unsupported directory-handle `fsync`,
+`FlushFileBuffers` on a directory, or an administrator-only volume flush.
+There, each write-through `MoveFileExW` is the directory-entry durability
+barrier; journal phase changes and recovery use that same primitive. The
+Windows gate statically verifies the exact `ctypes` signatures/flags and runs a
+behavioral mocked adapter that checks call order, `FlushFileBuffers` for every
+file, same-volume rejection, injected failures, and startup recovery. No mocked
+gate may replace the real POSIX gate. Forced POSIX `EIO`, Windows error 5, and
+the contract cross-volume case assert the exact error prefixes below; tests
+also prove the Win32 code is captured before any formatting/cleanup API call.
+
+Run the literal cross-platform race fixture
+`DurableFsLock_RejectsStaleHandleAfterRetirement` for both production locks: a
+waiter opens the old lock identity, the owner retires the path as its last
+filesystem action, and a new owner creates the canonical path. The stale waiter
+must fail the post-acquire identity check and may never enter the critical
+section. `DurableFsLock_DurableMarkerBeforeRecovery` injects crash before/after
+marker flush/readback and forbids journal work until exact recovery bytes are
+durable. Windows static/mocked tests
+`DurableFsWindows_RemoveOwnedRecoversJournalTombstone` and
+`DurableFsWindows_StagesAttributesBeforeReplace` require exclusive tombstone
+reservation, exact startup discovery after journal retirement, no foreign
+overwrite, READONLY tombstone cleanup without losing other attributes,
+mode/attribute staging before flush+replace, and no post-replace canonical
+attribute mutation. `DurableFsWindows_RecoversTypedMoveReservation` injects a
+crash after reservation flush/readback but before `MoveFileExW` for an ordinary
+tombstone, journal retirement, run-entry finalization, and lock retirement; it
+requires the exact pre/post-move state table and rejects every mismatched
+record/hash/path/file ID. `DurableFsWindows_RetireLockUsesDeleteOnClose` mocks
+crash before/after move and delete-pending acceptance, forbids retired-path stat after
+acceptance, requires `CloseHandle` last, and proves the next exact-path
+acquisition recovers a pre-acceptance retired lock.
+
+All adapter failures have one exact single-line machine-testable prefix before
+the optional native message:
+`DURABLE_FS_ERROR op=<operation> path=<JSON-quoted-normalized-path> native=errno:<decimal>:`
+on POSIX and the same prefix with
+`native=win32:<GetLastError-decimal>:` on Windows. Two-path operations replace
+`path` with `source=<JSON-quoted-normalized-path>
+destination=<JSON-quoted-normalized-path>` on that same line. A cross-volume
+rejection ends the prefix with `native=contract:CROSS_VOLUME:`. The operation,
+normalized path(s), and native code are preserved unchanged in
+`WRITE_FAILED`/`RECOVERY_REQUIRED` detail.
 
 `Bake.Ok`/`Mesh.Ok`, their output paths, bounds, presence/unresolved counts,
 budgets, algorithm, texture IDs, catalog mapping, provenance paths/hashes, and
@@ -1507,10 +1701,14 @@ exactly 256 ones, complete source provenance, all seven path/hash/size entries,
 and every metric from the canonical DTO. `source.usedTextures` is the exact
 sorted Task 3 mapping for `usedTextureIds`; its representative single record
 below is abbreviated, as are hash strings, `[1]`, every `sizeBytes: 0`, and
-observational metric zeros. The real Garner manifest contains every used
-texture record, exactly 256 mask ones, seven disk-derived nonzero sizes, their
-checked total, measured process/file/geometry metrics, and literal zero
-absent/unresolved counts.
+observational metric zeros. In particular, the example's `peakRssBytes: 0` is
+an illustrative placeholder and is invalid in a production manifest. The real
+Garner manifest contains every used texture record, exactly 256 mask ones,
+seven disk-derived nonzero sizes, their checked total, measured process/file/
+geometry metrics, and literal zero absent/unresolved counts. `peakRssBytes` is
+the actual OS process-lifetime measurement from Task 5 and independently
+validates as `0 < peakRssBytes <= options.Bake.MaxRssBytes` (128 MiB for the
+fixed command); it is never replaced by a deterministic constant.
 
 ```json
 {
@@ -1598,10 +1796,25 @@ Add strict tests for:
   overload, with exit 1 and no changed top manifest;
 - the exact CLI argument vector, literal width/height interpretation, and proof
   that `terrain-reference` dispatches before every legacy `ReadWholeFile` path;
-- two successful builds under one output root with distinct run IDs; after
-  normalizing only `files.*.path` from `runs/<actual-id>/...` to
-  `runs/<run-id>/...`, require byte-identical canonical serialization, equal
-  seven-file SHA-256/size tuples, and no other semantic difference.
+- two successful builds under one output root with distinct run IDs; validate
+  each actual manifest independently, including its actual nonzero bounded
+  `metrics.peakRssBytes`, and compare the seven products byte-for-byte as well
+  as by equal ordered SHA-256/size tuples. The deterministic projection
+  normalizes only each `files.*.path` run segment from `<actual-id>` to
+  `<run-id>` and, only after both actual values validate, replaces only
+  `metrics.peakRssBytes` with projection-only `std::uint64_t{0}`; its canonical
+  serialization must be byte-identical and every other DTO field must compare
+  exactly. The actual manifests are not required or claimed to be
+  byte-identical.
+
+Add literal RED fixtures
+`TerrainDeterministicProjection_AllowsDifferentValidPeakRss`,
+`TerrainManifest_RejectsZeroPeakRss`,
+`TerrainManifest_RejectsPeakRssOverBudget`, and
+`TerrainDeterministicProjection_RejectsAnyOtherFieldDifference`. The first
+uses two different values both in `(0, 128 MiB]` and must pass; the next two
+must fail independent validation; the last mutates each non-RSS DTO field in
+turn and must fail comparison.
 
 Add these injectable-path tests verbatim:
 
@@ -1621,32 +1834,46 @@ Add direct production-publisher fault tests with these literal injection
 points:
 
 ```text
-MANIFEST_AFTER_TEMP_FSYNC
-MANIFEST_AFTER_BACKUP_FSYNC
-MANIFEST_AFTER_PREPARED_JOURNAL_FSYNC
+MANIFEST_AFTER_TEMP_FLUSH
+MANIFEST_AFTER_BACKUP_FLUSH
+MANIFEST_AFTER_PREPARED_JOURNAL_DURABLE
 MANIFEST_AFTER_REPLACE
-MANIFEST_AFTER_REPLACE_PARENT_FSYNC
-MANIFEST_AFTER_REPLACED_JOURNAL_FSYNC
+MANIFEST_AFTER_REPLACE_DURABILITY_BARRIER
+MANIFEST_AFTER_REPLACED_JOURNAL_DURABLE
 MANIFEST_AFTER_READBACK_VERIFY
-MANIFEST_AFTER_COMMITTED_JOURNAL_FSYNC
+MANIFEST_AFTER_COMMITTED_JOURNAL_DURABLE
+MANIFEST_AFTER_TOMBSTONE_RESERVATION_DURABLE
+MANIFEST_AFTER_JOURNAL_RETIRE
 MANIFEST_ROLLBACK_REPLACE
-MANIFEST_ROLLBACK_PARENT_FSYNC
+MANIFEST_ROLLBACK_AFTER_MODE_STAGE_FLUSH
+MANIFEST_ROLLBACK_DURABILITY_BARRIER
 MANIFEST_ROLLBACK_VERIFY
+MANIFEST_AFTER_LOCK_RESERVATION_DURABLE
+MANIFEST_AFTER_LOCK_MOVE_TO_RETIRED
+MANIFEST_AFTER_LOCK_DELETE_PENDING
 ```
 
-Route production publication filesystem primitives through a narrow injected
-operations adapter in direct tests; the normal dependency factory binds only
-real filesystem calls. The fault seam may not bypass serializer, temp
-readback, manifest validation, or final destination verification.
+Route production publication through the injected `durable_fs` operations
+adapter in direct tests; inject before/after the named adapter operation, not
+at raw POSIX calls. The normal dependency factory binds only the real platform
+adapter. The fault seam may not bypass serializer, temp readback, manifest
+validation, run-product durability, or final destination verification.
+
+Add failure iteration over each of the seven `FlushFile` operations and each
+run-entry `SyncDirectoryOrEquivalent` sub-operation. Every such failure must
+leave the prior top manifest byte-identical and the new run unreferenced, with
+`AtomicPublish` uncalled. The POSIX real-filesystem gate and Windows static/
+mocked-behavior gate above are mandatory in addition to the platform-neutral
+fault matrix.
 
 For each pre-commit point test both a prior manifest with non-default mode and
 no prior manifest. A one-shot failure/crash must recover exact prior
 bytes/mode/existence either in the same call or on a fresh simulated process
-startup. Persistent rollback replace/fsync/verification failure is exactly
+startup. Persistent rollback replace/barrier/verification failure is exactly
 `RECOVERY_REQUIRED`, retains the immutable verified backup and journal, and
 returns their paths plus the literal shell-quoted retry command. It must never
 masquerade as ordinary `WRITE_FAILED` or delete its only recovery evidence.
-`MANIFEST_AFTER_COMMITTED_JOURNAL_FSYNC` is the post-commit exception: a fresh
+`MANIFEST_AFTER_COMMITTED_JOURNAL_DURABLE` is the post-commit exception: a fresh
 startup retains and verifies the complete new manifest and only finishes owned
 artifact cleanup; it never rolls a durable `COMMITTED` publication back.
 
@@ -1670,20 +1897,31 @@ hash, wrong leaf, and partial staging.
 
 The installer is a recoverable two-file transaction, not two best-effort
 copies. It acquires the exact exclusive owned lock
-`CorsairsUE/Data/Heights/.garner-runtime-install.lock` and, before parsing a
-new manifest or creating a stage, resolves any existing same-directory
-`.garner-runtime-install.transaction.json`. The 0600 journal is itself updated
-by unique same-directory temp, file fsync, `os.replace`, and parent-directory
-fsync.
+`CorsairsUE/Data/Heights/.garner-runtime-install.lock`, whose fixed retired path
+is `.garner-runtime-install.lock.retired`. After the mandatory post-acquire
+identity check and before parsing a new manifest or creating a stage, it
+applies the typed-reservation state table to
+`.garner-runtime-install.transaction.json` and its one exact retired path
+`.garner-runtime-install.transaction.json.retired`. Canonical journal plus its
+exact retirement reservation is pre-move cleanup; canonical absent plus the
+retired payload matching the recorded journal hash is post-move recovery.
+Two journal payloads or any other combination fails closed. After strict parse, any
+`.garner-runtime-install*.retired` path not equal to the fixed lock/journal path
+or an exact journal-recorded tombstone fails closed. The 0600 journal is itself
+updated only through `durable_fs`: unique same-directory `OpenExclusiveTemp`,
+flush plus `FlushFile`, strict reparse, `ReplaceSameVolume`, and
+`SyncDirectoryOrEquivalent`.
 
-The lock is a no-symlink regular file held with an OS advisory/exclusive file
-lock whose ownership is released automatically on process death; stale file
-presence alone is not treated as a live owner. If another process still holds
-the lock, fail without inspecting, recovering, or deleting its transaction.
+The lock follows the exact handle-to-path identity/retry and last-filesystem-
+action retirement protocol above. Stale file presence alone is not treated as
+a live owner. If another process still holds the matching lock identity, fail
+without inspecting, recovering, or deleting its transaction.
 
-The journal records exact normalized target/stage/backup paths, prior
-existence/bytes hash/mode, intended source hashes, manifest hash, transaction
-ID, and one literal phase:
+The journal records exact normalized target/stage/backup paths, every typed
+reservation and rollback/cleanup tombstone mapping (including its own fixed
+retired path), prior
+existence/bytes hash/mode, intended source hashes/modes, manifest hash,
+transaction ID, and one literal phase:
 
 ```text
 SNAPSHOT -> PREPARED -> BLOCK_REPLACED -> PAIR_REPLACED -> COMMITTED
@@ -1691,36 +1929,53 @@ SNAPSHOT -> PREPARED -> BLOCK_REPLACED -> PAIR_REPLACED -> COMMITTED
 
 `SNAPSHOT` is durable before any stage/backup creation or target mutation.
 Both source files are copied to unique regular stages in
-`CorsairsUE/Data/Heights`, flushed, file-fsynced, closed, reopened, and hashed.
+`CorsairsUE/Data/Heights`; apply each intended mode/attributes to the unpublished
+stage through `RestoreMode`, flush through `FlushFile`, close, reopen, and hash/
+mode-verify it.
 For each existing target, copy exact prior bytes/mode to an immutable unique
-same-directory backup, file-fsync and verify it; record absence instead of
-inventing a backup for a missing target. Parent-directory fsync makes all
-stages/backups durable before `PREPARED` may be journaled.
+same-directory backup, apply the recorded prior mode while it is unpublished,
+`FlushFile` and verify bytes/mode; record absence instead of
+inventing a backup for a missing target. `SyncDirectoryOrEquivalent` makes all
+stage/backup entries durable before `PREPARED` may be journaled: POSIX fsyncs
+the directory, while Windows performs the documented same-directory
+write-through finalization and never attempts directory or volume flush.
 
-Replace `garner.block.raw` first with its already-fsynced stage, fsync the
-parent, then durably journal `BLOCK_REPLACED`. Replace
-`garner.terrain.json` second, fsync the parent, then durably journal
-`PAIR_REPLACED`. Reopen both installed targets, require the manifest SHA-256,
-exact bytes and intended modes, then durably journal `COMMITTED`. Only a
-verified `COMMITTED` pair may remain new; cleanup of journal/backups/stages and
-lock is followed by a final parent fsync. A successful return is forbidden
-before both targets verify and may never expose a mixed pair as success.
+Replace `garner.block.raw` first with its already-flushed stage through
+`ReplaceSameVolume`, complete `SyncDirectoryOrEquivalent`, then durably journal
+`BLOCK_REPLACED`. Replace `garner.terrain.json` second through the same two
+adapter operations, then durably journal `PAIR_REPLACED`. On POSIX the barrier
+is parent-directory fsync; on Windows it is the completed write-through
+`MoveFileExW` and never a directory flush. Reopen both installed targets,
+require the manifest SHA-256, exact bytes and intended modes, then durably
+journal `COMMITTED`. Only a verified `COMMITTED` pair may remain new; cleanup
+uses only journal-recorded `RemoveOwned` tombstones, retires the journal last,
+and completes a final `SyncDirectoryOrEquivalent`. `RetireLock` is the last
+filesystem action. A successful return is forbidden before both targets verify
+and may never expose a mixed pair as success.
 
-Every journal phase update uses a unique same-directory regular temp, flush,
-file fsync, close, strict reparse, `os.replace`, and parent-directory fsync.
-An exception after `INSTALL_AFTER_COMMITTED_JOURNAL_FSYNC` retains the complete
-verified new pair; a fresh startup verifies that pair and finishes cleanup
-rather than rolling a durable commit back. Persistent post-commit cleanup
-failure returns `RECOVERY_REQUIRED` with the same literal retry command and
-retains the journal plus backups as evidence, but never reports a mixed pair.
+Every journal phase update uses `OpenExclusiveTemp`, flush plus `FlushFile`,
+close, strict reparse, `ReplaceSameVolume`, and
+`SyncDirectoryOrEquivalent`; no installer mutation path calls raw
+`os.replace`/`fsync`/`chmod`/remove outside the adapter.
+An exception after `INSTALL_AFTER_COMMITTED_JOURNAL_DURABLE` retains the
+complete verified new pair; a fresh startup verifies that pair and finishes
+cleanup rather than rolling a durable commit back. Persistent post-commit
+cleanup failure returns `RECOVERY_REQUIRED` with the same literal retry command
+and retains the journal plus backups as evidence, but never reports a mixed
+pair.
 
 On an exception or startup with phase `SNAPSHOT`, `PREPARED`,
 `BLOCK_REPLACED`, or `PAIR_REPLACED`, restore the complete old pair. Preserve
-each immutable backup by copying it to a separate rollback stage, file-fsync
-that stage, atomically replace the target, restore its mode, fsync the parent,
-and verify exact prior bytes/mode; remove a target recorded absent, fsync, and
-verify absence. A `COMMITTED` startup verifies the complete new pair and only
-finishes cleanup. Persistent restore/remove/fsync/verification failure keeps
+each immutable backup by copying it to a separate rollback stage, applying
+its recorded prior mode/attributes to that unpublished stage through
+`RestoreMode`, then `FlushFile` and atomically `ReplaceSameVolume` the target.
+Complete `SyncDirectoryOrEquivalent` and verify exact prior bytes/mode; remove a
+target recorded absent only through its journal-recorded `RemoveOwned`
+tombstone, complete the same barrier, and verify absence. A `COMMITTED` startup
+verifies the complete new pair and only finishes cleanup. A startup that finds
+only the retired journal performs the same target verification/recovery before
+replaying tombstone cleanup. Persistent restore/remove/barrier/verification
+failure keeps
 the journal and every valid backup, exits nonzero with literal
 `RECOVERY_REQUIRED`, lists every uncertain path, and prints the exact original
 two-argument invocation as the recovery command; rerunning that command always
@@ -1730,39 +1985,57 @@ Inject both an ordinary exception and a simulated process death at these exact
 boundaries, then create a fresh installer instance and require startup recovery:
 
 ```text
-INSTALL_AFTER_BLOCK_STAGE_FSYNC
-INSTALL_AFTER_METADATA_STAGE_FSYNC
-INSTALL_AFTER_BACKUPS_PARENT_FSYNC
-INSTALL_AFTER_PREPARED_JOURNAL_FSYNC
+INSTALL_AFTER_BLOCK_STAGE_FLUSH
+INSTALL_AFTER_METADATA_STAGE_FLUSH
+INSTALL_AFTER_BACKUPS_DURABILITY_BARRIER
+INSTALL_AFTER_PREPARED_JOURNAL_DURABLE
 INSTALL_BEFORE_BLOCK_REPLACE
 INSTALL_AFTER_BLOCK_REPLACE
-INSTALL_AFTER_BLOCK_REPLACE_PARENT_FSYNC
-INSTALL_AFTER_BLOCK_REPLACED_JOURNAL_FSYNC
+INSTALL_AFTER_BLOCK_REPLACE_DURABILITY_BARRIER
+INSTALL_AFTER_BLOCK_REPLACED_JOURNAL_DURABLE
 INSTALL_BEFORE_METADATA_REPLACE
 INSTALL_AFTER_METADATA_REPLACE
-INSTALL_AFTER_METADATA_REPLACE_PARENT_FSYNC
-INSTALL_AFTER_PAIR_REPLACED_JOURNAL_FSYNC
+INSTALL_AFTER_METADATA_REPLACE_DURABILITY_BARRIER
+INSTALL_AFTER_PAIR_REPLACED_JOURNAL_DURABLE
 INSTALL_AFTER_PAIR_VERIFY
-INSTALL_AFTER_COMMITTED_JOURNAL_FSYNC
+INSTALL_AFTER_COMMITTED_JOURNAL_DURABLE
+INSTALL_AFTER_TOMBSTONE_RESERVATION_DURABLE
+INSTALL_AFTER_JOURNAL_RETIRE
 INSTALL_RECOVERY_BLOCK_REPLACE
 INSTALL_RECOVERY_METADATA_REPLACE
-INSTALL_RECOVERY_PARENT_FSYNC
+INSTALL_RECOVERY_AFTER_MODE_STAGE_FLUSH
+INSTALL_RECOVERY_DURABILITY_BARRIER
 INSTALL_RECOVERY_VERIFY
+INSTALL_AFTER_LOCK_RESERVATION_DURABLE
+INSTALL_AFTER_LOCK_MOVE_TO_RETIRED
+INSTALL_AFTER_LOCK_DELETE_PENDING
 ```
 
-Python tests inject a narrow file-operations/fault adapter; the two-argument
-CLI always binds real `open`/flush/fsync/replace/chmod/remove calls. Injection
-cannot replace independent JSON parsing, source/destination hashing, phase
-validation, pair verification, or the no-op decision.
+Python tests inject the `durable_fs` operations/fault adapter; the two-argument
+CLI always binds the real POSIX or Win32 implementation defined above.
+Injection cannot replace independent JSON parsing, source/destination hashing,
+phase validation, pair verification, or the no-op decision. The platform-
+neutral phase matrix injects around adapter operations; the POSIX gate also
+executes real file and directory barriers, while the Windows gate checks the
+real binding statically and its behavior/call order with mocked Win32 results.
 
 A byte-identical second invocation is a true pre-transaction no-op: it briefly
-acquires/releases the required exclusive lock but creates no journal/stage/
-backup, performs no replace, leaves no lock artifact, and preserves each
-target's inode/file identity where available, bytes, mode, size, and mtime.
+acquires/releases the required exclusive lock through the full identity/retry
+protocol but creates no journal/stage/backup and performs no target replace.
+It calls `RetireLock` for the exact path as its last filesystem action; a
+retirement failure is non-success. Literal `NOOP` therefore leaves no lock/
+retired artifact and preserves each target's inode/file identity where
+available, bytes, mode, size, and mtime.
+
 Expose a pure `compare_deterministic_manifests(first, second)` helper for the
-real two-run gate; it independently validates both manifests/files, requires
-different run IDs and equal seven hash/size tuples, normalizes only that run-ID
-path segment, and compares every remaining DTO field.
+real two-run gate. It independently validates both actual manifests/files,
+including `0 < peakRssBytes <= 128 MiB`, requires different run IDs, directly
+compares the bytes of all seven corresponding products, and requires equal
+ordered hash/size tuples. Its deterministic projection normalizes only that
+run-ID path segment and, after validation, replaces only
+`metrics.peakRssBytes` with projection-only unsigned zero; it compares every
+other DTO field and the canonical projected bytes. It never claims that the two
+actual manifest byte streams are identical.
 
 The installer intentionally does not overwrite tracked
 `CorsairsUE/Data/Heights/garner.height.r16`; `height` and `region` remain
@@ -1816,15 +2089,28 @@ Publish only `artifacts/maps/garner.reference-albedo.json`; never rename the
 whole output directory, publish a run-internal manifest, or modify/delete an
 older run referenced by the current manifest. The production publisher uses an
 exclusive owned `artifacts/maps/.garner.reference-albedo.publish.lock` and
-recovers an unfinished owned transaction before a new build. Its exact 0600
-same-directory journal
-`artifacts/maps/.garner.reference-albedo.publish.json` records destination,
-unique temp, immutable backup, prior existence/hash/mode, intended manifest
-hash and run ID.
+the fixed retired lock path
+`artifacts/maps/.garner.reference-albedo.publish.lock.retired`. After the
+mandatory post-acquire identity check it recovers an unfinished owned
+transaction before a new build. The canonical 0600 same-directory journal is
+`artifacts/maps/.garner.reference-albedo.publish.json` and its one fixed retired
+path is `artifacts/maps/.garner.reference-albedo.publish.json.retired`; both
+paths are resolved through the typed-reservation state table. Canonical journal
+plus its exact retirement reservation is pre-move cleanup; canonical absent
+plus the retired payload matching the recorded journal hash is post-move
+recovery. Two journal payloads or any other combination fails closed. After
+strict parse, any
+`.garner.reference-albedo.publish*.retired` path not equal to the fixed lock/
+journal path or an exact journal-recorded tombstone fails closed. The journal
+records destination, unique temp, immutable backup, every exact typed
+reservation and rollback/cleanup tombstone mapping including its fixed retired
+path, prior existence/hash/mode, intended manifest hash/mode, and run ID.
 
-This is likewise an OS advisory/exclusive lock on a no-symlink regular file,
-released by process death; a live foreign owner fails closed, while a fresh
-process may acquire the stale lock file and execute journal recovery.
+This lock follows the exact handle-to-path identity/retry protocol above; a
+live matching foreign owner fails closed. Under the acquired lock, startup
+strictly resolves the canonical journal or its exact retired path and executes
+recovery/cleanup before any input or run-directory work. Lock retirement is the
+last filesystem action before release/close/return.
 
 The journal contains one literal phase:
 
@@ -1832,46 +2118,57 @@ The journal contains one literal phase:
 SNAPSHOT -> PREPARED -> REPLACED -> COMMITTED
 ```
 
-Every journal phase update is itself a unique same-directory regular temp,
-flush, file fsync, close, strict reparse, atomic replacement, and parent-
-directory fsync. The lock and every recorded path are required to remain
-direct children of `options.Output`; an unexpected symlink or foreign journal
-fails closed without deleting it.
+Every journal phase update uses `durable_fs.OpenExclusiveTemp`, stream flush
+plus `FlushFile`, close, strict reparse, `ReplaceSameVolume`, and
+`SyncDirectoryOrEquivalent`. The lock and every recorded path are required to
+remain direct children of `options.Output`; an unexpected symlink or foreign
+journal fails closed without deleting it. No publisher branch bypasses the
+adapter with raw `std::filesystem::rename`, `fsync`, permissions/remove, or a
+platform special case.
 
 Write `SNAPSHOT` durably before creating a manifest temp/backup or mutating the
 destination. Write JSON to a unique same-directory regular temp opened
-exclusively without following a symlink; flush, file-fsync (`fsync` on POSIX
-and the durable Windows equivalent), close, reopen, parse, validate, and hash
-the exact temp bytes. If
+exclusively without following a symlink; apply the intended mode/attributes to
+that unpublished temp through `RestoreMode`, then flush through `FlushFile`
+(`fsync` on POSIX, `FlushFileBuffers` on Windows), close, reopen, parse,
+validate, mode-verify, and hash the exact temp bytes. If
 the destination exists, require a non-symlink regular file, copy its exact
-bytes/mode into an immutable unique same-directory backup, file-fsync/reopen/
-verify it, and fsync the parent directory. Record prior absence without a fake
-backup. Only after temp/backup directory entries are durable may the atomically
-updated journal enter `PREPARED`.
+bytes/mode into an immutable unique same-directory backup, `FlushFile`, reopen,
+verify it, and complete `SyncDirectoryOrEquivalent`. Record prior absence
+without a fake backup. Only after temp/backup directory entries are durable by
+the platform contract may the atomically updated journal enter `PREPARED`.
 
-Atomically replace the destination from the same filesystem using a primitive
-that replaces an existing file on both POSIX and Windows; plain
-`std::filesystem::rename` without Windows replacement semantics is not
-sufficient. Fsync the parent directory, durably journal `REPLACED`, then reopen
-the top manifest, require exact intended bytes/hash and strict parse/
-validation. Durably journal `COMMITTED` only after that readback succeeds. A
-successful return requires `COMMITTED`, reports the top-manifest SHA-256 and
-run ID, removes only owned transaction artifacts, and fsyncs the parent again.
+Call `ReplaceSameVolume` for the destination: POSIX atomic rename after the
+same-device check, or Windows `MoveFileExW` with exactly
+`MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH` after the same-volume check.
+Complete `SyncDirectoryOrEquivalent` (POSIX parent fsync; the already-completed
+write-through move on Windows), durably journal `REPLACED`, then reopen the top
+manifest and require exact intended bytes/hash plus strict parse/validation.
+Durably journal `COMMITTED` only after that readback succeeds. A successful
+return requires `COMMITTED`, reports the top-manifest SHA-256 and run ID,
+removes only journal-recorded owned transaction artifacts through
+`RemoveOwned`, retires the canonical journal last to its exact fixed path, and
+completes the platform barrier. `RetireLock` is the final filesystem action.
 
 Any pre-commit build/gate/roundtrip/publish failure restores exact prior
 bytes/mode/existence. Never consume the immutable backup directly: copy it to a
-new rollback temp, file-fsync it, atomically replace the destination, restore
-mode, fsync the parent, and verify prior hash/mode; for prior absence remove the
-new destination, fsync, and verify absence. A one-shot injected failure returns
-`WRITE_FAILED` only after verified rollback. Persistent rollback replace/
-remove/fsync/verification failure returns `RECOVERY_REQUIRED`, retains journal
-and all valid recovery evidence, and prints the exact shell-quoted full
+new rollback temp, apply the recorded prior mode/attributes through
+`RestoreMode` while it is unpublished, then `FlushFile`, reopen, and verify the
+stage. Only then `ReplaceSameVolume` the destination, complete
+`SyncDirectoryOrEquivalent`, and verify prior hash/mode; for prior absence call
+`RemoveOwned` with its journal-recorded tombstone, complete the same barrier,
+and verify absence.
+A one-shot injected failure returns `WRITE_FAILED` only after verified
+rollback. Persistent rollback replace/remove/barrier/verification failure
+returns `RECOVERY_REQUIRED`, retains journal and all valid recovery evidence,
+and prints the exact shell-quoted full
 `terrain-reference` invocation; rerunning it performs recovery before any map,
 DB, alpha, catalog, or run-directory work. Startup phases `SNAPSHOT`,
 `PREPARED`, and `REPLACED` restore the old state; `COMMITTED` retains and
-verifies the new manifest, then finishes cleanup. An unreferenced new run may
-remain, but no failed return claims it through a successfully published top
-manifest.
+verifies the new manifest, then finishes cleanup. Startup from only the fixed
+retired journal performs the same target verification/recovery before replaying
+tombstone cleanup. An unreferenced new run may remain, but no failed return
+claims it through a successfully published top manifest.
 
 If cleanup fails after the `COMMITTED` journal is durable, the complete new
 manifest remains authoritative and a fresh startup verifies it before cleanup;
@@ -1944,14 +2241,17 @@ nice -n 10 ps -axo pid,etime,%cpu,%mem,nice,command | \
 nice -n 10 pmset -g therm
 ```
 
-GREEN evidence must name both distinct run IDs; two equal ordered sets of seven
-independently verified hashes/sizes; equal semantic manifests after only
-run-prefix normalization; complete equal input-provenance hashes/mappings; the
-exact published manifest path/hash; zero absent/unresolved counts; budget/
-geometry metrics; the two installed runtime files; and literal `NOOP` from the
-second installer invocation with unchanged file identity/bytes/mode/size/mtime.
+GREEN evidence must name both distinct run IDs; direct byte equality and two
+equal ordered sets of seven independently verified hashes/sizes; equal
+deterministic projections after normalizing only the run-prefix and excluding
+only actual `peakRssBytes`; independently valid actual RSS values in
+`(0, 128 MiB]`; complete equal input-provenance hashes/mappings; the exact
+published manifest path/hash; zero absent/unresolved counts; budget/geometry
+metrics; the two installed runtime files; and literal `NOOP` from the second
+installer invocation with unchanged file identity/bytes/mode/size/mtime. The
+evidence must not claim that the two actual manifests are byte-identical.
 Generated outputs and recovery artifacts stay ignored and no transaction
-journal, lock, temp, or backup remains after success.
+journal, lock, retired/tombstone, temp, or backup remains after success.
 
 - [ ] **Step 6: Commit only tracked Task 7 sources**
 

@@ -255,27 +255,43 @@ Top manifest публикуется последним и содержит:
   размер каждого файла, а также checked-сумму этих семи размеров.
 
 Перед публикацией orchestrator заново открывает и хеширует inputs и все семь
-outputs; callback-provided hashes не считаются доказательством. Публикация
-top manifest использует unique same-directory temp, file fsync, атомарную
-replace на POSIX/Windows и parent-directory fsync. Существующий manifest
-сначала сохраняется с точными bytes/mode в durable same-directory backup.
-Journal phases `SNAPSHOT -> PREPARED -> REPLACED -> COMMITTED` и startup
-recovery гарантируют exact rollback до commit; persistent rollback failure
-является `RECOVERY_REQUIRED`, сохраняет backup/journal и печатает точную
+outputs; callback-provided hashes не считаются доказательством. Все семь
+outputs сначала становятся durable: POSIX делает file fsync каждого файла и
+fsync run directory, Windows делает `FlushFileBuffers` каждого файла и
+same-directory write-through finalization через `MoveFileExW`; затем семь
+файлов ещё раз независимо хешируются/измеряются. Unsupported Windows directory
+fsync и administrator volume flush не требуются.
+
+Top manifest и installer используют единый поведенческий `durable_fs` adapter.
+POSIX: exclusive same-directory temp, flush+file fsync, same-device
+`rename`/`os.replace`, parent-directory fsync. Windows: `CreateFileW(CREATE_NEW)`,
+`FlushFileBuffers`, same-volume `MoveFileExW` с
+`MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH`, без
+`MOVEFILE_COPY_ALLOWED`/copy-delete fallback. Ошибка сохраняет точную adapter
+operation, path и `errno`/`GetLastError`. Существующий manifest сначала
+сохраняется с точными bytes/mode в durable same-directory backup. Journal
+phases `SNAPSHOT -> PREPARED -> REPLACED -> COMMITTED` и startup recovery
+гарантируют exact rollback до commit; persistent rollback failure является
+`RECOVERY_REQUIRED`, сохраняет backup/journal и печатает точную
 recovery-команду.
 
 Runtime installer независимо валидирует top manifest и семь hashes, но
 устанавливает только `garner.block.raw` и `garner.terrain.json` в
 `CorsairsUE/Data/Heights`; tracked `garner.height.r16` и run-private region не
 заменяются. Оба runtime-файла проходят одну recoverable transaction со
-same-directory stages/backups, fsync, durable journal phases
+same-directory stages/backups, тем же platform `durable_fs`, durable phases
 `SNAPSHOT -> PREPARED -> BLOCK_REPLACED -> PAIR_REPLACED -> COMMITTED` и
 startup recovery, поэтому успешный возврат не может подтвердить mixed pair.
 
 Два production-прогона над теми же входами обязаны создать разные run IDs,
-но одинаковые семь hash/size tuples и семантически одинаковые manifests после
-нормализации только run-ID сегмента. Повторная установка byte-identical пары —
-истинный no-op без replace и изменения identity/mode/mtime.
+но byte-for-byte одинаковые семь outputs и одинаковые hash/size tuples.
+`peakRssBytes` остаётся фактической OS process-lifetime метрикой и в каждом
+manifest независимо проверяется как `0 < value <= 128 MiB`. Детерминированная
+проекция после этой проверки нормализует только run-ID сегмент путей и заменяет
+только `peakRssBytes` на projection-only unsigned zero; все остальные DTO fields
+обязаны совпасть. Actual manifests не обязаны быть byte-identical. Повторная
+установка byte-identical пары — истинный no-op без replace и изменения
+identity/mode/mtime.
 
 ### 4. Page mesh и UE material
 
