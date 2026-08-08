@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import sys
 
+sys.dont_write_bytecode = True
 _SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if not sys.path or sys.path[0] != _SCRIPT_DIR:
     sys.path.insert(0, _SCRIPT_DIR)
@@ -191,6 +192,62 @@ def _import_asset(source: Path, destination_path: str, destination_name: str):
     return [str(item) for item in task.get_editor_property("imported_object_paths")]
 
 
+def _imported_package_path(object_path: str) -> str:
+    package_path, separator, object_name = str(object_path).rpartition(".")
+    if separator and package_path.rsplit("/", 1)[-1] == object_name:
+        return package_path
+    return str(object_path)
+
+
+def _delete_attempt_owned_imports(imported_paths, keep_packages=()):
+    keep = set(keep_packages)
+    removed = []
+    for imported_path in dict.fromkeys(str(item) for item in imported_paths):
+        if _imported_package_path(imported_path) in keep:
+            continue
+        if unreal.EditorAssetLibrary.does_asset_exist(imported_path):
+            if not unreal.EditorAssetLibrary.delete_asset(imported_path):
+                raise RuntimeError(
+                    f"attempt-owned imported asset could not be deleted: {imported_path}")
+            removed.append(imported_path)
+    return removed
+
+
+def _adopt_imported_asset(imported_paths, canonical_path, expected_type):
+    returned = list(dict.fromkeys(str(item) for item in imported_paths))
+    candidates = []
+    for imported_path in returned:
+        asset = unreal.load_asset(imported_path)
+        if isinstance(asset, expected_type):
+            candidates.append((imported_path, asset))
+    if len(candidates) != 1:
+        _delete_attempt_owned_imports(returned)
+        raise RuntimeError(
+            f"import returned {len(candidates)} expected assets: {returned}")
+
+    source_path, asset = candidates[0]
+    source_package = _asset_package_path(asset)
+    if source_package != canonical_path:
+        if unreal.EditorAssetLibrary.does_asset_exist(canonical_path):
+            if not unreal.EditorAssetLibrary.delete_asset(canonical_path):
+                _delete_attempt_owned_imports(returned)
+                raise RuntimeError(
+                    f"canonical import target could not be replaced: {canonical_path}")
+        if not unreal.EditorAssetLibrary.rename_loaded_asset(asset, canonical_path):
+            _delete_attempt_owned_imports(returned)
+            raise RuntimeError(
+                f"imported asset could not move from {source_path} to {canonical_path}")
+
+    adopted = unreal.load_asset(canonical_path)
+    if (not isinstance(adopted, expected_type) or
+            _asset_package_path(adopted) != canonical_path):
+        _delete_attempt_owned_imports(returned)
+        raise RuntimeError(f"canonical imported asset differs: {canonical_path}")
+    removed = _delete_attempt_owned_imports(
+        returned, keep_packages=(canonical_path,))
+    return adopted, removed
+
+
 def _configure_reference_assets(manifest, created, updated, deleted):
     paths = rules.asset_paths("garner", 17, 21)
     mesh_package, mesh_name = paths["mesh"].rsplit("/", 1)
@@ -209,21 +266,15 @@ def _configure_reference_assets(manifest, created, updated, deleted):
                          source_bin["sha256"])
     if mesh_needs_import:
         imported = _import_asset(manifest_root / source_mesh["path"], mesh_package, mesh_name)
-        mesh = unreal.load_asset(paths["mesh"])
-        if not isinstance(mesh, unreal.StaticMesh):
-            raise RuntimeError(f"mesh import failed: {imported}")
+        mesh, removed = _adopt_imported_asset(
+            imported, paths["mesh"], unreal.StaticMesh)
         (updated if mesh_existed else created).append(_change(
             paths["mesh"], "/Script/Engine.StaticMesh",
             "REIMPORTED" if mesh_existed else "IMPORTED"))
-        for imported_path in imported:
-            if imported_path not in (
-                    paths["mesh"], f"{paths['mesh']}.{mesh_name}") and unreal.EditorAssetLibrary.does_asset_exist(
-                    imported_path):
-                if not unreal.EditorAssetLibrary.delete_asset(imported_path):
-                    raise RuntimeError(f"unexpected mesh import sidecar remains: {imported_path}")
-                deleted.append(_change(
-                    imported_path, "/Script/CoreUObject.Object",
-                    "UNEXPECTED_IMPORT_SIDECAR"))
+        for imported_path in removed:
+            deleted.append(_change(
+                imported_path, "/Script/CoreUObject.Object",
+                "UNEXPECTED_IMPORT_SIDECAR"))
     texture = unreal.load_asset(paths["texture"])
     texture_existed = isinstance(texture, unreal.Texture2D)
     texture_needs_import = (not texture_existed or

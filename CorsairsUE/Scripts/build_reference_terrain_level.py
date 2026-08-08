@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 
+sys.dont_write_bytecode = True
 _SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if not sys.path or sys.path[0] != _SCRIPT_DIR:
     sys.path.insert(0, _SCRIPT_DIR)
