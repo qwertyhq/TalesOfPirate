@@ -436,7 +436,9 @@ git commit -m "feat(converter): resolve legacy terrain layers"
 - Create: `tools/AssetConverter/src/StreamingPngWriter.cpp`
 - Create: `tools/AssetConverter/src/Sha256.cpp`
 - Create: `tools/AssetConverter/tests/TestStreamingPngWriter.cpp`
+- Modify: `tools/AssetConverter/include/Corsairs/Tools/AssetConverter/ImageCodec.h`
 - Modify: `tools/AssetConverter/src/PngWriter.cpp`
+- Modify: `tools/AssetConverter/tests/TestImageCodec.cpp`
 - Modify: `tools/AssetConverter/CMakeLists.txt`
 
 **Interfaces:**
@@ -465,26 +467,49 @@ std::optional<std::string> Sha256File(
 
 - [ ] **Step 1: Add RED tests**
 
-Write red/green and blue/white rows to a 2×2 image, decode it with `DecodeImageFile`, and compare all 16 RGBA bytes. Assert raw-pixel SHA-256:
+In `TestStreamingPngWriter.cpp`, write red/green and blue/white rows to a 2×2 image, decode it with `DecodeImageFile`, and compare all 16 literal RGBA bytes. Assert `Sha256Bytes` over those raw pixels:
 
 ```text
 c21b35e3f28e676cedf24c13575a7346682e101a2d26aad9598d0cdbcee9ee3b
 ```
 
-Also require deterministic PNG bytes, rejection of a wrong row length, rejection of an extra row, rejection of `Finish` before all rows, and `PeakRgbaRowBytes == 16384` for a 4096-pixel row.
+Require `Sha256File` over a written fixture to equal `Sha256Bytes` over the same file bytes, and require a missing file to return `std::nullopt` with a nonempty `detail`.
+
+Also require:
+
+- two writes of the same rows produce byte-identical PNG files;
+- a wrong row length is rejected without consuming a row;
+- an extra row is rejected;
+- `Finish` before all rows is rejected;
+- destroying a writer after an early `Finish` or without `Finish` removes its incomplete run-private file;
+- `PeakRgbaRowBytes == 16384` for a 4096-pixel row;
+- a low-entropy 4096-pixel fixture produces a PNG smaller than its filtered RGBA input, proving that the old stored-deflate path is not still in use;
+- deterministic pseudo-random rows produce more than 64 KiB of compressed payload and at least two consecutive `IDAT` chunks; parse the PNG and require every `IDAT` payload length to be in `1..65536`, then decode and compare the complete RGBA bytes.
+
+In `TestImageCodec.cpp`, replace `Png_WritesImageLargerThanOneDeflateBlock`, whose `size > 65535` assertion characterizes the obsolete uncompressed writer, with a compatibility-adapter test that requires the same large low-entropy image to compress, decode, and match its source pixels. Remove obsolete stored-deflate claims/comments from the adapter path.
 
 - [ ] **Step 2: Verify RED**
+
+Run these commands one at a time; do not overlap them with another build:
 
 ```bash
 nice -n 10 cmake --build tools/AssetConverter/build --target AssetConverterTests -j4
 nice -n 10 ./tools/AssetConverter/build/AssetConverterTests
 ```
 
-Expected compile failure because the streaming writer is absent.
+Expected: compilation fails because `StreamingPngWriter.h` and `Sha256.h` do not exist. Record that expected failure before production changes.
 
-- [ ] **Step 3: Implement zlib stream**
+- [ ] **Step 3: Implement zlib stream and SHA-256**
 
-Add `find_package(ZLIB REQUIRED)` and link `ZLIB::ZLIB`. `Open` writes PNG signature and IHDR. Each row is filtered and immediately passed into `deflate`; flush IDAT chunks no larger than 64 KiB. Keep only one source row and one bounded compressed chunk. Make existing `WritePng` a compatibility adapter over the streaming writer.
+Add `find_package(ZLIB REQUIRED)` and link `AssetConverterLib` privately to `ZLIB::ZLIB`. Absence of zlib must stop CMake configuration.
+
+`Open` validates nonzero PNG dimensions and overflow, initializes zlib, and writes the PNG signature and RGBA8 non-interlaced `IHDR`. Use PNG filter byte 0 for every row. Feed that byte and the caller-owned row directly to `deflate(..., Z_NO_FLUSH)`; do not retain a previous row or accumulate the image. Continue each call until all input is consumed, replacing output space and writing an `IDAT` whenever the fixed 64 KiB compressed buffer fills. `Finish` is legal only after exactly `height` rows and repeatedly calls `deflate(..., Z_FINISH)` with fresh output space until `Z_STREAM_END`, writes the final partial `IDAT`, then writes `IEND`. Every chunk CRC covers its type and payload. Call `deflateEnd` exactly once on every initialized stream, including failures.
+
+The writer owns only the current caller row span for the duration of `WriteRgbaRow`, one filter byte, zlib state, and one 64 KiB compressed buffer. `PeakRgbaRowBytes` records RGBA bytes only and may never exceed the largest accepted row. A wrong-length row, extra row, or early `Finish` must not create a successful PNG.
+
+Terrain callers write only to a private `runs/<run-id>/` or test directory. On an unfinished writer or terminal zlib/I/O error, close the stream and remove the incomplete file created by that writer. This task does not publish the terrain artifact set: Task 7 validates every run-private output and is the only owner of the temp-file plus atomic rename of the top-level `garner.reference-albedo.json`. A failed Task 4/5 artifact must never replace that manifest.
+
+Implement `Sha256Bytes` and streaming `Sha256File` in Task 4 so Task 5 can hash the PNG without reading the whole file. Hex output is lowercase and exactly 64 characters. Update `ImageCodec.h` to describe the zlib-backed compatibility adapter instead of claiming that the converter has no external dependency or uses stored deflate. Make existing `WritePng` validate the complete `DecodedImage` and then write its rows through `StreamingPngWriter`.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -495,16 +520,20 @@ nice -n 10 cmake --build tools/AssetConverter/build --target AssetConverterTests
 nice -n 10 ctest --test-dir tools/AssetConverter/build --output-on-failure
 ```
 
+Expected: all converter tests pass, the compatibility adapter emits readable compressed PNG files, and the multi-`IDAT` test proves the 64 KiB bound.
+
 - [ ] **Step 5: Commit**
 
 ```bash
 git add \
   tools/AssetConverter/CMakeLists.txt \
+  tools/AssetConverter/include/Corsairs/Tools/AssetConverter/ImageCodec.h \
   tools/AssetConverter/include/Corsairs/Tools/AssetConverter/StreamingPngWriter.h \
   tools/AssetConverter/include/Corsairs/Tools/AssetConverter/Sha256.h \
   tools/AssetConverter/src/StreamingPngWriter.cpp \
   tools/AssetConverter/src/Sha256.cpp \
   tools/AssetConverter/src/PngWriter.cpp \
+  tools/AssetConverter/tests/TestImageCodec.cpp \
   tools/AssetConverter/tests/TestStreamingPngWriter.cpp
 git commit -m "feat(converter): stream compressed png rows"
 ```
@@ -524,6 +553,8 @@ git commit -m "feat(converter): stream compressed png rows"
 - Modify: `tools/AssetConverter/CMakeLists.txt`
 
 **Interfaces:**
+
+`TerrainPageId` comes from Task 1 `TerrainPage.h`; do not redeclare it in this task. `Sha256Bytes` and `Sha256File` come from Task 4 `Sha256.h`; do not create or duplicate their implementation here.
 
 ```cpp
 struct TerrainBakeOptions {
@@ -573,7 +604,7 @@ Assert:
 - RGB565 values `0xf800`, `0x07e0`, `0x001f`, and `0xffff` expand to literal full-range red, green, blue, and white;
 - red base plus blue layer at alpha 128 produces `{127,0,128,255}`;
 - a synthetic four-color 2×2 page with `PixelsPerCell=1` decodes to the Task 4 SHA-256;
-- non-coplanar RGB565 corner interpolation follows the two source triangles, not bilinear interpolation.
+- non-coplanar RGB565 corner interpolation follows the two source triangles, not bilinear interpolation;
 - an asymmetric texture/alpha fixture produces literal corner/interior pixels that differ under nearest filtering, V flip, WRAP-vs-MIRROR, or missing texel-center offset.
 
 - [ ] **Step 2: Add RED real-Garner gates**
@@ -614,12 +645,14 @@ Focused in-process tests set `MaxRssBytes=std::numeric_limits<std::size_t>::max(
 
 - [ ] **Step 3: Verify RED**
 
+Run this build by itself, with no other heavy command active:
+
 ```bash
 cmake --build tools/AssetConverter/build \
   --target AssetConverterTests TerrainPageBudgetProbe -j4
 ```
 
-Expected compile error on `TerrainPageBaker.h`.
+Expected: compilation fails on `TerrainPageBaker.h`. Record that expected failure before production changes.
 
 - [ ] **Step 4: Implement fixed-pipeline bake**
 
@@ -632,9 +665,11 @@ For each output pixel:
 5. compute `legacyDiffuse = saturate(1.0 * RGB565 + 0)`;
 6. multiply the composite by diffuse and stream the RGBA row.
 
-Collect sorted used IDs, hashes, absent/unresolved counts, RSS, and output bytes. Fail before publishing a final manifest if any gate is violated.
+Collect sorted used IDs, hashes, absent/unresolved counts, RSS, and output bytes. Fail before publishing a final manifest if any gate is violated. The PNG is written only inside the caller-provided private run/test directory; Task 5 never replaces the top-level manifest. On any bake or writer failure, return `Ok=false`, preserve the writer `detail`, and remove any incomplete PNG owned by this attempt.
 
 - [ ] **Step 5: Verify GREEN**
+
+Run every command serially and keep the build at four jobs:
 
 ```bash
 cmake --build tools/AssetConverter/build \
