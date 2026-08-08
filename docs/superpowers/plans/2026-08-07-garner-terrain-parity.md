@@ -563,6 +563,7 @@ struct TerrainBakeOptions {
     std::size_t MaxTextureCacheBytes{32u * 1024u * 1024u};
     std::size_t MaxRssBytes{128u * 1024u * 1024u};
     std::size_t MaxPngBytes{96u * 1024u * 1024u};
+    std::size_t MaxRgbaRowBytes{16u * 1024u};
 };
 
 struct TerrainBakeResult {
@@ -586,6 +587,9 @@ struct TerrainBakeResult {
     std::size_t PeakRgbaRowBytes{0};
 };
 
+[[nodiscard]] std::optional<std::size_t> QueryPeakProcessRssBytes(
+    std::string& detail);
+
 TerrainBakeResult BakeTerrainPage(
     MapSectionReader& reader,
     const TerrainCatalog& catalog,
@@ -601,22 +605,101 @@ TerrainBakeResult BakeTerrainPage(
 Assert:
 
 - texture UV at source cell 0 equals cell 4;
-- RGB565 values `0xf800`, `0x07e0`, `0x001f`, and `0xffff` expand to literal full-range red, green, blue, and white;
-- red base plus blue layer at alpha 128 produces `{127,0,128,255}`;
-- a synthetic four-color 2×2 page with `PixelsPerCell=1` decodes to the Task 4 SHA-256;
-- non-coplanar RGB565 corner interpolation follows the two source triangles, not bilinear interpolation;
+- legacy `LW_RGB565TODWORD` shift/BGRA semantics are preserved exactly:
+  `0xf800 -> {0,0,248,255}`, `0x07e0 -> {0,252,0,255}`,
+  `0x001f -> {248,0,0,255}`, and `0xffff -> {248,252,248,255}`;
+  do not bit-replicate 5/6-bit channels to 255 and do not reinterpret the
+  stored word as conventional red-high RGB565;
+- with a full-red base texture, full-blue upper texture, atlas alpha 85,
+  `RGB565=0xffff`, ambient `{255,255,255}`, and `dwTColor=0`, source-over first
+  gives composite `{170,0,85}`, then legacy tint gives the independently
+  hand-derived final pixel `{165,0,83,255}`; this non-half alpha must fail if
+  the implementation truncates instead of rounding the blue channel;
+- a synthetic red/green/blue/white 2×2 texture page with
+  `PixelsPerCell=1`, no upper layers, and `RGB565=0xffff` decodes to literal
+  RGBA rows `{248,0,0,255}`, `{0,252,0,255}`, `{0,0,248,255}`,
+  `{248,252,248,255}` and raw-pixel SHA-256
+  `8bafca593a1e31e011a6efc6afaeb9c010a115a1268abb22cdd4079f1c00244f`;
+- corner order is exactly top-left 0, top-right 1, bottom-left 2, bottom-right
+  3. The source triangles are `0-1-2` for `localU+localV <= 1` and `3-2-1`
+  otherwise. With corner words `{0xf800,0x07e0,0x001f,0x0000}` and a white
+  texture, pixels at `(0.25,0.25)` and `(0.75,0.75)` are literally
+  `{62,63,124,255}` and `{62,63,0,255}`; bilinear interpolation is a failure;
 - an asymmetric texture/alpha fixture produces literal corner/interior pixels that differ under nearest filtering, V flip, WRAP-vs-MIRROR, or missing texel-center offset.
+
+Use this deterministic UNORM rule throughout the baker:
+
+```text
+roundUnorm8(x) = clamp(floor(x + 0.5), 0, 255)
+upperOver(base, upper, a) =
+    roundUnorm8((upper * a + base * (255 - a)) / 255)
+final = roundUnorm8(composite * interpolatedLegacyDiffuse / 255)
+```
+
+`SampleTerrainImageLinear` has already rounded each sampled RGBA channel by
+the Task 3 rule. Blend upper RGB channels in source order and quantize after
+every overlay. Expand the four RGB565 corners to the literal legacy RGBA8
+values above, barycentrically interpolate each diffuse RGB channel in double
+on the selected source triangle, and do not quantize that interpolation until
+the final multiply. Final alpha is 255 for a present textured land cell and 0
+for an absent/untextured cell; atlas alpha controls the RGB overlay and never
+turns an opaque base cell translucent.
+
+Add dimension and page-math RED cases. `CellsPerPage` and `PixelsPerCell` must
+be nonzero. Compute in checked 64-bit arithmetic:
+
+```text
+sourceX = page.X * CellsPerPage
+sourceY = page.Y * CellsPerPage
+pixelWidth = CellsPerPage * PixelsPerCell
+pixelHeight = CellsPerPage * PixelsPerCell
+rgbaRowBytes = pixelWidth * 4
+```
+
+Reject any conversion to `uint32_t`, `size_t`, stream size, or byte count that
+would overflow, any zero dimension, and any page whose half-open bounds plus
+the required right/bottom one-cell halo exceed the reader's truncated section
+grid. The production read is exactly `ReadWindow(SourceCellBounds, 1, 1)`.
+The halo supplies corner tint only: crop it out of page section statistics,
+the section-presence mask, used texture IDs, and unresolved-layer counts.
+Missing halo tiles needed by a page pixel are nevertheless fatal.
 
 - [ ] **Step 2: Add RED real-Garner gates**
 
 Assert:
 
-- source cell `(2233,2784)` uses only texture ID 4, `brick05`;
-- page `(17,21)` and the required frustum rectangle have no absent sections;
-- result source bounds are exactly `{2176,2688,128,128}` and its row-major section-presence mask covers the exact page section grid with every value 1;
+- all inputs are resolved beneath the explicit repo root as
+  `Client/map/garner.map`, `databases/gamedata.sqlite`, client root `Client`,
+  and `Client/texture/terrain/alpha/total.png`;
+- source cell `(2233,2784)` uses only texture ID 4 and resolves to the literal
+  `Client/texture/terrain/brick05.png`;
+- page `(17,21)` and required frustum rect `{2193,2756,80,47}` have no absent
+  sections;
+- result source bounds are exactly `{2176,2688,128,128}`; after excluding the
+  right/bottom halo its section result is exactly origin `(272,336)`, grid
+  `16x16`, a row-major mask of exactly 256 values, and every value is 1;
 - no used layer is unresolved;
-- two bakes have identical PNG SHA-256;
-- the in-process unit test requires a 4096×4096 output no larger than 96 MiB, `PeakTextureCacheBytes <= 32 MiB`, and `PeakRgbaRowBytes <= 16 KiB`; it does not claim an RSS bound because the aggregate `AssetConverterTests` process also runs compatibility tests that materialize full Garner.
+- `UsedTextureIds` is the sorted unique set of layers actually sampled by page
+  cells, excludes halo-only IDs, and is not a hard-coded illustrative set;
+- two bakes in distinct private directories produce the same PNG SHA-256;
+- each successful path is exactly
+  `<outputDirectory>/garner.albedo_<page.X>_<page.Y>.png`, `PngSha256` equals
+  `Sha256File(PngPath)`, the hash is 64 lowercase hexadecimal characters, and
+  `OutputBytes == std::filesystem::file_size(PngPath)`;
+- the in-process unit test requires a 4096×4096 output no larger than 96 MiB,
+  `PeakTextureCacheBytes <= 32 MiB`, and `PeakRgbaRowBytes <= 16 KiB`; it does
+  not claim an RSS bound because the aggregate `AssetConverterTests` process
+  also runs compatibility tests that materialize full Garner.
+
+Add production-path negative tests for every fatal gate: zero/overflow/out-of-
+grid page math, missing used catalog ID, unreadable resolved source texture,
+unreadable/malformed alpha atlas, absent page section, missing required halo
+tile, RSS limit, PNG-size limit, texture-cache limit, and RGBA-row limit. Drive
+each budget comparison through the same production gate used by
+`BakeTerrainPage`, not a copied test predicate. Every case requires
+`Ok=false`, a nonempty stable `detail`, no successful hash/path, and no PNG
+owned by that attempt after return. A used unresolved ID is always fatal;
+`UnresolvedLayers` is diagnostic evidence, never permission to publish.
 
 Add the exact CMake target and CTest:
 
@@ -639,16 +722,25 @@ set_tests_properties(
         ${CORSAIRS_REPO_ROOT})
 ```
 
-`AssetConverterLib` is the existing shared production library target already used by `AssetConverter` and `AssetConverterTests`; the probe links it instead of compiling a divergent implementation. `TerrainPageBudgetProbe` requires the explicit `--repo-root` argument, resolves every real input beneath that root, performs only one production bake in a fresh process, and exits nonzero unless peak RSS is at most 128 MiB, PNG size at most 96 MiB, texture cache at most 32 MiB, and row staging at most 16 KiB.
+`AssetConverterLib` is the existing shared production library target already used by `AssetConverter` and `AssetConverterTests`; the probe links it instead of compiling a divergent implementation. `TerrainPageBudgetProbe` requires exactly one explicit `--repo-root` argument, rejects missing/extra arguments, resolves every real input beneath that root, performs only one production bake in a fresh process, and exits nonzero unless peak RSS is at most 128 MiB, PNG size at most 96 MiB, texture cache at most 32 MiB, and row staging at most 16 KiB.
 
 Focused in-process tests set `MaxRssBytes=std::numeric_limits<std::size_t>::max()` and assert the recorded value only. The standalone budget probe and production command keep the 128 MiB option and are the only tests that verdict RSS.
+
+`QueryPeakProcessRssBytes` reports the process lifetime peak resident set in
+bytes: macOS uses `getrusage(RUSAGE_SELF).ru_maxrss` directly, Linux multiplies
+its KiB value by 1024 with checked arithmetic, and Windows uses
+`PROCESS_MEMORY_COUNTERS::PeakWorkingSetSize`. An API/OS/overflow failure
+returns `nullopt` with nonempty `detail` and makes the bake fail. Do not silently
+return zero or current RSS. Query after `Finish`, file size, and SHA work so the
+record covers the complete attempt; the fresh-process probe makes the lifetime
+peak a meaningful standalone verdict.
 
 - [ ] **Step 3: Verify RED**
 
 Run this build by itself, with no other heavy command active:
 
 ```bash
-cmake --build tools/AssetConverter/build \
+nice -n 10 cmake --build tools/AssetConverter/build \
   --target AssetConverterTests TerrainPageBudgetProbe -j4
 ```
 
@@ -656,28 +748,61 @@ Expected: compilation fails on `TerrainPageBaker.h`. Record that expected failur
 
 - [ ] **Step 4: Implement fixed-pipeline bake**
 
+Before rendering, validate every checked dimension and call
+`ReadWindow(SourceCellBounds, 1, 1)`. Derive the page-only section origin/grid
+from the half-open source bounds; do not forward Task 1's halo-inclusive
+`SectionPresent` vector as the result mask.
+
 For each output pixel:
 
 1. derive source cell and pixel-center coordinates `localU=(pixelInCellX+0.5)/PixelsPerCell`, `localV=(pixelInCellY+0.5)/PixelsPerCell`;
 2. sample base texture with `u=((cellX mod 4)+localU)/4`, `v=((cellY mod 4)+localV)/4`, level-0 linear filtering, top-row V orientation, and WRAP on both axes;
 3. for each upper layer, sample its terrain texture with the same coordinates/WRAP; sample the alpha atlas with `u=rectU0+0.01+localU*(0.25-0.02)`, `v=rectV0+0.01+localV*(0.25-0.02)`, linear filtering, and MIRROR on both axes; overlay in source order with the sampled atlas alpha;
-4. triangle-interpolate RGB565 tint;
-5. compute `legacyDiffuse = saturate(1.0 * RGB565 + 0)`;
-6. multiply the composite by diffuse and stream the RGBA row.
+4. expand RGB565 with the exact legacy shifts, select triangle `0-1-2` or
+   `3-2-1`, and barycentrically interpolate its diffuse RGB;
+5. compute the fixed ambient contribution with ambient bytes `{255,255,255}`
+   and `dwTColor={0,0,0}`; never apply the scene-object factor 0.6;
+6. apply the specified UNORM quantization order, multiply composite by
+   diffuse, and immediately stream that one RGBA row.
 
-Collect sorted used IDs, hashes, absent/unresolved counts, RSS, and output bytes. Fail before publishing a final manifest if any gate is violated. The PNG is written only inside the caller-provided private run/test directory; Task 5 never replaces the top-level manifest. On any bake or writer failure, return `Ok=false`, preserve the writer `detail`, and remove any incomplete PNG owned by this attempt.
+The baker may retain only page-plus-halo tiles, one decoded alpha atlas, the
+bounded LRU contents, per-pixel/per-layer temporaries, one `pixelWidth*4` RGBA
+row, Task 4's 64 KiB compressed buffer, and writer/zlib state. It must never
+allocate or retain a full-page RGBA vector, full decoded output, complete PNG,
+all source textures outside the cache, or whole-map tiles. The implementation
+review records this ownership invariant because `PeakRgbaRowBytes` observes
+the writer row, not arbitrary hidden baker allocations.
+
+Resolve and sample layers only for page cells. Missing catalog entries and any
+source/atlas decode failure are fatal before success. Collect the sorted unique
+page-only IDs, page-only absent/unresolved counts, cropped section mask, cache
+and row peaks, actual file size, actual file SHA, and process peak RSS. Compare
+every metric with `<=` against its option, including `MaxRgbaRowBytes`.
+
+Write only the deterministic leaf
+`garner.albedo_<page.X>_<page.Y>.png` inside the caller-provided private
+run/test directory. Call `StreamingPngWriter::Finish`, then obtain
+`OutputBytes` from `filesystem::file_size`, `PngSha256` from Task 4
+`Sha256File`, and RSS from `QueryPeakProcessRssBytes`; do not hash decoded
+pixels for `PngSha256`. Set `Ok=true` and clear `detail` only after all gates
+pass. On validation, catalog, decode, writer, file-size, SHA, RSS, or budget
+failure, preserve the first actionable nonempty `detail`, return `Ok=false`,
+clear successful path/hash fields, and remove any partial or completed PNG
+owned by this attempt. Task 5 never writes or replaces the top-level manifest;
+Task 7 alone validates all run-private files and atomically publishes it.
 
 - [ ] **Step 5: Verify GREEN**
 
 Run every command serially and keep the build at four jobs:
 
 ```bash
-cmake --build tools/AssetConverter/build \
+nice -n 10 cmake --build tools/AssetConverter/build \
   --target AssetConverter AssetConverterTests TerrainPageBudgetProbe -j4
-ctest --test-dir tools/AssetConverter/build --output-on-failure
-ctest --test-dir tools/AssetConverter/build \
-  --output-on-failure -R '^TerrainPageBudget$'
-"$PWD/tools/AssetConverter/build/TerrainPageBudgetProbe" \
+nice -n 10 ctest --test-dir tools/AssetConverter/build \
+  --output-on-failure -j1
+nice -n 10 ctest --test-dir tools/AssetConverter/build \
+  --output-on-failure -j1 -R '^TerrainPageBudget$'
+nice -n 10 "$PWD/tools/AssetConverter/build/TerrainPageBudgetProbe" \
   --repo-root "$PWD"
 ```
 
