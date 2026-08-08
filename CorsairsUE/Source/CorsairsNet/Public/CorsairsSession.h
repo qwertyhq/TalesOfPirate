@@ -349,6 +349,9 @@ public:
 		TFunction<bool(Corsairs::Net::WPacket&)> Override);
 	void SetInWorldForTests(
 		int64 InWorldId, FIntPoint Spawn);
+	void SetInWorldAndBroadcastForTests(
+		const FCorsairsWorldActor& InLocalActor,
+		const FString& InMapName);
 	void SetMovementSpeedForTests(int64 Speed);
 	void AddVisibleActorForTests(
 		const FCorsairsWorldActor& Actor);

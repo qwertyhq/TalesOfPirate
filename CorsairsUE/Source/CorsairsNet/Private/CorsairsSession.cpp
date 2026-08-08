@@ -610,6 +610,7 @@ void UCorsairsSession::Logout()
 		Connection = nullptr;
 	}
 	LocalActor = FCorsairsWorldActor{};
+	VisibleActors.Reset();
 	++ActionReducerGeneration;
 	ActionReducer.Reset();
 	PublishMovementAuthorityIfChanged();
@@ -1117,6 +1118,28 @@ void UCorsairsSession::SetInWorldForTests(
 	ActionReducer.EnterWorld(InWorldId, Spawn);
 	PublishMovementAuthorityIfChanged();
 	Stage = ECorsairsLoginStage::InWorld;
+}
+
+void UCorsairsSession::SetInWorldAndBroadcastForTests(
+	const FCorsairsWorldActor& InLocalActor,
+	const FString& InMapName)
+{
+	WorldId = InLocalActor.WorldId;
+	LocalActor = InLocalActor;
+	SpawnPosition = InLocalActor.Position;
+	MapName = InMapName;
+	ActionPacketId = 0;
+	MovementBeginSendCount = 0;
+	++ActionReducerGeneration;
+	ActionReducer.EnterWorld(WorldId, SpawnPosition);
+	PublishMovementAuthorityIfChanged();
+	SetStage(
+		ECorsairsLoginStage::InWorld,
+		FString::Printf(
+			TEXT("тестовая карта %s, позиция (%d, %d)"),
+			*MapName,
+			SpawnPosition.X,
+			SpawnPosition.Y));
 }
 
 void UCorsairsSession::SetMovementSpeedForTests(const int64 Speed)

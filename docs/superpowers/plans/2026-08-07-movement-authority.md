@@ -850,6 +850,10 @@ and load reason, does not bind the local pawn to Session, blocks later
 The same failure after an earlier successful activation must detach the old
 Session and character-ground sampler, restore non-flying movement, stop
 velocity, and consume pending prediction input before scheduling logout.
+It must also detach and destroy every registered remote character and empty
+all three GameMode remote registries before the deferred logout. Logout clears
+the Session visible-actor cache before broadcasting `Idle`, so neither a later
+observer nor a retry can reuse actors from the failed map.
 
 - [ ] **Step 3: Verify RED**
 

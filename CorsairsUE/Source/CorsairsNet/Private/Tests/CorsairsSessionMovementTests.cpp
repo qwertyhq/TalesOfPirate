@@ -971,8 +971,20 @@ bool FCorsairsSessionResetTest::RunTest(const FString&)
 
 	Session->SetInWorldForTests(LocalWorldId, Spawn);
 	Session->SetSendOverrideForTests([](WPacket&) { return true; });
+	FCorsairsWorldActor VisibleActor;
+	VisibleActor.WorldId = RemoteWorldId;
+	VisibleActor.Position = FIntPoint(2000, 3000);
+	Session->AddVisibleActorForTests(VisibleActor);
 	Session->SubmitPredictedPosition(FIntPoint(1300, 2000));
+	TestEqual(TEXT("logout precondition is in world"),
+		Session->GetStage(), ECorsairsLoginStage::InWorld);
+	TestEqual(TEXT("logout precondition has visible actor"),
+		Session->GetVisibleActors().Num(), 1);
 	Session->Logout();
+	TestEqual(TEXT("logout returns stage to idle"),
+		Session->GetStage(), ECorsairsLoginStage::Idle);
+	TestEqual(TEXT("logout clears visible actors"),
+		Session->GetVisibleActors().Num(), 0);
 	TestFalse(TEXT("logout clears reducer pending MOVE"),
 		Session->HasPendingMoveForDiagnostics());
 	TestEqual(TEXT("logout clears confirmed position"),

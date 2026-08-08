@@ -481,6 +481,37 @@ bool FCorsairsCharacterGroundActivationFailureTest::RunTest(const FString&)
 		TEXT("previous activation leaves pending prediction input"),
 		Pawn->GetPendingMovementInputVector().IsNearlyZero());
 
+	FCorsairsWorldActor Remote;
+	Remote.WorldId = 88;
+	Remote.Name = TEXT("GroundFailureRemote");
+	Remote.Position = FIntPoint(0, 0);
+	Remote.TypeId = 1;
+	Session->AddVisibleActorForTests(Remote);
+	const int32 CharactersBeforeRemote = CountCharacters(World);
+	GameMode->HandleActorSeenForTests(Remote);
+	TestEqual(
+		TEXT("previous world registers a real remote actor"),
+		CountCharacters(World),
+		CharactersBeforeRemote + 1);
+	TestEqual(
+		TEXT("all previous remote registries contain the actor"),
+		GameMode->GetRemoteRegistryCountsForTests(),
+		FIntVector(1, 1, 1));
+	TestEqual(
+		TEXT("session cache contains the previous remote"),
+		Session->GetVisibleActors().Num(),
+		1);
+	ACorsairsCharacter* RegisteredRemote = nullptr;
+	for (TActorIterator<ACorsairsCharacter> It(World); It; ++It)
+	{
+		if (*It != Pawn)
+		{
+			RegisteredRemote = *It;
+			break;
+		}
+	}
+	TestNotNull(TEXT("registered remote actor is discoverable"), RegisteredRemote);
+
 	const FString MapName = TEXT("__corsairs_missing_activation_ground__");
 	const FString MetadataPath =
 		FPaths::ProjectDir() / TEXT("Data/Heights") /
@@ -501,12 +532,19 @@ bool FCorsairsCharacterGroundActivationFailureTest::RunTest(const FString&)
 		MapName,
 		EAutomationExpectedErrorFlags::Contains,
 		2);
-	TestFalse(
-		TEXT("missing runtime ground rejects local activation"),
-		GameMode->ActivateLocalCharacterForTests(
-			Pawn,
-			MapName,
-			FIntPoint(0, 0)));
+	FCorsairsWorldActor LocalActor;
+	LocalActor.WorldId = 77;
+	LocalActor.Name = TEXT("GroundFailureLocal");
+	LocalActor.Position = FIntPoint(0, 0);
+	LocalActor.TypeId = 1;
+	LocalActor.Look.TypeId = 1;
+	LocalActor.Look.HairId = 2000;
+	LocalActor.Look.EquipIds.SetNumZeroed(CorsairsEquipSlotCount);
+	LocalActor.Look.EquipIds[1] = 255;
+	LocalActor.Look.EquipIds[2] = 289;
+	LocalActor.Look.EquipIds[3] = 465;
+	LocalActor.Look.EquipIds[4] = 641;
+	Session->SetInWorldAndBroadcastForTests(LocalActor, MapName);
 	TestEqual(
 		TEXT("startup error preserves exact path and load reason"),
 		GameMode->GetStartupError(),
@@ -535,15 +573,27 @@ bool FCorsairsCharacterGroundActivationFailureTest::RunTest(const FString&)
 		TEXT("failed activation does not bind authority delegate"),
 		CountAuthorityBindings(Session, Pawn),
 		0);
+	TestTrue(
+		TEXT("failed activation destroys a previously registered remote"),
+		RegisteredRemote != nullptr && RegisteredRemote->IsActorBeingDestroyed());
+	TestEqual(
+		TEXT("failed activation empties all remote registries"),
+		GameMode->GetRemoteRegistryCountsForTests(),
+		FIntVector::ZeroValue);
+	TestEqual(
+		TEXT("failed activation removes the remote actor immediately"),
+		CountCharacters(World),
+		1);
+	TestEqual(
+		TEXT("deferred logout leaves session cache intact before tick"),
+		Session->GetVisibleActors().Num(),
+		1);
 	TestEqual(
 		TEXT("logout is not reentrant inside stage callback"),
 		Session->GetStage(),
 		ECorsairsLoginStage::InWorld);
 
 	const int32 CharactersBeforeSeen = CountCharacters(World);
-	FCorsairsWorldActor Remote;
-	Remote.WorldId = 88;
-	Remote.Position = FIntPoint(0, 0);
 	GameMode->HandleActorSeenForTests(Remote);
 	TestEqual(
 		TEXT("ActorSeen after ground failure spawns nothing"),
@@ -555,6 +605,14 @@ bool FCorsairsCharacterGroundActivationFailureTest::RunTest(const FString&)
 		TEXT("failed activation logs out on the next safe tick"),
 		Session->GetStage(),
 		ECorsairsLoginStage::Idle);
+	TestEqual(
+		TEXT("logout clears the session visible-actor cache"),
+		Session->GetVisibleActors().Num(),
+		0);
+	TestEqual(
+		TEXT("logout does not repopulate remote registries"),
+		GameMode->GetRemoteRegistryCountsForTests(),
+		FIntVector::ZeroValue);
 	TestWorld.ForwardErrorMessages(this);
 	return true;
 }
@@ -649,6 +707,115 @@ bool FCorsairsCharacterGroundActorsTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsCharacterGroundEndPlayTest,
+	"Corsairs.Movement.Ground.EndPlayDetachesOwnedSampler",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsCharacterGroundEndPlayTest::RunTest(const FString&)
+{
+	FTestWorldWrapper TestWorld;
+	if (!TestTrue(
+		TEXT("end-play world created"),
+		TestWorld.CreateTestWorld(EWorldType::Game)))
+	{
+		return false;
+	}
+	UWorld* World = TestWorld.GetTestWorld();
+	ACorsairsGameMode* GameMode = World->SpawnActor<ACorsairsGameMode>(
+		ACorsairsGameMode::StaticClass(),
+		FVector::ZeroVector,
+		FRotator::ZeroRotator,
+		AlwaysSpawnParameters());
+	APlayerController* Controller = World->SpawnActor<APlayerController>();
+	ACorsairsPlayerCharacter* Local =
+		World->SpawnActor<ACorsairsPlayerCharacter>(
+			ACorsairsPlayerCharacter::StaticClass(),
+			FVector::ZeroVector,
+			FRotator::ZeroRotator,
+			AlwaysSpawnParameters());
+	TestNotNull(TEXT("end-play game mode spawned"), GameMode);
+	TestNotNull(TEXT("end-play controller spawned"), Controller);
+	TestNotNull(TEXT("end-play local pawn spawned"), Local);
+	if (GameMode == nullptr || Controller == nullptr || Local == nullptr)
+	{
+		return false;
+	}
+	GameMode->bAutoLogin = false;
+	Controller->Possess(Local);
+	if (!TestTrue(
+		TEXT("end-play world begins play"),
+		TestWorld.BeginPlayInTestWorld()))
+	{
+		TestWorld.ForwardErrorMessages(this);
+		return false;
+	}
+
+	FString Error;
+	const TArray<uint8> InitialBytes = {0x01, 0x00, 0x00, 0x00};
+	TestTrue(
+		TEXT("end-play fixture loads initial owned sampler"),
+		GameMode->LoadCharacterGroundFromBytesForTests(
+			1,
+			1,
+			InitialBytes,
+			Error));
+	GameMode->GroundCharacterForTests(Local, FIntPoint(0, 0));
+
+	FCorsairsWorldActor RemoteState;
+	RemoteState.WorldId = 99;
+	RemoteState.Name = TEXT("EndPlayRemote");
+	RemoteState.Position = FIntPoint(0, 0);
+	RemoteState.TypeId = 1;
+	GameMode->HandleActorSeenForTests(RemoteState);
+	ACorsairsCharacter* Remote = nullptr;
+	for (TActorIterator<ACorsairsCharacter> It(World); It; ++It)
+	{
+		if (*It != Local)
+		{
+			Remote = *It;
+			break;
+		}
+	}
+	TestNotNull(TEXT("end-play registered remote exists"), Remote);
+	TestEqual(
+		TEXT("end-play precondition fills all registries"),
+		GameMode->GetRemoteRegistryCountsForTests(),
+		FIntVector(1, 1, 1));
+
+	const TArray<uint8> ReloadedBytes = {0x04, 0x00, 0x00, 0x00};
+	TestTrue(
+		TEXT("game mode reloads its sampler without replacing owner"),
+		GameMode->LoadCharacterGroundFromBytesForTests(
+			1,
+			1,
+			ReloadedBytes,
+			Error));
+	Local->SetActorLocation(FVector(0.0, 0.0, 1000.0));
+	TestWorld.TickTestWorld(1.0f / 60.0f);
+	TestEqual(
+		TEXT("attached pawn samples successful reload through stable address"),
+		Local->GetActorLocation().Z,
+		108.0);
+
+	TestTrue(TEXT("game mode accepts explicit destroy"), GameMode->Destroy());
+	TestTrue(
+		TEXT("EndPlay restores local gravity"),
+		Local->GetCharacterMovement()->GravityScale > 0.0f);
+	TestTrue(
+		TEXT("EndPlay leaves local outside flying mode"),
+		Local->GetCharacterMovement()->MovementMode != MOVE_Flying);
+	TestTrue(
+		TEXT("EndPlay destroys registered remote"),
+		Remote != nullptr && Remote->IsActorBeingDestroyed());
+	TestEqual(
+		TEXT("EndPlay empties all remote registries"),
+		GameMode->GetRemoteRegistryCountsForTests(),
+		FIntVector::ZeroValue);
+	TestWorld.ForwardErrorMessages(this);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCorsairsCharacterGroundPreservesFlyingTest,
 	"Corsairs.Movement.Ground.PreservesFlyingMovementMode",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -708,6 +875,25 @@ bool FCorsairsCharacterGroundPreservesFlyingTest::RunTest(const FString&)
 		TEXT("tick grounds pawn center from attached raster"),
 		Pawn->GetActorLocation().Z,
 		148.0);
+
+	const TArray<uint8> ReloadedBytes = {0x01, 0x02, 0x03, 0x04};
+	TestTrue(
+		TEXT("attached sampler reloads at the same address"),
+		Ground.LoadFromBytes(1, 1, ReloadedBytes, Error));
+	Pawn->SetActorLocation(FVector(49.6, -49.6, 1000.0));
+	TestWorld.TickTestWorld(1.0f / 60.0f);
+	TestEqual(
+		TEXT("tick keeps fractional X after rounding sample coordinate"),
+		Pawn->GetActorLocation().X,
+		49.6);
+	TestEqual(
+		TEXT("tick keeps mirrored fractional Y after sampling"),
+		Pawn->GetActorLocation().Y,
+		-49.6);
+	TestEqual(
+		TEXT("tick rounds X and inverted Y into bottom-right quadrant"),
+		Pawn->GetActorLocation().Z,
+		108.0);
 
 	TestWorld.ForwardErrorMessages(this);
 	return true;

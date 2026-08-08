@@ -101,17 +101,7 @@ void ACorsairsGameMode::EndPlay(const EEndPlayReason::Type Reason)
 		Local->AttachCharacterGround(nullptr);
 	}
 
-	for (TPair<int64, TObjectPtr<ACorsairsCharacter>>& Pair : WorldActors)
-	{
-		if (Pair.Value != nullptr)
-		{
-			Pair.Value->AttachCharacterGround(nullptr);
-			Pair.Value->Destroy();
-		}
-	}
-	WorldActors.Empty();
-	WorldActorNames.Empty();
-	WorldActorArchetypes.Empty();
+	CleanupRemoteActors();
 	CharacterGround.Reset();
 
 	if (Session != nullptr)
@@ -324,6 +314,7 @@ bool ACorsairsGameMode::ActivateLocalCharacter(
 	{
 		Character->AttachSession(nullptr);
 		Character->AttachCharacterGround(nullptr);
+		CleanupRemoteActors();
 		ScheduleSessionLogoutAfterGroundFailure();
 		return false;
 	}
@@ -331,6 +322,21 @@ bool ACorsairsGameMode::ActivateLocalCharacter(
 	GroundCharacter(Character, SourcePosition);
 	Character->AttachSession(Session);
 	return true;
+}
+
+void ACorsairsGameMode::CleanupRemoteActors()
+{
+	for (TPair<int64, TObjectPtr<ACorsairsCharacter>>& Pair : WorldActors)
+	{
+		if (Pair.Value != nullptr)
+		{
+			Pair.Value->AttachCharacterGround(nullptr);
+			Pair.Value->Destroy();
+		}
+	}
+	WorldActors.Empty();
+	WorldActorNames.Empty();
+	WorldActorArchetypes.Empty();
 }
 
 void ACorsairsGameMode::ScheduleSessionLogoutAfterGroundFailure()
@@ -384,14 +390,6 @@ ACorsairsCharacter* ACorsairsGameMode::SpawnRemoteCharacterForTests(
 	const FRotator Rotation)
 {
 	return SpawnRemoteCharacter(SourcePosition, Rotation);
-}
-
-bool ACorsairsGameMode::ActivateLocalCharacterForTests(
-	ACorsairsPlayerCharacter* Character,
-	const FString& MapName,
-	const FIntPoint SourcePosition)
-{
-	return ActivateLocalCharacter(Character, MapName, SourcePosition);
 }
 
 void ACorsairsGameMode::HandleActorSeenForTests(
