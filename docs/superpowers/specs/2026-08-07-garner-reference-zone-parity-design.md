@@ -114,7 +114,13 @@ reference-bake, ни в воспроизводимой конверсии full-m
 
 Для page-bake reader материализует только прямоугольник 128×128 клеток и
 одноклеточный halo, необходимый интерполяции на правой и нижней границе.
-Секции освобождаются после завершения страницы. Таблица смещений, page tiles,
+Любой absent sample внутри owned 128×128 или required-present rect
+фатален. Offset-zero section в right/bottom halo разрешена: оригинальный
+`MPMap::GetTile` возвращает для неё shared default tile с
+`fHeight=-2.0 m`, `dwColor=0xffffffff` и `dwTColor=0`. Поэтому
+presence bit авторитетен: нулевые или stale bytes в absent `MapTile`
+никогда не интерпретируются как реальный raw tile. Секции
+освобождаются после завершения страницы. Таблица смещений, page tiles,
 alpha atlas, одна output row и ограниченный texture cache входят в общий
 gate RSS 128 MiB.
 
@@ -147,10 +153,15 @@ reference/full-map команда попала в `ReadWholeFile`, создал�
   семплирует atlas.
 
 `MapSectionReader` передаёт per-section presence mask в page manifest. Она
-нужна для отчёта и будущего sea pass. В этом цикле отсутствующая section даёт
-прозрачные pixels, а checker требует ноль absent sections в странице
-`(17,21)` и в literal camera-frustum bounds. Анимированное море не
-подменяется плоской заглушкой и остаётся отдельным следующим циклом.
+нужна для отчёта и будущего sea pass. Owned и required-present
+absent section фатальна; generic absent owned cell давала бы прозрачные
+pixels, но reference-page `(17,21)` обязана иметь ноль absent sections.
+Halo не входит в page mask, absent/unresolved counts и used texture IDs.
+В частности, default tile texture 22 не семплируется и не добавляется
+в `usedTextureIds` только из-за absent halo: для owned quad halo
+поставляет только corner
+diffuse/height, а texture layers и UV берутся из owned cell. Анимированное
+море не подменяется плоской заглушкой и остаётся отдельным следующим циклом.
 
 Каталог `textureId -> source path` читается из отслеживаемой
 `databases/gamedata.sqlite`, таблица `terrains`. Terrain textures находятся в
@@ -168,6 +179,14 @@ reference/full-map команда попала в `ReadWholeFile`, создал�
 4. интерполирует RGB565 tint по тем же двум треугольникам terrain quad;
 5. вычисляет static vertex diffuse по исходной формуле;
 6. умножает texture composite на vertex diffuse.
+
+Все четыре corner samples читаются presence-aware. Для present tile
+RGB565 декодируется по legacy shifts. Для absent halo corner нет
+raw RGB565: берётся literal runtime `dwColor=0xffffffff`, то есть
+diffuse `{255,255,255,255}`, и `dwTColor=0`. Подставить сюда raw
+`0xffff` нельзя: legacy decode дал бы `{248,252,248,255}`. Texture и
+alpha UV по-прежнему вычисляются из owned cell; absent halo bytes на них
+не влияют.
 
 Terrain рендерится до того, как `CGameScene::_Render` устанавливает
 `m_dwEnvColor=0.6` для scene objects. `RenderStateMgr::BeginScene` ambient не
@@ -209,6 +228,10 @@ Manifest содержит:
 
 Terrain mesh режется по тем же границам 128×128 клеток. UV0 каждой страницы
 нормализован в `[0,1]`.
+Все 129×129 source vertices читаются через тот же presence contract:
+present `Height` означает `raw*10 cm`, absent right/bottom halo означает
+literal runtime height `-200 cm`, а bytes absent `MapTile` игнорируются.
+Absent owned sample остаётся fatal.
 
 Геометрический `Step` выбирается для каждой страницы из `{4,2,1}`. Converter
 сравнивает высоту исходной per-cell поверхности с треугольниками
@@ -645,6 +668,16 @@ Editor не является входом.
 - повторный bake даёт те же SHA-256;
 - synthetic large-map fixture доказывает, что production reader не вызывает
   `ReadWholeFile` и держит не больше page+halo;
+- Garner page+halo имеет ровно одну absent section-mask ячейку
+  с local index `254` и ровно восемь absent tile samples
+  `local x=128, y=112..119`;
+- для правой Garner boundary высоты в cm точно
+  `H(127,112..119)=-60`, `H(128,112..119)=-200`,
+  `H(127,120)=H(128,120)=-100`; поэтому corner arrays
+  `TL,TR,BL,BR` равны `[-60,-200,-60,-200]` для
+  `y=112..118` и `[-60,-200,-100,-100]` для `y=119`;
+- изменение stale bytes в этих восьми slots не меняет PNG/glTF/bin,
+  а missing owned sample делает bake/mesh невалидным;
 - reference output укладывается в 128 MiB RSS и 96 MiB file budget;
 - max/RMS geometry errors проходят пороги 5/2 см.
 

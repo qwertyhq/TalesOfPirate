@@ -660,9 +660,21 @@ Reject any conversion to `uint32_t`, `size_t`, stream size, or byte count that
 would overflow, any zero dimension, and any page whose half-open bounds plus
 the required right/bottom one-cell halo exceed the reader's truncated section
 grid. The production read is exactly `ReadWindow(SourceCellBounds, 1, 1)`.
-The halo supplies corner tint only: crop it out of page section statistics,
-the section-presence mask, used texture IDs, and unresolved-layer counts.
-Missing halo tiles needed by a page pixel are nevertheless fatal.
+Every owned sample (`localX < CellsPerPage && localY < CellsPerPage`) and every
+sample in the required-present rectangle must be present. An offset-zero section is allowed
+only in the right/bottom halo. The original client returns its shared default
+tile for such a neighbor: `dwColor=0xffffffff`, `dwTColor=0`, and
+`fHeight=-2.0m`. Task 5 therefore uses literal corner diffuse
+`{255,255,255,255}` for an absent halo sample. It must not decode fabricated
+RGB565 `0xffff` (`{248,252,248,255}`), and it must not consult zero/stale bytes
+in the absent `MapTile` slot.
+
+The halo supplies corner tint only in Task 5. Texture layers and texture/alpha
+UVs remain those of the owned cell. Crop the halo out of page section
+statistics, the section-presence mask, used texture IDs, absent/unresolved
+counts, and catalog resolution. In particular, the runtime default tile's
+texture 22 is never sampled or added to `UsedTextureIds` merely because a
+halo sample is absent.
 
 - [ ] **Step 2: Add RED real-Garner gates**
 
@@ -678,6 +690,22 @@ Assert:
 - result source bounds are exactly `{2176,2688,128,128}`; after excluding the
   right/bottom halo its section result is exactly origin `(272,336)`, grid
   `16x16`, a row-major mask of exactly 256 values, and every value is 1;
+- the actual `129x129` Garner page-plus-halo read spans a `17x17` section
+  presence mask with exactly one zero at local row-major index
+  `14*17+16 == 254`, corresponding to source section `(288,350)` and offset
+  table byte `717972`; `TilePresent` has exactly eight zeros at local
+  `(x=128,y=112..119)`, source `(2304,2800..2807)`, and every owned sample is
+  present;
+- those eight absent halo samples contribute literal full-white diffuse; two
+  otherwise identical bakes whose absent `MapTile` slots contain different
+  stale `Color`, `Height`, `BaseTex`, and `TileInfo` bytes produce identical
+  PNG bytes/hash and identical `UsedTextureIds`;
+- in `TL,TR,BL,BR` order, the right-edge cells at local `(127,y)` have
+  diffuse-presence arrays `[present,default-white,present,default-white]` for
+  `y=112..118` and `[present,default-white,present,present]` for `y=119`.
+  Every present word is raw `Color=0xffff` and therefore decodes to
+  `{248,252,248,255}`, while only the absent entries are literal
+  `{255,255,255,255}`;
 - no used layer is unresolved;
 - `UsedTextureIds` is the sorted unique set of layers actually sampled by page
   cells, excludes halo-only IDs, and is not a hard-coded illustrative set;
@@ -692,14 +720,17 @@ Assert:
   also runs compatibility tests that materialize full Garner.
 
 Add production-path negative tests for every fatal gate: zero/overflow/out-of-
-grid page math, missing used catalog ID, unreadable resolved source texture,
-unreadable/malformed alpha atlas, absent page section, missing required halo
-tile, RSS limit, PNG-size limit, texture-cache limit, and RGBA-row limit. Drive
-each budget comparison through the same production gate used by
-`BakeTerrainPage`, not a copied test predicate. Every case requires
-`Ok=false`, a nonempty stable `detail`, no successful hash/path, and no PNG
-owned by that attempt after return. A used unresolved ID is always fatal;
-`UnresolvedLayers` is diagnostic evidence, never permission to publish.
+grid page math, missing owned sample/section, missing required-present sample,
+missing used catalog ID, unreadable resolved source texture,
+unreadable/malformed alpha atlas, RSS limit, PNG-size limit, texture-cache
+limit, and RGBA-row limit. Pair the missing-owned mutation with an otherwise
+identical missing-halo case which must pass, and mutate the absent halo slot's
+stale bytes to prove they are ignored. Drive each budget comparison through
+the same production gate used by `BakeTerrainPage`, not a copied test
+predicate. Every fatal case requires `Ok=false`, a nonempty stable `detail`,
+no successful hash/path, and no PNG owned by that attempt after return. A used
+unresolved ID is always fatal; `UnresolvedLayers` is diagnostic evidence,
+never permission to publish.
 
 Add the exact CMake target and CTest:
 
@@ -749,8 +780,12 @@ Expected: compilation fails on `TerrainPageBaker.h`. Record that expected failur
 - [ ] **Step 4: Implement fixed-pipeline bake**
 
 Before rendering, validate every checked dimension and call
-`ReadWindow(SourceCellBounds, 1, 1)`. Derive the page-only section origin/grid
-from the half-open source bounds; do not forward Task 1's halo-inclusive
+`ReadWindow(SourceCellBounds, 1, 1)`. Validate presence before catalog/decode
+or output creation: all owned/required-present samples are mandatory, while
+right/bottom halo absence is legal and maps to the literal runtime default
+corner diffuse. `TilePresent` is authoritative, so never read the corresponding
+`MapTile` bytes when it is zero. Derive the page-only section origin/grid from
+the half-open source bounds; do not forward Task 1's halo-inclusive
 `SectionPresent` vector as the result mask.
 
 For each output pixel:
@@ -758,8 +793,9 @@ For each output pixel:
 1. derive source cell and pixel-center coordinates `localU=(pixelInCellX+0.5)/PixelsPerCell`, `localV=(pixelInCellY+0.5)/PixelsPerCell`;
 2. sample base texture with `u=((cellX mod 4)+localU)/4`, `v=((cellY mod 4)+localV)/4`, level-0 linear filtering, top-row V orientation, and WRAP on both axes;
 3. for each upper layer, sample its terrain texture with the same coordinates/WRAP; sample the alpha atlas with `u=rectU0+0.01+localU*(0.25-0.02)`, `v=rectV0+0.01+localV*(0.25-0.02)`, linear filtering, and MIRROR on both axes; overlay in source order with the sampled atlas alpha;
-4. expand RGB565 with the exact legacy shifts, select triangle `0-1-2` or
-   `3-2-1`, and barycentrically interpolate its diffuse RGB;
+4. expand each present corner's RGB565 with the exact legacy shifts; substitute
+   literal `{255,255,255,255}` for any absent halo corner; select triangle
+   `0-1-2` or `3-2-1`, and barycentrically interpolate its diffuse RGB;
 5. compute the fixed ambient contribution with ambient bytes `{255,255,255}`
    and `dwTColor={0,0,0}`; never apply the scene-object factor 0.6;
 6. apply the specified UNORM quantization order, multiply composite by
@@ -773,11 +809,12 @@ all source textures outside the cache, or whole-map tiles. The implementation
 review records this ownership invariant because `PeakRgbaRowBytes` observes
 the writer row, not arbitrary hidden baker allocations.
 
-Resolve and sample layers only for page cells. Missing catalog entries and any
-source/atlas decode failure are fatal before success. Collect the sorted unique
-page-only IDs, page-only absent/unresolved counts, cropped section mask, cache
-and row peaks, actual file size, actual file SHA, and process peak RSS. Compare
-every metric with `<=` against its option, including `MaxRgbaRowBytes`.
+Resolve and sample layers only for owned page cells. Missing catalog entries
+and any source/atlas decode failure are fatal before success. Halo default
+texture 22 is not a layer input. Collect the sorted unique page-only IDs,
+page-only absent/unresolved counts, cropped section mask, cache and row peaks,
+actual file size, actual file SHA, and process peak RSS. Compare every metric
+with `<=` against its option, including `MaxRgbaRowBytes`.
 
 Write only the deterministic leaf
 `garner.albedo_<page.X>_<page.Y>.png` inside the caller-provided private
@@ -824,12 +861,22 @@ git commit -m "feat(converter): bake Garner terrain page"
 
 ### Task 6: Generate an adaptive reference-page mesh with error gates
 
+Task 6 is executed in the current serial plan only after Tasks 1–5 are GREEN,
+reviewed, and committed. Its production API depends directly only on Task 1
+`TerrainPage.h`; the GREEN command also builds the Task 5
+`TerrainPageBudgetProbe` as a regression gate. Do not copy/redeclare
+`MapPageTiles`, `MapCellRect`, or `TerrainPageId`.
+
 **Files:**
 
 - Create: `tools/AssetConverter/include/Corsairs/Tools/AssetConverter/TerrainPageMeshWriter.h`
 - Create: `tools/AssetConverter/src/TerrainPageMeshWriter.cpp`
 - Create: `tools/AssetConverter/tests/TestTerrainPageMeshWriter.cpp`
 - Modify: `tools/AssetConverter/CMakeLists.txt`
+
+Do not modify `TerrainMeshWriter.*`, `GltfWriter.*`, Tasks 1–5 files, generated
+`artifacts`/`Content`, DBs, or pycache. Keep the old
+`WriteTerrainMesh(MapTerrain)` compatibility-only and unchanged.
 
 **Interfaces:**
 
@@ -868,39 +915,208 @@ TerrainPageMeshResult WriteTerrainPageMesh(
     std::string& detail);
 ```
 
-- [ ] **Step 1: Add RED tests**
+- [ ] **Step 1: Add the smallest RED tests**
 
-Require:
+Use synthetic pages with the production shape: `Cells.Width=128`,
+`Cells.Height=128`, `StoredWidth=StoredHeight=129`, and exactly `129*129`
+tiles/presence bytes. Synthetic pages below mark every owned sample present.
+Add focused tests for:
 
-- planar page chooses step 4 with all errors zero;
-- a 100 cm central spike rejects steps 4 and 2 and chooses step 1;
-- neighboring pages with different interior steps have zero shared-boundary error;
-- page `(17,21)` chooses a step whose max error is at most 5 cm, RMS at most 2 cm, and seam exactly zero;
-- emitted glTF UV corners are `(0,0)` and `(1,1)`, and winding is top-facing;
-- page `(17,21)` vertices are local: X `[0,128] m`, glTF/source-map Y `[0,-128] m`; its UE actor transform is exactly `(217600,-268800,0) cm`, producing world bounds X `[217600,230400]` and Y `[-281600,-268800]` cm. Absolute source coordinates inside both the mesh and actor transform are a failure.
+1. A flat page chooses step 4 and reports literal
+   `MaxAbsCm=RmsCm=SharedBoundaryMaxCm=0` with `Samples=16641`.
+2. A flat page with one `MapTile::Height=10` (100 cm) at local sample
+   `(65,65)` rejects steps 4 and 2 and chooses step 1 with all selected-step
+   errors zero. The odd coordinate is intentional: it is not a step-2/4
+   vertex.
+3. Two horizontal neighboring pages share the same 129 source boundary
+   samples: the flat left page chooses step 4, the right page has the interior
+   spike and chooses step 1. Decode the emitted glTF buffer data, add each
+   result's actor transform, and require the 129 unique shared-edge world
+   positions to match exactly and both `SharedBoundaryMaxCm` values to be
+   exactly zero. Merely checking two metric fields without inspecting emitted
+   vertices is insufficient.
+4. Read tracked Garner through `MapSectionReader::ReadWindow(
+   {2176,2688,128,128},1,1,...)`, never through `ReadWholeFile`/`ParseMap`.
+   Its `17x17` `SectionPresent` has exactly one zero at local row-major index
+   `14*17+16 == 254`, source section `(288,350)`, offset-table byte `717972`.
+   `TilePresent` has exactly eight zeros at local `(x=128,y=112..119)`, source
+   `(2304,2800..2807)`, and no zero in owned `x<128 && y<128` samples.
+   Page `(17,21)` must select one of `{4,2,1}` and meet max `<=5` cm, RMS
+   `<=2` cm, and shared-boundary error `==0`.
+5. Decode a planar output's glTF accessors and paired `.bin` rather than only
+   searching JSON text. Require:
+   - source/UE-local X is `[0,128]` m and source/UE-local Y is `[0,-128]` m;
+   - after the existing generic `WriteGltf` axis conversion, glTF POSITION is
+     `(localX, heightMeters, localY)`, so glTF X is `[0,128]` and glTF Z is
+     `[-128,0]`; glTF Y is height, not map Y;
+   - local `(0,0)` has UV `(0,0)` and `(128,-128)` has UV `(1,1)`;
+   - every emitted triangle is non-degenerate and its glTF cross product has
+     positive Y, i.e. it is top-facing;
+   - decoded index arrays match literal goldens for one interior quad, each of
+     the four boundary-strip cases, and each of the four corner fans at steps
+     4 and 2; vertex indices refer to the required row-major vertex order;
+   - paths are exactly `garner.terrain_17_21.gltf` and
+     `garner.terrain_17_21.bin`;
+   - actor transform is `(217600,-268800,0)` cm and the local mesh produces
+     world X `[217600,230400]`, Y `[-281600,-268800]` cm. Absolute source
+     coordinates embedded in vertices are a failure.
+6. Decode the real Garner output and require each right-boundary vertex at
+   local `(128,-y)`, `y=112..119`, to have glTF height Y exactly `-2.0` m.
+   The raw/presence golden is exact: `H(127,112..119)=-60 cm`,
+   `H(128,112..119)=-200 cm`, and
+   `H(127,120)=H(128,120)=-100 cm`. Thus the owned cells at local `(127,y)`
+   have `TL,TR,BL,BR` height arrays `[-60,-200,-60,-200]` cm for
+   `y=112..118` and `[-60,-200,-100,-100]` cm for `y=119`. Decode the
+   corresponding boundary/corner indices and require those literal heights;
+   interpolating through fabricated zero-height tiles is a failure.
+   Change all stale `Height`, `Color`, `BaseTex`, and `TileInfo` bytes in those
+   eight absent slots and require byte-identical `.gltf` and `.bin`. This
+   proves presence, not zero/stale `MapTile` storage, selects the original
+   client's shared default tile.
+7. Two writes into separate temporary directories produce byte-identical
+   `.gltf` and `.bin`.
+8. Malformed page shape/vector sizes, a zero `TilePresent` sample inside the
+   owned `128x128` cells, a `page.Cells` origin inconsistent with `pageId`,
+   step 0/unsupported step, non-finite or negative limits, and an unwritable
+   final path fail with nonempty `detail`. Also prove that an absent right or
+   bottom halo sample is accepted as height `-200` cm regardless of stale bytes
+   in its `MapTile` slot. A failure after one member of the pair is written
+   removes every regular `.gltf`/`.bin` file owned by that attempt; no stale
+   successful pair may remain.
 
 - [ ] **Step 2: Verify RED**
 
+Run by itself at low priority; do not overlap it with another build:
+
 ```bash
-cmake --build tools/AssetConverter/build --target AssetConverterTests -j4
-./tools/AssetConverter/build/AssetConverterTests
+nice -n 10 cmake --build tools/AssetConverter/build \
+  --target AssetConverterTests -j4
 ```
 
-Expected compile error on the new writer.
+Expected: compile failure because `TerrainPageMeshWriter.h` does not exist.
+Record that expected failure before adding production files.
 
 - [ ] **Step 3: Implement adaptive evaluation and mesh output**
 
-Evaluate candidates in order `{4,2,1}` and choose the first passing candidate. Preserve a full-resolution boundary ring even when the interior is decimated. Compare every original per-cell sample against the generated source triangles. Keep the old `WriteTerrainMesh(MapTerrain)` unchanged and compatibility-only.
+Validate before writing:
+
+- `page.Cells == {pageId.X*128, pageId.Y*128, 128, 128}` with checked
+  multiplication;
+- stored dimensions are exactly `129x129`;
+- `Tiles` and `TilePresent` lengths are exactly `16641`, and every owned
+  sample with local `x<128 && y<128` is present;
+- a missing sample is allowed only on the right/bottom halo
+  (`x==128 || y==128`) and is the original runtime default height `-200` cm;
+  do not consult its zero/stale `MapTile` bytes;
+- every limit is finite and nonnegative.
+
+Interpret signed present `MapTile::Height` as `raw * 10.0` centimetres
+(`raw * 0.1` metres). Candidate steps are tested, inclusively, in the literal
+order `{4,2,1}`. Preserve all 129 samples on every outer edge as actual
+vertices. Interior vertices for step 4/2 are at step multiples. Step 1 uses
+all `129x129` vertices and the literal legacy two-triangle topology for every
+cell, making it an exact fallback rather than merely a dense alternate
+surface.
+
+The vertex set and index stream are canonical:
+
+1. Include a vertex when it is on the outer ring or both coordinates are
+   multiples of `step`. Assign indices by strict row-major source order:
+   increasing `(localY, localX)`, before reflecting Y in the stored position.
+   Visit the `128/step` by `128/step` coarse cells in the same strict
+   `(cellY,cellX)` row-major order when appending triangles.
+2. The logical pre-reflection legacy diagonal is
+   `TL-TR-BL / BL-TR-BR`. Positions passed to `WriteGltf` already reflect map
+   Y as `(x,-y,height)`, so the literal input indices are
+   `TL,BL,TR / TR,BL,BR`. Do not pass the pre-reflection order to
+   `WriteGltf`; its own axis conversion/winding swap must then produce a glTF
+   cross product with positive Y.
+3. For a non-corner boundary coarse cell at step 4/2, retain the triangle not
+   touching the outer edge and split only the triangle owning that edge into
+   unit-edge children. With boundary points `P0..Pstep` ordered by increasing
+   X on top/bottom and increasing Y on left/right, emit:
+
+   ```text
+   top:   (BL,P{i+1},P{i}); keep (TR,BL,BR)
+   bottom:(TR,P{i},P{i+1}); keep (TL,BL,TR)
+   left:  (TR,P{i},P{i+1}); keep (TR,BL,BR)
+   right: (BL,P{i+1},P{i}); keep (TL,BL,TR)
+   ```
+
+   Children are emitted for `i=0..step-1`, followed by the retained triangle.
+4. For a corner coarse cell at step 4/2, replace both coarse triangles by one
+   fan from the diagonally opposite interior corner. Emit fan triangles
+   `(anchor, chain[i], chain[i+1])` in the following literal chain order;
+   ranges include every unit boundary point and omit duplicate corner points:
+
+   ```text
+   top-left:     anchor BR; chain TR, top right->left through TL,
+                                      left top->bottom through BL
+   top-right:    anchor BL; chain BR, right bottom->top through TR,
+                                      top right->left through TL
+   bottom-left:  anchor TR; chain TL, left top->bottom through BL,
+                                      bottom left->right through BR
+   bottom-right: anchor TL; chain BL, bottom left->right through BR,
+                                      right bottom->top through TR
+   ```
+
+   No alternative diagonal, fan anchor, vertex duplication, or triangle order
+   is allowed. Step 1 never uses these fans; it always uses rule 2.
+
+Build the triangles once per candidate and use those exact triangles for both
+evaluation and final output. For every one of the 16641 original grid samples,
+evaluate the generated piecewise-linear height in double-precision
+centimetres. Presence-aware source height is `raw*10 cm` for present samples
+and literal `-200 cm` for absent halo samples. Set:
+
+```text
+MaxAbsCm = max(abs(sourceCm - generatedCm))
+RmsCm = sqrt(sum(errorCm * errorCm) / 16641)
+SharedBoundaryMaxCm = max abs error over x=0/128 or y=0/128
+Samples = 16641
+```
+
+An invalid page/step passed to the standalone evaluator returns `Samples=0`
+and infinite error fields, never a misleading all-zero success. The writer
+chooses the first candidate satisfying all three inclusive option limits.
+
+Emit local source positions `(x, -y, heightCm/100)` metres, normals `+Z`, and
+UV `(x/128, y/128)` through the existing `WriteGltf`; its established
+source-to-glTF conversion yields `(x,height,-y)`, normals `+Y`, and the paired
+`.bin`. Do not duplicate a second glTF serializer. The result paths are:
+
+```text
+<outputDirectory>/garner.terrain_<pageX:02>_<pageY:02>.gltf
+<outputDirectory>/garner.terrain_<pageX:02>_<pageY:02>.bin
+```
+
+Set `ActorWorldXcm=page.Cells.X*100` and
+`ActorWorldYcm=-page.Cells.Y*100`. On success clear `detail`. Task 6 writes
+only inside the caller's run-private/test directory and never publishes the
+top-level manifest; Task 7 owns that atomic publication and recomputes the
+glTF/bin hashes from disk. On any mesh/write failure, remove partial regular
+files created by this attempt and return `Ok=false`, `Step=0`, empty paths,
+and a nonempty `detail`.
 
 - [ ] **Step 4: Verify GREEN**
 
+Run serially at low priority, with at most four build jobs:
+
 ```bash
-cmake --build tools/AssetConverter/build \
+nice -n 10 cmake --build tools/AssetConverter/build \
   --target AssetConverterTests TerrainPageBudgetProbe -j4
-ctest --test-dir tools/AssetConverter/build --output-on-failure
+nice -n 10 ./tools/AssetConverter/build/AssetConverterTests
+nice -n 10 ctest --test-dir tools/AssetConverter/build \
+  --output-on-failure -j1
 ```
 
+The first command deliberately retains the Task 5 budget-probe target as a
+regression gate; no editor/client process is involved.
+
 - [ ] **Step 5: Commit**
+
+Before staging, require `git diff --check` and inspect the exact path list so
+the shared DB/pycache and other agents' work are not included.
 
 ```bash
 git add \
