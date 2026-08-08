@@ -52,6 +52,19 @@ void AppendTile(std::vector<std::uint8_t>& bytes, const AC::MapTile& tile) {
     }
 }
 
+std::array<AC::MapTile, 4> LiteralTiles() {
+    return {{
+        {0x01020304u, 5u, 0x1111, 6, 0x1234, 1u,
+         {0x05u, 0x45u, 0x85u, 0x00u}},
+        {0x11223344u, 6u, 0x2222, -4, -2, 2u,
+         {0x05u, 0x45u, 0x05u, 0x00u}},
+        {0xaabbccddu, 7u, 0x3333, 2, 0x0201, 3u,
+         {0x00u, 0x05u, 0x45u, 0x00u}},
+        {0x55667788u, 8u, 0x4444, -9, 404, 4u,
+         {0x45u, 0x05u, 0x00u, 0x00u}},
+    }};
+}
+
 std::vector<std::uint8_t> MakeSparseMap() {
     std::vector<std::uint8_t> bytes;
     AppendI32Le(bytes, AC::kMapFlagCurrent);
@@ -62,18 +75,28 @@ std::vector<std::uint8_t> MakeSparseMap() {
     AppendU32Le(bytes, 28u);
     AppendU32Le(bytes, 0u);
 
-    const std::array<AC::MapTile, 4> tiles{{
-        {0x01020304u, 5u, 0x1111, 6, 0x1234, 1u,
-         {0x05u, 0x45u, 0x85u, 0x00u}},
-        {0x11223344u, 6u, 0x2222, -4, -2, 2u,
-         {0x05u, 0x45u, 0x05u, 0x00u}},
-        {0xaabbccddu, 7u, 0x3333, 2, 0x0201, 3u,
-         {0x00u, 0x05u, 0x45u, 0x00u}},
-        {0x55667788u, 8u, 0x4444, -9, 404, 4u,
-         {0x45u, 0x05u, 0x00u, 0x00u}},
-    }};
-    for (const AC::MapTile& tile : tiles) {
+    for (const AC::MapTile& tile : LiteralTiles()) {
         AppendTile(bytes, tile);
+    }
+    return bytes;
+}
+
+std::vector<std::uint8_t> MakeTwoByTwoSectionMap(bool lateSectionPresent) {
+    std::vector<std::uint8_t> bytes;
+    AppendI32Le(bytes, AC::kMapFlagCurrent);
+    AppendI32Le(bytes, 4);
+    AppendI32Le(bytes, 4);
+    AppendI32Le(bytes, 2);
+    AppendI32Le(bytes, 2);
+    AppendU32Le(bytes, 0u);
+    AppendU32Le(bytes, 0u);
+    AppendU32Le(bytes, 0u);
+    AppendU32Le(bytes, lateSectionPresent ? 36u : 0u);
+
+    if (lateSectionPresent) {
+        for (const AC::MapTile& tile : LiteralTiles()) {
+            AppendTile(bytes, tile);
+        }
     }
     return bytes;
 }
@@ -266,9 +289,138 @@ CORSAIRS_TEST(StreamingMapWriter_WritesExactSparseRastersAndMetadata) {
     const std::string actualMetadata{metadata->begin(), metadata->end()};
     REQUIRE_EQ(actualMetadata, expectedMetadata);
 
-    // Reader sees only the 2x2 section. The writer additionally owns bounded
-    // per-row buffers for two tiles, never a full-map row or terrain.
+    // Читатель видит только секцию 2x2. Потоковая запись дополнительно владеет
+    // лишь тремя буферами строки на два тайла, но не строкой всей карты.
     REQUIRE(reader->Stats().PeakResidentTiles <= 4u + 2u);
+}
+
+CORSAIRS_TEST(StreamingMapWriter_AllAbsentMapIsFullyZeroWithRawMinus128Stats) {
+    const ScopedDirectory directory{"all-absent"};
+    REQUIRE(directory.Created());
+    const std::filesystem::path mapPath = directory.Path() / "absent.map";
+    const std::vector<std::uint8_t> fixture = MakeTwoByTwoSectionMap(false);
+    REQUIRE(WriteBytes(mapPath, fixture));
+
+    AC::MapDiagnostics diagnostics;
+    auto reader = AC::MapSectionReader::Open(mapPath, diagnostics);
+    REQUIRE(reader.has_value());
+
+    AC::MapRasterStats stats{10u, 11u, 12, 13, 14u};
+    std::string detail{"stale"};
+    const std::filesystem::path base = directory.Path() / "absent";
+    REQUIRE_EQ(
+        static_cast<std::uint32_t>(
+            AC::WriteTerrainRasters(*reader, base, stats, detail)),
+        static_cast<std::uint32_t>(AC::MapWriteStatus::OK));
+    REQUIRE(detail.empty());
+
+    const auto heights = AC::ReadWholeFile(WithSuffix(base, ".height.r16"));
+    const auto blocks = AC::ReadWholeFile(WithSuffix(base, ".block.raw"));
+    const auto regions = AC::ReadWholeFile(WithSuffix(base, ".region.raw"));
+    const auto metadata = AC::ReadWholeFile(WithSuffix(base, ".terrain.json"));
+    REQUIRE(heights.has_value());
+    REQUIRE(blocks.has_value());
+    REQUIRE(regions.has_value());
+    REQUIRE(metadata.has_value());
+
+    const std::array<std::uint8_t, 32> expectedHeights{};
+    const std::array<std::uint8_t, 64> expectedBlocks{};
+    const std::array<std::uint8_t, 32> expectedRegions{};
+    RequireBytesEqual(corsairsTestOk, *heights, expectedHeights);
+    if (!corsairsTestOk) {
+        return;
+    }
+    RequireBytesEqual(corsairsTestOk, *blocks, expectedBlocks);
+    if (!corsairsTestOk) {
+        return;
+    }
+    RequireBytesEqual(corsairsTestOk, *regions, expectedRegions);
+    if (!corsairsTestOk) {
+        return;
+    }
+
+    REQUIRE_EQ(stats.PresentSections, 0u);
+    REQUIRE_EQ(stats.AbsentSections, 4u);
+    REQUIRE_EQ(stats.MinHeightRaw, -128);
+    REQUIRE_EQ(stats.MaxHeightRaw, -128);
+    REQUIRE_EQ(stats.BlockedTiles, 0u);
+
+    const std::string expectedMetadata =
+        "{\"mapFlag\":780627,\"width\":4,\"height\":4,"
+        "\"gridWidth\":4,\"gridHeight\":4,\"sectionWidth\":2,"
+        "\"sectionHeight\":2,\"sectionsPresent\":0,"
+        "\"sectionsTotal\":4,\"blockedTiles\":0,"
+        "\"heightRangeRaw\":[-128,-128],\"heightUnitMeters\":0.1,"
+        "\"heightEncoding\":\"uint16 = (rawHeight + 128) * 256\"}";
+    const std::string actualMetadata{metadata->begin(), metadata->end()};
+    REQUIRE_EQ(actualMetadata, expectedMetadata);
+}
+
+CORSAIRS_TEST(StreamingMapWriter_WritesLateSectionAtExactRowOffsets) {
+    const ScopedDirectory directory{"late-section"};
+    REQUIRE(directory.Created());
+    const std::filesystem::path mapPath = directory.Path() / "late.map";
+    const std::vector<std::uint8_t> fixture = MakeTwoByTwoSectionMap(true);
+    REQUIRE(WriteBytes(mapPath, fixture));
+
+    AC::MapDiagnostics diagnostics;
+    auto reader = AC::MapSectionReader::Open(mapPath, diagnostics);
+    REQUIRE(reader.has_value());
+
+    AC::MapRasterStats stats;
+    std::string detail;
+    const std::filesystem::path base = directory.Path() / "late";
+    REQUIRE_EQ(
+        static_cast<std::uint32_t>(
+            AC::WriteTerrainRasters(*reader, base, stats, detail)),
+        static_cast<std::uint32_t>(AC::MapWriteStatus::OK));
+    REQUIRE(detail.empty());
+
+    const auto heights = AC::ReadWholeFile(WithSuffix(base, ".height.r16"));
+    const auto blocks = AC::ReadWholeFile(WithSuffix(base, ".block.raw"));
+    const auto regions = AC::ReadWholeFile(WithSuffix(base, ".region.raw"));
+    REQUIRE(heights.has_value());
+    REQUIRE(blocks.has_value());
+    REQUIRE(regions.has_value());
+
+    const std::array<std::uint8_t, 32> expectedHeights{
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0x00, 0x86, 0x00, 0x7c,
+        0, 0, 0, 0, 0x00, 0x82, 0x00, 0x77,
+    };
+    const std::array<std::uint8_t, 64> expectedBlocks{
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0x05, 0x45, 0x85, 0x00, 0x05, 0x45, 0x05, 0x00,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0x00, 0x05, 0x45, 0x00, 0x45, 0x05, 0x00, 0x00,
+    };
+    const std::array<std::uint8_t, 32> expectedRegions{
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0x34, 0x12, 0xfe, 0xff,
+        0, 0, 0, 0, 0x01, 0x02, 0x94, 0x01,
+    };
+    RequireBytesEqual(corsairsTestOk, *heights, expectedHeights);
+    if (!corsairsTestOk) {
+        return;
+    }
+    RequireBytesEqual(corsairsTestOk, *blocks, expectedBlocks);
+    if (!corsairsTestOk) {
+        return;
+    }
+    RequireBytesEqual(corsairsTestOk, *regions, expectedRegions);
+    if (!corsairsTestOk) {
+        return;
+    }
+
+    REQUIRE_EQ(stats.PresentSections, 1u);
+    REQUIRE_EQ(stats.AbsentSections, 3u);
+    REQUIRE_EQ(stats.MinHeightRaw, -128);
+    REQUIRE_EQ(stats.MaxHeightRaw, 6);
+    REQUIRE_EQ(stats.BlockedTiles, 1u);
 }
 
 CORSAIRS_TEST(StreamingMapWriter_RepeatedWriteResetsStatsAndIsDeterministic) {
