@@ -10,6 +10,33 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class ModuleDependencyTests(unittest.TestCase):
+    def test_runtime_terrain_failure_diagnostics_cover_cooked_state(self):
+        runtime = (ROOT / "CorsairsUE/Source/CorsairsGame/Private/Tests/"
+                   "CorsairsReferenceTerrainRuntimeTests.cpp").read_text(
+                       encoding="utf-8")
+        for field in (
+            "CORSAIRS_TERRAIN_RUNTIME_DIAGNOSTIC=",
+            "renderDataPresent",
+            "renderDataInitialized",
+            "lodCount",
+            "lod0Vertices",
+            "lod0Triangles",
+            "meshHasValidRenderData",
+            "meshHasValidNaniteData",
+            "naniteProjectEnabled",
+            "actorTransform",
+            "rootIsStaticMeshComponent",
+            "componentRegistered",
+            "relativeTransform",
+            "worldTransform",
+            "meshLocalBounds",
+            "meshBoundsByRelativeTransform",
+            "componentCalcBoundsByRelativeTransform",
+            "actorBounds",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(field, runtime)
+
     def test_runtime_terrain_sha256_uses_commoncrypto_on_mac(self):
         runtime = (ROOT / "CorsairsUE/Source/CorsairsGame/Private/Tests/"
                    "CorsairsReferenceTerrainRuntimeTests.cpp").read_text(

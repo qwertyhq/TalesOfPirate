@@ -8,6 +8,7 @@
 #include "Engine/World.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/WorldSettings.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformMisc.h"
 #include "Internationalization/Regex.h"
 #include "Materials/Material.h"
@@ -18,6 +19,7 @@
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Misc/SecureHash.h"
+#include "StaticMeshResources.h"
 #include "UObject/SoftObjectPath.h"
 
 #if PLATFORM_MAC
@@ -65,6 +67,110 @@ namespace
 			}
 		}
 		return true;
+	}
+
+	const TCHAR* BoolJson(const bool Value)
+	{
+		return Value ? TEXT("true") : TEXT("false");
+	}
+
+	FString VectorJson(const FVector& Value)
+	{
+		return FString::Printf(
+			TEXT("[%.17g,%.17g,%.17g]"),
+			Value.X,
+			Value.Y,
+			Value.Z);
+	}
+
+	FString TransformJson(const FTransform& Value)
+	{
+		const FQuat Rotation = Value.GetRotation();
+		return FString::Printf(
+			TEXT("{\"location\":%s,\"rotationQuat\":[%.17g,%.17g,%.17g,%.17g],")
+			TEXT("\"scale\":%s}"),
+			*VectorJson(Value.GetLocation()),
+			Rotation.X,
+			Rotation.Y,
+			Rotation.Z,
+			Rotation.W,
+			*VectorJson(Value.GetScale3D()));
+	}
+
+	FString BoxJson(const FBox& Value)
+	{
+		return FString::Printf(
+			TEXT("{\"isValid\":%s,\"max\":%s,\"min\":%s}"),
+			BoolJson(Value.IsValid != 0),
+			*VectorJson(Value.Max),
+			*VectorJson(Value.Min));
+	}
+
+	void LogReferenceDiagnostics(
+		AStaticMeshActor* Reference,
+		UStaticMesh* Mesh,
+		UStaticMeshComponent* Component)
+	{
+		const FStaticMeshRenderData* RenderData = Mesh->GetRenderData();
+		const int32 LodCount = RenderData != nullptr ? RenderData->LODResources.Num() : 0;
+		const int32 Lod0Vertices = LodCount > 0
+			? RenderData->LODResources[0].GetNumVertices()
+			: 0;
+		const int32 Lod0Triangles = LodCount > 0
+			? RenderData->LODResources[0].GetNumTriangles()
+			: 0;
+		const IConsoleVariable* NaniteProject =
+			IConsoleManager::Get().FindConsoleVariable(TEXT("r.Nanite.ProjectEnabled"));
+		const int32 NaniteProjectEnabled = NaniteProject != nullptr
+			? NaniteProject->GetInt()
+			: -1;
+
+		const FTransform ActorTransform = Reference->GetActorTransform();
+		const FTransform RelativeTransform = Component->GetRelativeTransform();
+		const FTransform WorldTransform = Component->GetComponentTransform();
+		const FBox MeshLocalBounds = Mesh->GetBoundingBox();
+		const FBox MeshBoundsByRelativeTransform =
+			MeshLocalBounds.TransformBy(RelativeTransform);
+		const FBox ComponentCalcBoundsByRelativeTransform =
+			Component->CalcBounds(RelativeTransform).GetBox();
+		FVector ActorBoundsOrigin;
+		FVector ActorBoundsExtent;
+		Reference->GetActorBounds(false, ActorBoundsOrigin, ActorBoundsExtent);
+		const FBox ActorBounds(
+			ActorBoundsOrigin - ActorBoundsExtent,
+			ActorBoundsOrigin + ActorBoundsExtent);
+
+		UE_LOG(
+			LogCorsairsReferenceTerrainRuntime,
+			Display,
+			TEXT("CORSAIRS_TERRAIN_RUNTIME_DIAGNOSTIC={")
+			TEXT("\"actorBounds\":%s,\"actorTransform\":%s,")
+			TEXT("\"componentCalcBoundsByRelativeTransform\":%s,")
+			TEXT("\"componentRegistered\":%s,\"lod0Triangles\":%d,")
+			TEXT("\"lod0Vertices\":%d,\"lodCount\":%d,")
+			TEXT("\"meshBoundsByRelativeTransform\":%s,")
+			TEXT("\"meshHasValidNaniteData\":%s,\"meshHasValidRenderData\":%s,")
+			TEXT("\"meshLocalBounds\":%s,\"naniteProjectEnabled\":%d,")
+			TEXT("\"relativeTransform\":%s,\"renderDataInitialized\":%s,")
+			TEXT("\"renderDataPresent\":%s,\"rootIsStaticMeshComponent\":%s,")
+			TEXT("\"worldTransform\":%s}"),
+			*BoxJson(ActorBounds),
+			*TransformJson(ActorTransform),
+			*BoxJson(ComponentCalcBoundsByRelativeTransform),
+			BoolJson(Component->IsRegistered()),
+			Lod0Triangles,
+			Lod0Vertices,
+			LodCount,
+			*BoxJson(MeshBoundsByRelativeTransform),
+			BoolJson(Mesh->HasValidNaniteData()),
+			BoolJson(Mesh->HasValidRenderData(false)),
+			*BoxJson(MeshLocalBounds),
+			NaniteProjectEnabled,
+			*TransformJson(RelativeTransform),
+			BoolJson(RenderData != nullptr && RenderData->IsInitialized()),
+			BoolJson(RenderData != nullptr),
+			BoolJson(Reference->GetRootComponent() == Component),
+			*TransformJson(WorldTransform));
 	}
 
 	bool Sha256Bytes(const uint8* Data, const int64 SizeBytes, FString& OutSha256)
@@ -203,6 +309,7 @@ bool FCorsairsReferenceTerrainRuntimeTest::RunTest(const FString&)
 		TestTrue(TEXT("cooked actor location"), Reference->GetActorLocation().Equals(
 			FVector(217600.0, -268800.0, 0.0), 0.01));
 		UStaticMeshComponent* Component = Reference->GetStaticMeshComponent();
+		LogReferenceDiagnostics(Reference, Mesh, Component);
 		TestTrue(TEXT("cooked component mesh"), Component->GetStaticMesh() == Mesh);
 		TestTrue(TEXT("cooked component material"),
 			Component->GetMaterial(0) == Instance);
