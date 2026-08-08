@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -67,6 +68,20 @@ def _actor_bounds_xy(actor):
         float(origin.x - extent.x), float(origin.y - extent.y),
         float(origin.x + extent.x), float(origin.y + extent.y),
     )
+
+
+def _vector_within_tolerance(actual, expected, tolerance):
+    try:
+        limit = float(tolerance)
+        pairs = tuple(
+            (float(getattr(actual, axis)), float(getattr(expected, axis)))
+            for axis in ("x", "y", "z"))
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return (math.isfinite(limit) and limit >= 0.0 and
+            all(math.isfinite(observed) and math.isfinite(wanted) and
+                abs(observed - wanted) <= limit
+                for observed, wanted in pairs))
 
 
 def inspect_reference_state(manifest: dict):
@@ -451,7 +466,8 @@ def _reconcile_actor(mesh, instance, created, updated):
             actor.get_path_name(), "/Script/Engine.StaticMeshActor", "CREATED"))
     changed = False
     expected_location = unreal.Vector(217600.0, -268800.0, 0.0)
-    if not actor.get_actor_location().equals(expected_location, 0.001):
+    if not _vector_within_tolerance(
+            actor.get_actor_location(), expected_location, 0.001):
         actor.set_actor_location(expected_location, False, False)
         changed = True
     component = actor.static_mesh_component

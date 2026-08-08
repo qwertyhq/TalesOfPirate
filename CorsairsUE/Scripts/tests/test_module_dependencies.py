@@ -10,6 +10,33 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class ModuleDependencyTests(unittest.TestCase):
+    def test_vector_tolerance_is_finite_componentwise_and_inclusive(self):
+        entrypoint = ROOT / "CorsairsUE/Scripts/import_reference_terrain.py"
+        probe = f"""
+import runpy
+import sys
+import types
+
+sys.modules["unreal"] = types.ModuleType("unreal")
+namespace = runpy.run_path({str(entrypoint)!r}, run_name="ue_vector_probe")
+within = namespace["_vector_within_tolerance"]
+vector = types.SimpleNamespace
+expected = vector(x=1.0, y=2.0, z=3.0)
+assert within(vector(x=1.001, y=1.999, z=3.001), expected, 0.001)
+assert not within(vector(x=1.001001, y=2.0, z=3.0), expected, 0.001)
+assert not within(vector(x=float("nan"), y=2.0, z=3.0), expected, 0.001)
+assert not within(vector(x=1.0, y=float("inf"), z=3.0), expected, 0.001)
+assert not within(expected, expected, float("nan"))
+assert not within(expected, expected, -0.001)
+"""
+        completed = subprocess.run(
+            [sys.executable, "-I", "-B", "-c", probe],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_interchange_nested_static_mesh_is_adopted_at_canonical_path(self):
         entrypoint = ROOT / "CorsairsUE/Scripts/import_reference_terrain.py"
         probe = f"""
