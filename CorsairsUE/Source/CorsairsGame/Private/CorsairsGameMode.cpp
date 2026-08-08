@@ -40,6 +40,9 @@ void ACorsairsGameMode::BeginPlay()
 	Session->OnActorLookChanged.AddDynamic(
 		this,
 		&ACorsairsGameMode::HandleActorLookChanged);
+	Session->OnMovementChanged.AddDynamic(
+		this,
+		&ACorsairsGameMode::HandleMovementChanged);
 
 	CharacterCatalog = MakeUnique<FCorsairsCharacterCatalog>();
 	StartupError.Empty();
@@ -91,6 +94,13 @@ void ACorsairsGameMode::StartLogin()
 
 void ACorsairsGameMode::EndPlay(const EEndPlayReason::Type Reason)
 {
+	if (Session != nullptr)
+	{
+		Session->OnMovementChanged.RemoveDynamic(
+			this,
+			&ACorsairsGameMode::HandleMovementChanged);
+	}
+
 	APlayerController* Controller =
 		UGameplayStatics::GetPlayerController(this, 0);
 	if (ACorsairsPlayerCharacter* Local = Controller != nullptr
@@ -110,6 +120,24 @@ void ACorsairsGameMode::EndPlay(const EEndPlayReason::Type Reason)
 		Session = nullptr;
 	}
 	Super::EndPlay(Reason);
+}
+
+void ACorsairsGameMode::HandleMovementChanged(
+	const FCorsairsMovementEvent& Event)
+{
+	if (Event.bLocal)
+	{
+		return;
+	}
+
+	const TObjectPtr<ACorsairsCharacter>* Found =
+		WorldActors.Find(Event.WorldId);
+	if (Found == nullptr || *Found == nullptr)
+	{
+		return;
+	}
+
+	(*Found)->HandleServerMovementChanged(Event);
 }
 
 void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FString& Message)

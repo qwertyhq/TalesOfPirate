@@ -1,7 +1,9 @@
 #include "CorsairsCharacter.h"
 
 #include "Animation/AnimSequence.h"
+#include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "CorsairsCharacterGround.h"
 #include "Engine/SkeletalMesh.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCorsairsCharacter, Log, All);
@@ -37,6 +39,7 @@ namespace
 
 ACorsairsCharacter::ACorsairsCharacter()
 {
+	PrimaryActorTick.bCanEverTick = true;
 	GetMesh()->VisibilityBasedAnimTickOption =
 		EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
 	GetMesh()->SetRelativeLocation(FVector(0.0, 0.0, -88.0));
@@ -60,10 +63,84 @@ ACorsairsCharacter::ACorsairsCharacter()
 	}
 }
 
+void ACorsairsCharacter::Tick(const float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	if (!ServerPathFollower.IsActive() ||
+		!FMath::IsFinite(ServerMovementSpeedCmPerSecond) ||
+		ServerMovementSpeedCmPerSecond <= 0.0)
+	{
+		return;
+	}
+
+	const FIntPoint SourcePosition = ServerPathFollower.Advance(
+		ServerMovementSpeedCmPerSecond * static_cast<double>(DeltaSeconds));
+	ApplyServerPathPosition(SourcePosition, true);
+}
+
 void ACorsairsCharacter::AttachCharacterGround(
 	const FCorsairsCharacterGround* InGround)
 {
 	CharacterGround = InGround;
+}
+
+void ACorsairsCharacter::HandleServerMovementChanged(
+	const FCorsairsMovementEvent& Event)
+{
+	if (Event.Type == ECorsairsMovementEventType::AcceptedPath)
+	{
+		if (!Event.bServerDriven ||
+			!FMath::IsFinite(Event.MovementSpeedCmPerSecond) ||
+			Event.MovementSpeedCmPerSecond <= 0.0)
+		{
+			StopServerPathFollower();
+			return;
+		}
+
+		ServerPathFollower.Accept(Event.Waypoints);
+		ServerMovementSpeedCmPerSecond = Event.MovementSpeedCmPerSecond;
+		ApplyServerPathPosition(ServerPathFollower.GetPosition(), true);
+		return;
+	}
+
+	ServerPathFollower.Reconcile(Event.Endpoint);
+	ServerMovementSpeedCmPerSecond = 0.0;
+	ApplyServerPathPosition(ServerPathFollower.GetPosition(), false);
+	ServerPathFollower.Stop();
+}
+
+void ACorsairsCharacter::StopServerPathFollower()
+{
+	ServerPathFollower.Stop();
+	ServerMovementSpeedCmPerSecond = 0.0;
+}
+
+void ACorsairsCharacter::ApplyServerPathPosition(
+	const FIntPoint SourcePosition,
+	const bool bApplyFacing)
+{
+	FVector Location = GetActorLocation();
+	Location.X = SourcePosition.X;
+	Location.Y = -SourcePosition.Y;
+	if (CharacterGround != nullptr && CharacterGround->IsLoaded())
+	{
+		Location = CharacterGround->ActorCenter(
+			SourcePosition,
+			GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+	}
+
+	if (bApplyFacing)
+	{
+		SetActorLocationAndRotation(
+			Location,
+			FRotator(0.0, ServerPathFollower.GetFacingYaw(), 0.0),
+			false,
+			nullptr,
+			ETeleportType::TeleportPhysics);
+		return;
+	}
+
+	SetActorLocation(Location, false, nullptr, ETeleportType::TeleportPhysics);
 }
 
 bool ACorsairsCharacter::ApplyAppearance(

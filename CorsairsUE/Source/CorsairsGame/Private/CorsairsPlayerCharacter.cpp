@@ -465,9 +465,18 @@ void ACorsairsPlayerCharacter::HandleMovementChanged(
 
 	if (Event.Type == ECorsairsMovementEventType::AcceptedPath)
 	{
+		if (Event.bServerDriven)
+		{
+			HandleServerMovementChanged(Event);
+		}
+		else
+		{
+			StopServerPathFollower();
+		}
 		return;
 	}
 
+	HandleServerMovementChanged(Event);
 	GetCharacterMovement()->StopMovementImmediately();
 	ConsumeMovementInputVector();
 	if (Event.bRequireNeutral)

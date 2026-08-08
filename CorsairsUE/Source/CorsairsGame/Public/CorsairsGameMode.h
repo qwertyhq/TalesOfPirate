@@ -90,6 +90,9 @@ public:
 
 private:
 	UFUNCTION()
+	void HandleMovementChanged(const FCorsairsMovementEvent& Event);
+
+	UFUNCTION()
 	void HandleStageChanged(ECorsairsLoginStage Stage, const FString& Message);
 
 	/** Персонаж попал в поле зрения — ставим его в мир. */
