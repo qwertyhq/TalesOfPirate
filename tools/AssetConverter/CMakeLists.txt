@@ -118,6 +118,10 @@ target_link_libraries(
     TerrainPageBudgetProbe
     PRIVATE AssetConverterLib)
 corsairs_set_target_options(TerrainPageBudgetProbe)
+add_dependencies(AssetConverterTests TerrainPageBudgetProbe)
+target_compile_definitions(
+    AssetConverterTests
+    PRIVATE TERRAIN_PAGE_BUDGET_PROBE_PATH="$<TARGET_FILE:TerrainPageBudgetProbe>")
 add_test(
     NAME TerrainPageBudget
     COMMAND TerrainPageBudgetProbe

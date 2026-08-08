@@ -841,9 +841,13 @@ run/test directory. Call `StreamingPngWriter::Finish`, then obtain
 pixels for `PngSha256`. Set `Ok=true` and clear `detail` only after all gates
 pass. On validation, catalog, decode, writer, file-size, SHA, RSS, or budget
 failure, preserve the first actionable nonempty `detail`, return `Ok=false`,
-clear successful path/hash fields, and remove any partial or completed PNG
-owned by this attempt. Task 5 never writes or replaces the top-level manifest;
-Task 7 alone validates all run-private files and atomically publishes it.
+clean up any partial PNG, and perform checked cleanup of any completed PNG
+owned by this attempt. After verified completed-output cleanup, clear successful
+path/hash fields. If removal of a completed PNG cannot be verified, return
+stable `RECOVERY_REQUIRED`, keep the retained path and available SHA/metrics as
+actionable recovery evidence, and never report success. Task 5 never writes or
+replaces the top-level manifest; Task 7 alone validates all run-private files
+and atomically publishes it.
 
 - [ ] **Step 5: Verify GREEN**
 

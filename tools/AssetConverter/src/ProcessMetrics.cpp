@@ -1,5 +1,6 @@
 #include "Corsairs/Tools/AssetConverter/ProcessMetrics.h"
 
+#include <cstdint>
 #include <limits>
 
 #if defined(_WIN32)

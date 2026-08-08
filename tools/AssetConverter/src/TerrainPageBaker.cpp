@@ -112,8 +112,42 @@ TerrainBakeResult BakeTerrainPage(
             detail = std::move(message);
         }
         if (completedOutputOwned) {
-            std::error_code cleanupError;
-            std::filesystem::remove(outputPath, cleanupError);
+            const std::string cause = detail;
+            std::string cleanupDetail;
+            if (options.RemoveCompletedOutput) {
+                options.RemoveCompletedOutput(outputPath, cleanupDetail);
+            }
+            else {
+                std::error_code removeError;
+                const bool removed = std::filesystem::remove(outputPath, removeError);
+                if (removeError) {
+                    cleanupDetail = removeError.message();
+                }
+                else if (!removed) {
+                    cleanupDetail = "filesystem::remove не подтвердил удаление";
+                }
+            }
+
+            std::error_code existenceError;
+            const bool retained = std::filesystem::exists(outputPath, existenceError);
+            if (existenceError || retained) {
+                if (cleanupDetail.empty()) {
+                    cleanupDetail = existenceError
+                        ? existenceError.message()
+                        : "после cleanup PNG всё ещё существует";
+                }
+                result.Ok = false;
+                result.PngPath = outputPath;
+                detail = std::format(
+                    "RECOVERY_REQUIRED: не удалось удалить PNG отклонённой попытки; "
+                    "cause={}; retained={}; sha256={}; cleanup={}",
+                    cause,
+                    outputPath.generic_string(),
+                    result.PngSha256.empty() ? "unavailable" : result.PngSha256,
+                    cleanupDetail);
+                completedOutputOwned = false;
+                return result;
+            }
             completedOutputOwned = false;
         }
         result.Ok = false;
@@ -293,21 +327,97 @@ TerrainBakeResult BakeTerrainPage(
         return fail("не удалось декодировать alpha atlas");
     }
 
-    TerrainTextureCache textureCache{kHardTextureCacheBytes};
+    auto recordLiveTextureBytes = [&result](
+                                      const TerrainTextureCache& cache,
+                                      const std::shared_ptr<const DecodedImage>& first,
+                                      const std::shared_ptr<const DecodedImage>& second = {}) {
+        std::size_t liveBytes = cache.DecodedBytes();
+        const auto addIfRetainedOutsideCache = [&liveBytes](
+                                                   const std::shared_ptr<const DecodedImage>& image) {
+            if (image && image.use_count() == 1) {
+                liveBytes += image->Pixels.size();
+            }
+        };
+        addIfRetainedOutsideCache(first);
+        if (second.get() != first.get()) {
+            addIfRetainedOutsideCache(second);
+        }
+        result.PeakTextureCacheBytes =
+            std::max(result.PeakTextureCacheBytes, liveBytes);
+        return liveBytes;
+    };
+    std::array<std::size_t, 256> textureDecodedBytes{};
     for (const std::uint8_t textureId : result.UsedTextureIds) {
-        const auto image = textureCache.Load(*texturePaths[textureId], detail);
+        TerrainTextureCache validationCache{kHardTextureCacheBytes};
+        auto image = validationCache.Load(*texturePaths[textureId], detail);
         if (!image) {
             return fail(std::format("не удалось декодировать terrain texture ID {}",
                                     textureId));
         }
+        const std::size_t imageBytes = image->Pixels.size();
+        textureDecodedBytes[textureId] = imageBytes;
+        const std::size_t liveBytes =
+            recordLiveTextureBytes(validationCache, image);
+        if (imageBytes > kHardTextureCacheBytes) {
+            return fail(std::format(
+                "terrain texture ID {} имеет decoded размер {} байт, hard limit {}",
+                textureId, imageBytes, kHardTextureCacheBytes));
+        }
+        if (liveBytes > kHardTextureCacheBytes) {
+            return fail(std::format(
+                "live decoded terrain textures занимают {} байт, hard limit {}",
+                liveBytes, kHardTextureCacheBytes));
+        }
+        image.reset();
+        recordLiveTextureBytes(validationCache, image);
     }
-    result.PeakTextureCacheBytes = textureCache.PeakDecodedBytes();
-    if (result.PeakTextureCacheBytes > options.MaxTextureCacheBytes) {
-        return fail("превышен budget декодированного texture cache");
-    }
-    if (static_cast<std::size_t>(rgbaRowBytes) > options.MaxRgbaRowBytes) {
-        return fail("превышен budget RGBA-строки");
-    }
+
+    auto textureCache =
+        std::make_unique<TerrainTextureCache>(kHardTextureCacheBytes);
+    std::vector<std::filesystem::path> residentTexturePaths;
+    auto loadTextureForRender = [&](
+                                    std::uint8_t textureId,
+                                    const std::shared_ptr<const DecodedImage>& retained = {}) {
+        const std::filesystem::path& path = *texturePaths[textureId];
+        bool resident =
+            std::find(residentTexturePaths.begin(), residentTexturePaths.end(), path) !=
+            residentTexturePaths.end();
+        const std::size_t decodedBytes = textureDecodedBytes[textureId];
+        if (!resident &&
+            textureCache->DecodedBytes() > kHardTextureCacheBytes - decodedBytes) {
+            textureCache =
+                std::make_unique<TerrainTextureCache>(kHardTextureCacheBytes);
+            residentTexturePaths.clear();
+        }
+
+        std::size_t projectedBytes = textureCache->DecodedBytes();
+        resident =
+            std::find(residentTexturePaths.begin(), residentTexturePaths.end(), path) !=
+            residentTexturePaths.end();
+        if (!resident) {
+            projectedBytes += decodedBytes;
+        }
+        if (retained && retained.use_count() == 1) {
+            projectedBytes += retained->Pixels.size();
+        }
+        result.PeakTextureCacheBytes =
+            std::max(result.PeakTextureCacheBytes, projectedBytes);
+        if (projectedBytes > kHardTextureCacheBytes) {
+            detail = std::format(
+                "live decoded terrain textures занимают {} байт, hard limit {}",
+                projectedBytes, kHardTextureCacheBytes);
+            return std::shared_ptr<const DecodedImage>{};
+        }
+
+        auto image = textureCache->Load(path, detail);
+        if (image && !resident) {
+            residentTexturePaths.push_back(path);
+        }
+        if (image) {
+            recordLiveTextureBytes(*textureCache, retained, image);
+        }
+        return image;
+    };
 
     outputPath = outputDirectory /
         std::format("garner.albedo_{}_{}.png", page.X, page.Y);
@@ -355,8 +465,7 @@ TerrainBakeResult BakeTerrainPage(
                 (static_cast<double>(globalCellX % 4u) + localU) / 4.0;
             const double textureV =
                 (static_cast<double>(globalCellY % 4u) + localV) / 4.0;
-            const auto baseImage = textureCache.Load(
-                *texturePaths[layers.Values[0].TextureId], detail);
+            auto baseImage = loadTextureForRender(layers.Values[0].TextureId);
             if (!baseImage) {
                 writer.reset();
                 return fail("terrain texture стал недоступен во время bake");
@@ -364,11 +473,12 @@ TerrainBakeResult BakeTerrainPage(
             std::array<std::uint8_t, 4> composite = SampleTerrainImageLinear(
                 *baseImage, textureU, textureV,
                 TerrainAddressMode::WRAP, TerrainAddressMode::WRAP);
+            baseImage.reset();
+            recordLiveTextureBytes(*textureCache, baseImage);
 
             for (std::size_t layerIndex = 1; layerIndex < layers.Count; ++layerIndex) {
                 const TerrainLayer& layer = layers.Values[layerIndex];
-                const auto upperImage = textureCache.Load(
-                    *texturePaths[layer.TextureId], detail);
+                auto upperImage = loadTextureForRender(layer.TextureId, baseImage);
                 if (!upperImage) {
                     writer.reset();
                     return fail("upper terrain texture стал недоступен во время bake");
@@ -376,6 +486,8 @@ TerrainBakeResult BakeTerrainPage(
                 const auto upper = SampleTerrainImageLinear(
                     *upperImage, textureU, textureV,
                     TerrainAddressMode::WRAP, TerrainAddressMode::WRAP);
+                upperImage.reset();
+                recordLiveTextureBytes(*textureCache, baseImage, upperImage);
                 const std::optional<AtlasRect> rect = ResolveAlphaAtlasRect(layer.AlphaMask);
                 if (!rect.has_value()) {
                     writer.reset();

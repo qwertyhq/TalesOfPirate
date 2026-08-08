@@ -14,17 +14,23 @@
 #include <array>
 #include <bit>
 #include <cctype>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <format>
+#include <iterator>
 #include <limits>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -299,6 +305,135 @@ bool IsLowerHexSha(std::string_view hash) {
            });
 }
 
+class ScopedOwnedTree {
+public:
+    explicit ScopedOwnedTree(std::filesystem::path path)
+        : _path(std::move(path)) {
+    }
+
+    ~ScopedOwnedTree() {
+        if (_owned) {
+            std::error_code ignored;
+            std::filesystem::remove_all(_path, ignored);
+        }
+    }
+
+    ScopedOwnedTree(const ScopedOwnedTree&) = delete;
+    ScopedOwnedTree& operator=(const ScopedOwnedTree&) = delete;
+
+    void MarkOwned() noexcept {
+        _owned = true;
+    }
+
+    [[nodiscard]] bool CleanupChecked(std::string& detail) {
+        std::error_code error;
+        std::filesystem::remove_all(_path, error);
+        if (error) {
+            detail = error.message();
+            return false;
+        }
+        error.clear();
+        if (std::filesystem::exists(_path, error) || error) {
+            detail = error ? error.message() : "test-owned tree retained";
+            return false;
+        }
+        _owned = false;
+        detail.clear();
+        return true;
+    }
+
+private:
+    std::filesystem::path _path;
+    bool _owned{false};
+};
+
+std::optional<std::filesystem::path> CreateUniqueTestDirectory(
+    std::string_view label, std::string& detail) {
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    for (std::uint32_t attempt = 0; attempt < 32u; ++attempt) {
+        const std::filesystem::path candidate = std::filesystem::temp_directory_path() /
+            std::format("corsairs-{}-{}-{}", label, stamp, attempt);
+        std::error_code error;
+        if (std::filesystem::create_directory(candidate, error)) {
+            detail.clear();
+            return candidate;
+        }
+        if (error != std::errc::file_exists) {
+            detail = error.message();
+            return std::nullopt;
+        }
+    }
+    detail = "не удалось создать unique test directory";
+    return std::nullopt;
+}
+
+std::string ShellQuote(const std::filesystem::path& path) {
+    const std::string value = path.string();
+#if defined(_WIN32)
+    std::string quoted{"\""};
+    for (const char character : value) {
+        if (character == '"') {
+            quoted += "\\\"";
+        }
+        else {
+            quoted += character;
+        }
+    }
+    quoted += '"';
+    return quoted;
+#else
+    std::string quoted{"'"};
+    for (const char character : value) {
+        if (character == '\'') {
+            quoted += "'\\''";
+        }
+        else {
+            quoted += character;
+        }
+    }
+    quoted += '\'';
+    return quoted;
+#endif
+}
+
+int RunBudgetProbe(const std::filesystem::path& repoRoot,
+                   const std::filesystem::path& logPath) {
+#if defined(_WIN32)
+    const std::string command = ShellQuote(TERRAIN_PAGE_BUDGET_PROBE_PATH) +
+        " --repo-root " + ShellQuote(repoRoot) + " > " + ShellQuote(logPath) +
+        " 2>&1";
+#else
+    const std::string command = "nice -n 10 " +
+        ShellQuote(TERRAIN_PAGE_BUDGET_PROBE_PATH) + " --repo-root " +
+        ShellQuote(repoRoot) + " > " + ShellQuote(logPath) + " 2>&1";
+#endif
+    return std::system(command.c_str());
+}
+
+std::optional<std::string> ReadTextFile(const std::filesystem::path& path) {
+    std::ifstream input{path, std::ios::binary};
+    if (!input) {
+        return std::nullopt;
+    }
+    return std::string{std::istreambuf_iterator<char>{input},
+                       std::istreambuf_iterator<char>{}};
+}
+
+std::set<std::filesystem::path> ProbePrivateDirectories() {
+    std::set<std::filesystem::path> paths;
+    std::error_code error;
+    for (std::filesystem::directory_iterator iterator{
+             std::filesystem::temp_directory_path(), error};
+         !error && iterator != std::filesystem::directory_iterator{};
+         iterator.increment(error)) {
+        const std::string leaf = iterator->path().filename().string();
+        if (leaf.starts_with("corsairs-terrain-page-budget-probe-")) {
+            paths.insert(iterator->path());
+        }
+    }
+    return paths;
+}
+
 std::optional<std::uint32_t> ReadU32LeAt(
     const std::filesystem::path& path, std::uint64_t offset) {
     std::ifstream input{path, std::ios::binary};
@@ -323,9 +458,24 @@ std::vector<std::uint8_t> ExpectedUsedIds(const AC::MapPageTiles& page) {
             if (page.TilePresent[index] == 0u) {
                 continue;
             }
-            const AC::ResolvedTerrainLayers layers = AC::ResolveTerrainLayers(page.Tiles[index]);
-            for (std::size_t layer = 0; layer < layers.Count; ++layer) {
-                used[layers.Values[layer].TextureId] = true;
+            const AC::MapTile& tile = page.Tiles[index];
+            if (tile.BaseTex == 0u) {
+                continue;
+            }
+            used[tile.BaseTex] = true;
+            constexpr std::array<std::uint32_t, 3> textureShifts{26u, 16u, 6u};
+            constexpr std::array<std::uint32_t, 3> alphaShifts{22u, 12u, 2u};
+            for (std::size_t layer = 0; layer < textureShifts.size(); ++layer) {
+                const std::uint8_t textureId = static_cast<std::uint8_t>(
+                    (tile.TileInfo >> textureShifts[layer]) & 0x3fu);
+                if (textureId == 0u) {
+                    break;
+                }
+                const std::uint8_t alphaMask = static_cast<std::uint8_t>(
+                    (tile.TileInfo >> alphaShifts[layer]) & 0x0fu);
+                if (alphaMask != 0u) {
+                    used[textureId] = true;
+                }
             }
         }
     }
@@ -353,9 +503,11 @@ void RequirePixel(bool& corsairsTestOk,
 void RequireFailure(bool& corsairsTestOk,
                     const AC::TerrainBakeResult& result,
                     const std::string& detail,
-                    const std::filesystem::path& expectedPng) {
+                    const std::filesystem::path& expectedPng,
+                    std::string_view expectedDetail) {
     REQUIRE(!result.Ok);
-    REQUIRE(!detail.empty());
+    REQUIRE(!expectedDetail.empty());
+    REQUIRE_EQ(detail, std::string{expectedDetail});
     REQUIRE(result.PngPath.empty());
     REQUIRE(result.PngSha256.empty());
     REQUIRE(!std::filesystem::exists(expectedPng));
@@ -378,24 +530,32 @@ CORSAIRS_TEST(TerrainPageBaker_UsesLiteralLegacyBgra565AndDefaultWhite) {
         REQUIRE_EQ(sample.HeightCm, -120.0);
     }
 
-    const AC::MapTile zero{};
-    AC::MapTile extreme{};
-    extreme.TileInfo = 0xffffffffu;
-    extreme.BaseTex = 255u;
-    extreme.Color = ColorWord(0xffffu);
-    extreme.Height = std::numeric_limits<std::int8_t>::max();
-    extreme.Region = std::numeric_limits<std::int16_t>::min();
-    extreme.Island = 255u;
-    std::fill(std::begin(extreme.Block), std::end(extreme.Block), 255u);
-    const AC::LegacyTerrainCornerSample absentZero =
-        AC::ResolveLegacyTerrainCornerSample(zero, false);
-    const AC::LegacyTerrainCornerSample absentExtreme =
-        AC::ResolveLegacyTerrainCornerSample(extreme, false);
+    std::vector<AC::MapTile> absentPayloads(12u);
+    absentPayloads[1].TileInfo = 0xffffffffu;
+    absentPayloads[2].BaseTex = 255u;
+    absentPayloads[3].Color = ColorWord(0xffffu);
+    absentPayloads[4].Height = std::numeric_limits<std::int8_t>::max();
+    absentPayloads[5].Region = std::numeric_limits<std::int16_t>::min();
+    absentPayloads[6].Island = 255u;
+    absentPayloads[7].Block[0] = 255u;
+    absentPayloads[8].Block[1] = 255u;
+    absentPayloads[9].Block[2] = 255u;
+    absentPayloads[10].Block[3] = 255u;
+    absentPayloads[11].TileInfo = 0xffffffffu;
+    absentPayloads[11].BaseTex = 255u;
+    absentPayloads[11].Color = ColorWord(0xffffu);
+    absentPayloads[11].Height = std::numeric_limits<std::int8_t>::max();
+    absentPayloads[11].Region = std::numeric_limits<std::int16_t>::min();
+    absentPayloads[11].Island = 255u;
+    std::fill(std::begin(absentPayloads[11].Block),
+              std::end(absentPayloads[11].Block), 255u);
     const std::array<std::uint8_t, 4> white{255u, 255u, 255u, 255u};
-    REQUIRE(absentZero.Diffuse == white);
-    REQUIRE(absentExtreme.Diffuse == white);
-    REQUIRE_EQ(absentZero.HeightCm, -200.0);
-    REQUIRE_EQ(absentExtreme.HeightCm, -200.0);
+    for (const AC::MapTile& payload : absentPayloads) {
+        const AC::LegacyTerrainCornerSample absent =
+            AC::ResolveLegacyTerrainCornerSample(payload, false);
+        REQUIRE(absent.Diffuse == white);
+        REQUIRE_EQ(absent.HeightCm, -200.0);
+    }
 }
 
 CORSAIRS_TEST(TerrainPageBaker_BakesLiteralTexturePageAndRepeatsUvEveryFourCells) {
@@ -552,6 +712,14 @@ CORSAIRS_TEST(TerrainPageBaker_RejectsCheckedPageMathAndRemovesNoOutput) {
     cases.emplace_back(AC::TerrainPageId{0u, 0u},
                        Options(std::numeric_limits<std::uint32_t>::max(), 1u));
     cases.emplace_back(AC::TerrainPageId{1u, 0u}, Options(2u, 1u));
+    const std::array<std::string_view, 6> expectedDetails{
+        "CellsPerPage и PixelsPerCell должны быть ненулевыми",
+        "CellsPerPage и PixelsPerCell должны быть ненулевыми",
+        "координаты страницы не помещаются в uint32_t",
+        "размер изображения не помещается в uint32_t",
+        "полный byte count изображения переполнен",
+        "страница с right/bottom halo выходит за усечённую сетку карты",
+    };
 
     for (std::size_t index = 0; index < cases.size(); ++index) {
         auto reader = OpenReader(fixture.MapPath("math"), detail);
@@ -563,7 +731,8 @@ CORSAIRS_TEST(TerrainPageBaker_RejectsCheckedPageMathAndRemovesNoOutput) {
         const auto result = AC::BakeTerrainPage(
             *reader, *catalog, cases[index].first, fixture.AlphaPath(), output,
             cases[index].second, detail);
-        RequireFailure(corsairsTestOk, result, detail, expected);
+        RequireFailure(corsairsTestOk, result, detail, expected,
+                       expectedDetails[index]);
         if (!corsairsTestOk) {
             return;
         }
@@ -597,6 +766,20 @@ CORSAIRS_TEST(TerrainPageBaker_AllowsAbsentHaloAsWhiteButRejectsOwnedAbsence) {
     REQUIRE_EQ(first.AbsentSections, 0u);
     REQUIRE(first.UsedTextureIds == std::vector<std::uint8_t>{1u});
 
+    const std::vector<std::optional<AC::MapTile>> presentHaloOnly{
+        Tile(1u), Tile(63u),
+        Tile(63u), Tile(63u),
+    };
+    REQUIRE(fixture.WriteMap("present-halo-only", 2, 2, presentHaloOnly));
+    auto presentHaloReader = OpenReader(fixture.MapPath("present-halo-only"), detail);
+    REQUIRE(presentHaloReader.has_value());
+    const auto presentHaloResult = AC::BakeTerrainPage(
+        *presentHaloReader, *catalog, {0u, 0u}, fixture.AlphaPath(),
+        fixture.Output("present-halo-only"), Options(1u, 1u), detail);
+    REQUIRE(presentHaloResult.Ok);
+    REQUIRE(presentHaloResult.UsedTextureIds == std::vector<std::uint8_t>{1u});
+    REQUIRE_EQ(presentHaloResult.UnresolvedLayers, 0u);
+
     auto secondReader = OpenReader(fixture.MapPath("halo-b"), detail);
     REQUIRE(secondReader.has_value());
     const auto second = AC::BakeTerrainPage(
@@ -617,7 +800,8 @@ CORSAIRS_TEST(TerrainPageBaker_AllowsAbsentHaloAsWhiteButRejectsOwnedAbsence) {
         *missingReader, *catalog, {0u, 0u}, fixture.AlphaPath(), output,
         Options(1u, 1u), detail);
     RequireFailure(corsairsTestOk, failed, detail,
-                   output / "garner.albedo_0_0.png");
+                   output / "garner.albedo_0_0.png",
+                   "owned page содержит отсутствующую секцию");
     if (!corsairsTestOk) {
         return;
     }
@@ -632,7 +816,8 @@ CORSAIRS_TEST(TerrainPageBaker_AllowsAbsentHaloAsWhiteButRejectsOwnedAbsence) {
         *requiredReader, *catalog, {0u, 0u}, fixture.AlphaPath(), requiredOutput,
         Options(2u, 1u), detail);
     RequireFailure(corsairsTestOk, requiredFailed, detail,
-                   requiredOutput / "garner.albedo_0_0.png");
+                   requiredOutput / "garner.albedo_0_0.png",
+                   "owned page содержит отсутствующую секцию");
 }
 
 CORSAIRS_TEST(TerrainPageBaker_RejectsCatalogDecodeAndAtlasFailures) {
@@ -655,7 +840,8 @@ CORSAIRS_TEST(TerrainPageBaker_RejectsCatalogDecodeAndAtlasFailures) {
         *unresolvedReader, *catalog, {0u, 0u}, fixture.AlphaPath(), unresolvedOutput,
         Options(1u, 1u), detail);
     RequireFailure(corsairsTestOk, unresolved, detail,
-                   unresolvedOutput / "garner.albedo_0_0.png");
+                   unresolvedOutput / "garner.albedo_0_0.png",
+                   "не разрешён используемый terrain texture ID 2");
     if (!corsairsTestOk) {
         return;
     }
@@ -670,8 +856,21 @@ CORSAIRS_TEST(TerrainPageBaker_RejectsCatalogDecodeAndAtlasFailures) {
     const auto unreadable = AC::BakeTerrainPage(
         *unreadableReader, *catalog, {0u, 0u}, fixture.AlphaPath(), unreadableOutput,
         Options(1u, 1u), detail);
+    const std::string unreadableDetail = detail;
     RequireFailure(corsairsTestOk, unreadable, detail,
-                   unreadableOutput / "garner.albedo_0_0.png");
+                   unreadableOutput / "garner.albedo_0_0.png",
+                   unreadableDetail);
+    if (!corsairsTestOk) {
+        return;
+    }
+    auto repeatedUnreadableReader = OpenReader(fixture.MapPath("valid"), detail);
+    REQUIRE(repeatedUnreadableReader.has_value());
+    const auto repeatedUnreadable = AC::BakeTerrainPage(
+        *repeatedUnreadableReader, *catalog, {0u, 0u}, fixture.AlphaPath(),
+        fixture.Output("unreadable-repeat"), Options(1u, 1u), detail);
+    RequireFailure(corsairsTestOk, repeatedUnreadable, detail,
+                   fixture.Output("unreadable-repeat") / "garner.albedo_0_0.png",
+                   unreadableDetail);
     if (!corsairsTestOk) {
         return;
     }
@@ -694,8 +893,21 @@ CORSAIRS_TEST(TerrainPageBaker_RejectsCatalogDecodeAndAtlasFailures) {
         const auto failed = AC::BakeTerrainPage(
             *reader, *atlasCatalog, {0u, 0u}, atlasFixture.AlphaPath(), output,
             Options(1u, 1u), detail);
+        const std::string firstDetail = detail;
         RequireFailure(corsairsTestOk, failed, detail,
-                       output / "garner.albedo_0_0.png");
+                       output / "garner.albedo_0_0.png", firstDetail);
+        if (!corsairsTestOk) {
+            return;
+        }
+        auto repeatReader = OpenReader(atlasFixture.MapPath("valid"), detail);
+        REQUIRE(repeatReader.has_value());
+        const auto repeatOutput =
+            atlasFixture.Output("atlas-repeat-" + std::to_string(malformed));
+        const auto repeated = AC::BakeTerrainPage(
+            *repeatReader, *atlasCatalog, {0u, 0u}, atlasFixture.AlphaPath(),
+            repeatOutput, Options(1u, 1u), detail);
+        RequireFailure(corsairsTestOk, repeated, detail,
+                       repeatOutput / "garner.albedo_0_0.png", firstDetail);
         if (!corsairsTestOk) {
             return;
         }
@@ -712,6 +924,12 @@ CORSAIRS_TEST(TerrainPageBaker_EnforcesEveryProductionBudgetGate) {
     std::string detail;
     auto catalog = fixture.LoadCatalog(detail);
     REQUIRE(catalog.has_value());
+    constexpr std::array<std::string_view, 4> expectedDetails{
+        "превышен budget lifetime peak RSS",
+        "превышен budget размера PNG",
+        "превышен budget декодированного texture cache",
+        "превышен budget RGBA-строки",
+    };
 
     for (std::size_t gate = 0; gate < 4u; ++gate) {
         AC::TerrainBakeOptions options = Options(1u, 1u);
@@ -727,17 +945,180 @@ CORSAIRS_TEST(TerrainPageBaker_EnforcesEveryProductionBudgetGate) {
         else {
             options.MaxRgbaRowBytes = 3u;
         }
+        std::size_t cleanupCalls = 0u;
+        std::filesystem::path cleanupPath;
+        std::optional<std::string> cleanupHash;
+        options.RemoveCompletedOutput =
+            [&](const std::filesystem::path& path, std::string& cleanupDetail) {
+                ++cleanupCalls;
+                cleanupPath = path;
+                cleanupHash = AC::Sha256File(path, cleanupDetail);
+                if (!cleanupHash.has_value()) {
+                    return false;
+                }
+                std::error_code removeError;
+                const bool removed = std::filesystem::remove(path, removeError);
+                if (removeError || !removed) {
+                    cleanupDetail = "test cleanup не удалил completed PNG";
+                    return false;
+                }
+                cleanupDetail.clear();
+                return true;
+            };
         auto reader = OpenReader(fixture.MapPath("valid"), detail);
         REQUIRE(reader.has_value());
         const auto output = fixture.Output("gate-" + std::to_string(gate));
+        const auto expectedPng = output / "garner.albedo_0_0.png";
         const auto failed = AC::BakeTerrainPage(
             *reader, *catalog, {0u, 0u}, fixture.AlphaPath(), output, options, detail);
         RequireFailure(corsairsTestOk, failed, detail,
-                       output / "garner.albedo_0_0.png");
+                       expectedPng, expectedDetails[gate]);
         if (!corsairsTestOk) {
             return;
         }
+        REQUIRE_EQ(cleanupCalls, 1u);
+        REQUIRE(cleanupPath == expectedPng);
+        REQUIRE(cleanupHash.has_value());
+        REQUIRE(IsLowerHexSha(*cleanupHash));
+        REQUIRE(failed.OutputBytes > 0u);
+        REQUIRE(failed.PeakRssBytes > 0u);
+        REQUIRE_EQ(failed.PeakTextureCacheBytes, 64u);
+        REQUIRE_EQ(failed.PeakRgbaRowBytes, 4u);
     }
+}
+
+CORSAIRS_TEST(TerrainPageBaker_RetainsRecoveryEvidenceWhenCleanupFails) {
+    TerrainFixture fixture{"cleanup-recovery"};
+    REQUIRE(fixture.Ready());
+    REQUIRE(fixture.AddTexture(1u, "base", SolidImage(20u, 30u, 40u)));
+    REQUIRE(fixture.WriteAlpha(SolidImage(0u, 0u, 0u, 0u)));
+    REQUIRE(fixture.WriteMap(
+        "valid", 2, 2,
+        std::vector<std::optional<AC::MapTile>>(4u, Tile(1u))));
+    std::string detail;
+    auto catalog = fixture.LoadCatalog(detail);
+    REQUIRE(catalog.has_value());
+    auto reader = OpenReader(fixture.MapPath("valid"), detail);
+    REQUIRE(reader.has_value());
+
+    AC::TerrainBakeOptions options = Options(1u, 1u);
+    options.MaxPngBytes = 0u;
+    std::size_t cleanupCalls = 0u;
+    std::filesystem::path attemptedPath;
+    options.RemoveCompletedOutput =
+        [&](const std::filesystem::path& path, std::string& cleanupDetail) {
+            ++cleanupCalls;
+            attemptedPath = path;
+            cleanupDetail = "injected remove denial";
+            return false;
+        };
+    const auto output = fixture.Output("recovery");
+    const auto expectedPng = output / "garner.albedo_0_0.png";
+    const auto failed = AC::BakeTerrainPage(
+        *reader, *catalog, {0u, 0u}, fixture.AlphaPath(), output, options, detail);
+
+    REQUIRE(!failed.Ok);
+    REQUIRE_EQ(cleanupCalls, 1u);
+    REQUIRE(attemptedPath == expectedPng);
+    REQUIRE(failed.PngPath == expectedPng);
+    REQUIRE(IsLowerHexSha(failed.PngSha256));
+    REQUIRE_EQ(failed.OutputBytes, std::filesystem::file_size(expectedPng));
+    REQUIRE(failed.PeakRssBytes > 0u);
+    REQUIRE_EQ(
+        detail,
+        std::format(
+            "RECOVERY_REQUIRED: не удалось удалить PNG отклонённой попытки; "
+            "cause=превышен budget размера PNG; retained={}; sha256={}; "
+            "cleanup=injected remove denial",
+            expectedPng.generic_string(), failed.PngSha256));
+    const std::string firstDetail = detail;
+    const std::string firstHash = failed.PngSha256;
+    REQUIRE(std::filesystem::exists(expectedPng));
+    std::error_code removeError;
+    REQUIRE(std::filesystem::remove(expectedPng, removeError));
+    REQUIRE(!removeError);
+    REQUIRE(!std::filesystem::exists(expectedPng));
+
+    auto repeatedReader = OpenReader(fixture.MapPath("valid"), detail);
+    REQUIRE(repeatedReader.has_value());
+    const auto repeated = AC::BakeTerrainPage(
+        *repeatedReader, *catalog, {0u, 0u}, fixture.AlphaPath(), output,
+        options, detail);
+    REQUIRE(!repeated.Ok);
+    REQUIRE_EQ(cleanupCalls, 2u);
+    REQUIRE(repeated.PngPath == expectedPng);
+    REQUIRE_EQ(repeated.PngSha256, firstHash);
+    REQUIRE_EQ(detail, firstDetail);
+    REQUIRE(std::filesystem::exists(expectedPng));
+    removeError.clear();
+    REQUIRE(std::filesystem::remove(expectedPng, removeError));
+    REQUIRE(!removeError);
+    REQUIRE(!std::filesystem::exists(expectedPng));
+}
+
+CORSAIRS_TEST(TerrainPageBaker_RejectsSingleDecodedTextureAboveHardLiveLimit) {
+    TerrainFixture fixture{"oversized-decoded-texture"};
+    REQUIRE(fixture.Ready());
+    constexpr std::uint32_t width = 4097u;
+    constexpr std::uint32_t height = 2048u;
+    constexpr std::size_t decodedBytes =
+        static_cast<std::size_t>(width) * height * 4u;
+    REQUIRE_EQ(decodedBytes, 33562624u);
+    REQUIRE(fixture.AddTexture(
+        1u, "oversized", SolidImage(20u, 30u, 40u, 255u, width, height)));
+    REQUIRE(fixture.WriteAlpha(SolidImage(0u, 0u, 0u, 0u)));
+    REQUIRE(fixture.WriteMap(
+        "oversized", 2, 2,
+        std::vector<std::optional<AC::MapTile>>(4u, Tile(1u))));
+
+    std::string detail;
+    auto catalog = fixture.LoadCatalog(detail);
+    REQUIRE(catalog.has_value());
+    auto reader = OpenReader(fixture.MapPath("oversized"), detail);
+    REQUIRE(reader.has_value());
+    const auto output = fixture.Output("oversized");
+    const auto failed = AC::BakeTerrainPage(
+        *reader, *catalog, {0u, 0u}, fixture.AlphaPath(), output,
+        Options(1u, 1u), detail);
+    RequireFailure(
+        corsairsTestOk, failed, detail, output / "garner.albedo_0_0.png",
+        "terrain texture ID 1 имеет decoded размер 33562624 байт, hard limit 33554432");
+    if (!corsairsTestOk) {
+        return;
+    }
+    REQUIRE_EQ(failed.PeakTextureCacheBytes, decodedBytes);
+}
+
+CORSAIRS_TEST(TerrainPageBaker_ReleasesSampleBeforeEvictingNextTexture) {
+    TerrainFixture fixture{"decoded-texture-lifetime"};
+    REQUIRE(fixture.Ready());
+    constexpr std::uint32_t dimension = 2300u;
+    constexpr std::size_t decodedBytes =
+        static_cast<std::size_t>(dimension) * dimension * 4u;
+    REQUIRE_EQ(decodedBytes, 21160000u);
+    REQUIRE(fixture.AddTexture(
+        1u, "large-base", SolidImage(20u, 30u, 40u, 255u, dimension, dimension)));
+    REQUIRE(fixture.AddTexture(
+        2u, "large-upper", SolidImage(50u, 60u, 70u, 255u, dimension, dimension)));
+    REQUIRE(fixture.WriteAlpha(SolidImage(0u, 0u, 0u, 128u)));
+    REQUIRE(fixture.WriteMap(
+        "two-large", 2, 2,
+        std::vector<std::optional<AC::MapTile>>(
+            4u, Tile(1u, 0xffffu, FirstUpper(2u, 1u)))));
+
+    std::string detail;
+    auto catalog = fixture.LoadCatalog(detail);
+    REQUIRE(catalog.has_value());
+    auto reader = OpenReader(fixture.MapPath("two-large"), detail);
+    REQUIRE(reader.has_value());
+    AC::TerrainBakeOptions options = Options(1u, 1u);
+    options.MaxTextureCacheBytes = 22u * 1024u * 1024u;
+    const auto result = AC::BakeTerrainPage(
+        *reader, *catalog, {0u, 0u}, fixture.AlphaPath(), fixture.Output("two-large"),
+        options, detail);
+    REQUIRE(result.Ok);
+    REQUIRE_EQ(result.PeakTextureCacheBytes, decodedBytes);
+    REQUIRE(result.PeakTextureCacheBytes <= options.MaxTextureCacheBytes);
 }
 
 CORSAIRS_TEST(TerrainPageBaker_BakesCanonicalGarnerDeterministically) {
@@ -766,9 +1147,13 @@ CORSAIRS_TEST(TerrainPageBaker_BakesCanonicalGarnerDeterministically) {
     const auto goldenCell = inspectionReader->ReadWindow({2233u, 2784u, 1u, 1u},
                                                           0u, 0u, diagnostics);
     REQUIRE(goldenCell.has_value());
-    const auto layers = AC::ResolveTerrainLayers(goldenCell->Tiles[0]);
-    REQUIRE_EQ(layers.Count, 1u);
-    REQUIRE_EQ(layers.Values[0].TextureId, 4u);
+    REQUIRE_EQ(goldenCell->Tiles[0].BaseTex, 4u);
+    REQUIRE_EQ(goldenCell->Tiles[0].TileInfo, 0x02cf2000u);
+    REQUIRE_EQ((goldenCell->Tiles[0].TileInfo >> 26u) & 0x3fu, 0u);
+    const auto goldenPath = catalog->Resolve(goldenCell->Tiles[0].BaseTex);
+    REQUIRE(goldenPath.has_value());
+    REQUIRE_EQ(goldenPath->generic_string(),
+               (clientRoot / "texture" / "terrain" / "brick05.png").generic_string());
 
     const auto frustum = inspectionReader->ReadWindow(
         {2193u, 2756u, 80u, 47u}, 0u, 0u, diagnostics);
@@ -834,16 +1219,20 @@ CORSAIRS_TEST(TerrainPageBaker_BakesCanonicalGarnerDeterministically) {
     }
 
     const std::vector<std::uint8_t> expectedIds = ExpectedUsedIds(*page);
+    REQUIRE(expectedIds == (std::vector<std::uint8_t>{
+        2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 12u, 16u, 18u, 19u, 20u,
+        22u, 25u, 33u, 35u,
+    }));
     AC::TerrainBakeOptions options;
     options.MaxRssBytes = std::numeric_limits<std::size_t>::max();
-    const std::filesystem::path outputRoot =
-        std::filesystem::temp_directory_path() / "corsairs-garner-page-tests";
-    std::error_code error;
-    std::filesystem::remove_all(outputRoot, error);
+    const auto outputRoot = CreateUniqueTestDirectory("garner-page-tests", detail);
+    REQUIRE(outputRoot.has_value());
+    ScopedOwnedTree outputCleanup{*outputRoot};
+    outputCleanup.MarkOwned();
 
     auto firstReader = OpenReader(mapPath, detail);
     REQUIRE(firstReader.has_value());
-    const auto firstDirectory = outputRoot / "run-a";
+    const auto firstDirectory = *outputRoot / "run-a";
     const auto first = AC::BakeTerrainPage(
         *firstReader, *catalog, {17u, 21u}, alphaAtlas, firstDirectory, options, detail);
     REQUIRE(first.Ok);
@@ -871,17 +1260,118 @@ CORSAIRS_TEST(TerrainPageBaker_BakesCanonicalGarnerDeterministically) {
     REQUIRE(first.PeakTextureCacheBytes <= options.MaxTextureCacheBytes);
     REQUIRE(first.PeakRgbaRowBytes <= options.MaxRgbaRowBytes);
     REQUIRE(first.PeakRssBytes > 0u);
+    const auto oracleImage = AC::DecodeImageFile(first.PngPath, detail);
+    REQUIRE(oracleImage.has_value());
+    REQUIRE_EQ(oracleImage->Width, 4096u);
+    REQUIRE_EQ(oracleImage->Height, 4096u);
+    RequirePixel(corsairsTestOk, *oracleImage, 4095u, 3584u, {0u, 0u, 0u, 0u});
+    if (!corsairsTestOk) {
+        return;
+    }
+    RequirePixel(corsairsTestOk, *oracleImage, 4095u, 3600u, {0u, 0u, 0u, 0u});
+    if (!corsairsTestOk) {
+        return;
+    }
+    RequirePixel(corsairsTestOk, *oracleImage, 4095u, 3615u, {0u, 0u, 0u, 0u});
+    if (!corsairsTestOk) {
+        return;
+    }
+    RequirePixel(corsairsTestOk, *oracleImage, 4095u, 3808u,
+                 {148u, 130u, 93u, 255u});
+    if (!corsairsTestOk) {
+        return;
+    }
+    RequirePixel(corsairsTestOk, *oracleImage, 4095u, 3824u,
+                 {141u, 128u, 96u, 255u});
+    if (!corsairsTestOk) {
+        return;
+    }
+    RequirePixel(corsairsTestOk, *oracleImage, 4095u, 3839u,
+                 {143u, 127u, 92u, 255u});
+    if (!corsairsTestOk) {
+        return;
+    }
+    REQUIRE_EQ(first.OutputBytes, 43610431u);
+    REQUIRE_EQ(first.PngSha256,
+               std::string{"3308d429e43c42b67a69a75cbe5eadd34a70f5289d2d024330cdeb0509b86c93"});
 
     auto secondReader = OpenReader(mapPath, detail);
     REQUIRE(secondReader.has_value());
-    const auto secondDirectory = outputRoot / "run-b";
+    const auto secondDirectory = *outputRoot / "run-b";
     const auto second = AC::BakeTerrainPage(
         *secondReader, *catalog, {17u, 21u}, alphaAtlas, secondDirectory, options, detail);
     REQUIRE(second.Ok);
     REQUIRE(second.PngPath == secondDirectory / "garner.albedo_17_21.png");
     REQUIRE_EQ(first.PngSha256, second.PngSha256);
     REQUIRE(first.UsedTextureIds == second.UsedTextureIds);
-    std::filesystem::remove_all(outputRoot, error);
+    REQUIRE(outputCleanup.CleanupChecked(detail));
+    REQUIRE(detail.empty());
+}
+
+CORSAIRS_TEST(TerrainPageBudgetProbe_LeavesForeignCollisionAndCleansOwnedOutput) {
+    const std::filesystem::path foreignDirectory =
+        std::filesystem::temp_directory_path() /
+        "corsairs-terrain-page-budget-probe";
+    std::error_code error;
+    REQUIRE(!std::filesystem::exists(foreignDirectory, error));
+    REQUIRE(!error);
+    ScopedOwnedTree foreignCleanup{foreignDirectory};
+    REQUIRE(std::filesystem::create_directory(foreignDirectory, error));
+    REQUIRE(!error);
+    foreignCleanup.MarkOwned();
+    const std::filesystem::path sentinel = foreignDirectory / "foreign-sentinel.txt";
+    {
+        std::ofstream output{sentinel};
+        REQUIRE(static_cast<bool>(output));
+        output << "do not remove\n";
+        REQUIRE(output.good());
+    }
+
+    const auto before = ProbePrivateDirectories();
+    std::string detail;
+    const auto logDirectory = CreateUniqueTestDirectory("probe-collision-log", detail);
+    REQUIRE(logDirectory.has_value());
+    ScopedOwnedTree logCleanup{*logDirectory};
+    logCleanup.MarkOwned();
+    const std::filesystem::path logPath = *logDirectory / "probe.log";
+    REQUIRE_EQ(RunBudgetProbe(std::filesystem::path{CORSAIRS_REPO_ROOT}, logPath), 0);
+    REQUIRE(std::filesystem::is_regular_file(sentinel));
+    REQUIRE(ProbePrivateDirectories() == before);
+    const auto log = ReadTextFile(logPath);
+    REQUIRE(log.has_value());
+    REQUIRE(log->contains(
+        "sha256=3308d429e43c42b67a69a75cbe5eadd34a70f5289d2d024330cdeb0509b86c93"));
+    REQUIRE(foreignCleanup.CleanupChecked(detail));
+    REQUIRE(detail.empty());
+    REQUIRE(logCleanup.CleanupChecked(detail));
+    REQUIRE(detail.empty());
+}
+
+CORSAIRS_TEST(TerrainPageBudgetProbe_RejectsCanonicalRepoSymlinkEscape) {
+    std::string detail;
+    const auto fakeRoot = CreateUniqueTestDirectory("probe-symlink-root", detail);
+    REQUIRE(fakeRoot.has_value());
+    ScopedOwnedTree fakeCleanup{*fakeRoot};
+    fakeCleanup.MarkOwned();
+    const std::filesystem::path realRoot{CORSAIRS_REPO_ROOT};
+    std::error_code error;
+    std::filesystem::create_directory_symlink(
+        realRoot / "Client", *fakeRoot / "Client", error);
+    REQUIRE(!error);
+    std::filesystem::create_directory_symlink(
+        realRoot / "databases", *fakeRoot / "databases", error);
+    REQUIRE(!error);
+
+    const std::filesystem::path logPath = *fakeRoot / "probe.log";
+    REQUIRE(RunBudgetProbe(*fakeRoot, logPath) != 0);
+    const auto log = ReadTextFile(logPath);
+    REQUIRE(log.has_value());
+    REQUIRE_EQ(*log,
+               std::string{
+                   "TerrainPageBudget: вход Client/map/garner.map выходит за "
+                   "canonical repo root\n"});
+    REQUIRE(fakeCleanup.CleanupChecked(detail));
+    REQUIRE(detail.empty());
 }
 
 CORSAIRS_TEST(ProcessMetrics_ReportsNonzeroLifetimePeakRss) {

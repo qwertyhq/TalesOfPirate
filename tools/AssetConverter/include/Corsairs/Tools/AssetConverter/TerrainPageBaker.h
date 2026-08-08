@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,9 @@ struct TerrainBakeOptions {
     std::size_t MaxRssBytes{128u * 1024u * 1024u};
     std::size_t MaxPngBytes{96u * 1024u * 1024u};
     std::size_t MaxRgbaRowBytes{16u * 1024u};
+    // Empty in production. Tests may inject only the completed-file removal primitive.
+    std::function<bool(const std::filesystem::path&, std::string&)>
+        RemoveCompletedOutput;
 };
 
 struct TerrainBakeResult {
