@@ -1152,6 +1152,25 @@ git commit -m "feat(converter): generate bounded terrain page mesh"
 
 ### Task 7: Expose one fail-fast production terrain command
 
+Task 7 starts only after terrain Tasks 1–6 are GREEN, independently reviewed,
+and committed. It consumes their production APIs; it must not copy or
+reimplement their map parsing, raster encoding, layer resolution, PNG baking,
+SHA-256, process metrics, or page-mesh logic. No Unreal editor/client is used
+in this task.
+
+The sole publication boundary is the small top manifest
+`artifacts/maps/garner.reference-albedo.json`. All seven large products are
+written first into one private `artifacts/maps/runs/<run-id>/` directory. A
+failed attempt may leave that directory unreferenced, but may never change the
+last valid top manifest or publish a run-internal manifest.
+
+The `terrain-reference` subcommand is dispatched before the legacy directory
+converter parses its positional roots or reaches `ReadWholeFile`/
+`ParseMap`/`MapTerrain::Tiles`. Its complete inputs are the exact CLI map,
+database, client root, alpha atlas, and every catalog-resolved source texture
+actually used by the page. The top manifest hashes that complete provenance;
+tracked inputs are not trusted merely because they are in git.
+
 **Files:**
 
 - Create: `tools/AssetConverter/include/Corsairs/Tools/AssetConverter/TerrainReferenceCommand.h`
@@ -1163,7 +1182,23 @@ git commit -m "feat(converter): generate bounded terrain page mesh"
 - Modify: `tools/AssetConverter/CMakeLists.txt`
 - Modify: `.gitignore`
 
-**Interfaces:**
+Do not modify generated `artifacts`, `Content`, `Data/Heights` outputs, DBs,
+pycache, Tasks 1–6 production files, Unreal modules, or existing tracked
+`.height.r16` files in the commit. Generated outputs are exercised but never
+staged.
+
+**Consumed interfaces:**
+
+- Task 1: `MapSectionReader`, `MapPageTiles`, `MapCellRect`, `TerrainPageId`.
+- Task 2: `WriteTerrainRasters(reader, basePath, stats, detail)`.
+- Task 3: `TerrainCatalog::Load(database, clientRoot, detail)`.
+- Task 4: `Sha256File(path, detail)`.
+- Task 5: `BakeTerrainPage(reader, catalog, page, alpha, runDirectory,
+  bakeOptions, detail)` and `TerrainPageBudgetProbe`.
+- Task 6: `WriteTerrainPageMesh(pageTiles, pageId, runDirectory,
+  meshOptions, detail)`.
+
+**Produced interfaces:**
 
 ```cpp
 struct TerrainReferenceOptions {
@@ -1181,6 +1216,7 @@ struct TerrainReferenceOptions {
 enum class TerrainManifestIssueCode : std::uint32_t {
     INVALID_SCHEMA,
     INVALID_ALGORITHM,
+    INVALID_PROVENANCE,
     INVALID_BOUNDS,
     INVALID_TEXTURE_IDS,
     INVALID_SECTION_MASK,
@@ -1193,11 +1229,26 @@ enum class TerrainManifestIssueCode : std::uint32_t {
 struct TerrainOutputFile {
     std::filesystem::path ManifestRelativePath;
     std::string Sha256;
+    std::uint64_t SizeBytes;
+};
+
+struct TerrainHashedInputDto {
+    std::filesystem::path Path;
+    std::string Sha256;
+};
+
+struct TerrainTextureSourceDto {
+    std::uint8_t TextureId;
+    std::filesystem::path Path;
+    std::string Sha256;
 };
 
 struct TerrainManifestSourceDto {
-    std::filesystem::path MapPath;
-    std::string MapSha256;
+    TerrainHashedInputDto Map;
+    TerrainHashedInputDto Database;
+    std::filesystem::path ClientRoot;
+    TerrainHashedInputDto AlphaAtlas;
+    std::vector<TerrainTextureSourceDto> UsedTextures;
 };
 
 struct TerrainManifestPageDto {
@@ -1259,16 +1310,19 @@ struct TerrainManifestIssue {
     std::string Detail;
 };
 
-std::vector<TerrainManifestIssue>
-ValidateTerrainReferenceManifest(
-    const TerrainReferenceManifestDto& manifest,
-    const std::filesystem::path& manifestDirectory,
-    const TerrainReferenceOptions& limits);
+std::string SerializeTerrainReferenceManifest(
+    const TerrainReferenceManifestDto& manifest);
 
 std::optional<TerrainReferenceManifestDto>
 ParseTerrainReferenceManifest(
     std::string_view json,
     std::vector<TerrainManifestIssue>& issues);
+
+std::vector<TerrainManifestIssue>
+ValidateTerrainReferenceManifest(
+    const TerrainReferenceManifestDto& manifest,
+    const std::filesystem::path& manifestDirectory,
+    const TerrainReferenceOptions& limits);
 
 struct TerrainBuiltFile {
     std::filesystem::path RunLeafPath;
@@ -1288,7 +1342,21 @@ struct TerrainBuildFiles {
 struct TerrainReferenceBuildProducts {
     TerrainBakeResult Bake;
     TerrainPageMeshResult Mesh;
+    TerrainManifestSourceDto Source;
     TerrainBuildFiles Files;
+};
+
+enum class TerrainPublicationStatus : std::uint32_t {
+    OK,
+    WRITE_FAILED,
+    RECOVERY_REQUIRED,
+};
+
+struct TerrainPublicationResult {
+    TerrainPublicationStatus Status;
+    std::string Detail;
+    std::filesystem::path RecoveryBackup;
+    std::string RecoveryCommand;
 };
 
 struct TerrainReferenceDependencies {
@@ -1296,10 +1364,9 @@ struct TerrainReferenceDependencies {
         const TerrainReferenceOptions&,
         const std::filesystem::path& runDirectory,
         std::string& detail)> BuildProducts;
-    std::function<bool(
+    std::function<TerrainPublicationResult(
         const std::filesystem::path& destination,
-        std::string_view json,
-        std::string& detail)> AtomicPublish;
+        std::string_view json)> AtomicPublish;
 };
 
 TerrainReferenceDependencies
@@ -1317,124 +1384,130 @@ int RunTerrainReference(
     std::ostream& error);
 ```
 
-`ParseTerrainReferenceManifest` is the only JSON-to-DTO entry point. It
-requires every literal key and its exact scalar/object/array type before
-constructing the DTO; a missing member is
-`{INVALID_SCHEMA, "<json.pointer>", "required field is missing"}`. The
-serializer emits exactly the same DTO shape. No bake/mesh result object is
-serialized directly and no required manifest field is recovered from a
-default value.
+The public serializer is the deterministic DTO-to-JSON seam used by both the
+command and tests. The parser is the only JSON-to-DTO seam. It rejects malformed
+JSON, duplicate/unknown keys, missing required keys, wrong JSON types,
+out-of-range integers, non-finite numbers, and trailing input. A missing member
+is exactly `{INVALID_SCHEMA, "<json.pointer>", "required field is missing"}`.
+No required value is recovered from a C++ default.
 
-The three-argument `RunTerrainReference` constructs
-`MakeProductionTerrainReferenceDependencies()` and delegates to the
-injectable overload. The production `BuildProducts` owns the real
-section-reader/raster/bake/mesh calls. `AtomicPublish` is the only callback
-allowed to replace the top-level manifest; tests replace it with a counting
-spy. Neither callback may bypass DTO construction, serialization,
-parse-roundtrip, or `ValidateTerrainReferenceManifest` inside
-`RunTerrainReference`.
+Factor argument parsing into a small testable function in
+`TerrainReferenceCommand.cpp` (it may remain private to the translation unit
+if tests drive the executable). Tests must prove unknown/duplicate/missing
+switches, bad numeric conversions, overflow, zero-size rectangles, and extra
+arguments return usage error 2. `--require-present-rect` is always
+`X Y Width Height`, never max-X/max-Y.
 
-There is one path base everywhere: `manifestDirectory`, the parent of the
-published top-level `garner.reference-albedo.json` (normally
-`artifacts/maps`). Every serialized `files.*.path` is exactly
-`runs/<run-id>/<expected-leaf-name>`, uses forward slashes, and is resolved as
-`manifestDirectory / path`. All seven entries must share the same single
-`run-id`; absolute paths, `..`, leaf-only paths, a second `runs` segment, and
-paths escaping through symlinks are invalid. `TerrainBuiltFile::RunLeafPath`
-must be one expected filename with no parent component and is used only while
-production files are being written inside `runDirectory`. Before DTO
-validation/publication, `RunTerrainReference` rewrites each build-product
-leaf to its distinct `TerrainOutputFile::ManifestRelativePath` canonical
-top-manifest-relative `runs/<run-id>/<leaf>` value.
+`Main.cpp` checks the first argument for literal `terrain-reference` before
+the legacy `argc < 3`, input/output-root parsing, recursive traversal, or any
+call to `ReadWholeFile`. The production test injects guards into the new
+dependency path and proves the legacy converter is unreachable for this
+subcommand; source inspection alone is not the gate.
 
-- [ ] **Step 1: Add RED orchestration tests**
+**Production dependency call graph:**
 
-Use temporary fixtures to require exit code 1 and no newly published manifest for a corrupt offset, missing used texture, absent required section, PNG budget violation, RSS budget violation, or geometry error violation.
+1. Before building, recover or fail closed on any unfinished owned top-manifest
+   publication journal. Validate options and exclusively create a unique
+   regular directory directly under `options.Output/runs/`; reject a reused
+   name, symlink/non-directory, and prove its resolved path remains beneath
+   resolved `options.Output` before writing.
+2. Hash `options.Map`, `options.Database`, and `options.AlphaAtlas` from disk
+   with Task 4, record their exact normalized CLI paths plus
+   `options.ClientRoot`, and open the map only with Task 1.
+3. Call Task 2 with base path `runDirectory / "garner"`, producing exactly
+   `garner.height.r16`, `garner.block.raw`, `garner.region.raw`, and
+   `garner.terrain.json`.
+4. Load the Task 3 catalog and call Task 5 into the same run directory,
+   producing exactly `garner.albedo_17_21.png`. For every sorted unique
+   `Bake.UsedTextureIds` entry, resolve the exact Task 3 catalog path, require
+   it beneath `options.ClientRoot`, record the normalized CLI-root-relative
+   mapping `{textureId,path}`, and recompute that source file's SHA-256. The
+   mapping vector is strictly increasing by texture ID and its IDs equal
+   `Bake.UsedTextureIds` exactly.
+5. Read Task 1 window `{2176,2688,128,128}` with right/bottom halo 1 and pass
+   that exact page to Task 6, producing both
+   `garner.terrain_17_21.gltf` and `garner.terrain_17_21.bin`.
+6. Require exactly seven distinct non-symlink regular files, canonical leaf
+   names, paths within the one run directory, and no eighth manifest or product.
+   Ignore every callback-supplied hash: independently recompute all seven
+   SHA-256 values and sizes from disk, then checked-add the sizes into
+   `metrics.totalOutputBytes`.
+7. Build the DTO from the actual Task 2/5/6 results, not duplicated constants;
+   include the complete independently rehashed provenance, serialize,
+   parse-roundtrip, compare every DTO field, validate against `options.Output`,
+   and only then invoke `AtomicPublish` exactly once.
 
-Build a valid `TerrainReferenceManifestDto`, serialize it, then use a
-table-driven JSON mutation test to delete every required key one at a time
-and to replace every scalar/array/object with the wrong JSON type.
-`ParseTerrainReferenceManifest` must return `nullopt` and the exact JSON
-pointer with `INVALID_SCHEMA`. For DTO-level mutations require the exact
-field/code for wrong schema/algorithm/bounds/texture ordering/section
-mask/file/hash/total bytes/metric. Path mutations start with a valid fixture
-whose manifest is `/tmp/maps/garner.reference-albedo.json`, run directory is
-`/tmp/maps/runs/run-001`, and seven paths are
-`runs/run-001/<expected-leaf>`. Require `INVALID_FILE` for a leaf-only path,
-different run IDs, `runs/run-001/runs/...`, absolute/traversing paths, a
-symlink escape, or validation against the run directory instead of
-`/tmp/maps`.
+`Bake.Ok`/`Mesh.Ok`, their output paths, bounds, presence/unresolved counts,
+budgets, algorithm, texture IDs, catalog mapping, provenance paths/hashes, and
+geometry metrics must agree with the actual inputs and seven disk products. A
+successful callback is not trusted merely because it returned `Ok=true` or
+supplied a hash string.
 
-Add literal injectable-path tests named:
+There is one path base: the parent of the published top manifest, normally
+`artifacts/maps`. Each manifest path is exactly
+`runs/<one-run-id>/<expected-leaf>`, uses forward slashes, and resolves as
+`manifestDirectory / path`. All seven share one run ID. Reject absolute paths,
+empty/dot run IDs, `..`, leaf-only paths, nested/second `runs`, mixed run IDs,
+wrong leaves, duplicates, non-regular files, and any symlink escape. Never
+validate relative to the run directory.
 
-```text
-TerrainReferenceCommand_RejectsInjectedInvalidBakeBeforePublish
-TerrainReferenceCommand_RejectsInjectedInvalidMeshBeforePublish
-TerrainReferenceCommand_RejectsSerializedRoundTripBeforePublish
-TerrainReferenceCommand_PublishesValidatedDtoExactlyOnce
-```
+Source provenance has a separate explicit base: the repository working
+directory from which the fixed command is invoked. `source.map.path`,
+`source.database.path`, `source.clientRoot`, and `source.alphaAtlas.path` are
+the exact normalized forward-slash CLI strings shown below. Each used-texture
+path is the normalized `options.ClientRoot / catalogRelativePath` string (for
+example `Client/texture/...`), while its file is resolved canonically beneath
+`options.ClientRoot`. Reject absolute paths, empty/dot/`..` segments,
+backslashes, duplicate/case-alias paths, a client-root mismatch, or a symlink
+escape; validation reopens every source through the corresponding already-
+validated option rather than joining it to `manifestDirectory`.
 
-Each test passes `TerrainReferenceDependencies` whose `BuildProducts`
-returns real temporary files plus `Bake.Ok=true` and `Mesh.Ok=true`. Mutate
-one supposedly successful result at a time: wrong bake bounds, one absent
-section, one unresolved layer, wrong PNG size/hash, max/RMS/shared-boundary
-error over the limits, or a mismatched glTF/bin path. The injected
-`AtomicPublish` increments `publishCalls` and captures bytes without touching
-disk. Every invalid case requires exit code 1, `publishCalls == 0`, and an
-existing top manifest to remain byte-identical. The valid case requires exit
-code 0, `publishCalls == 1`, then parses the captured bytes and validates them
-against the top manifest directory. This proves validation and serialized
-parse-roundtrip happen inside `RunTerrainReference` before publication rather
-than only in the production builder callback.
-
-Require a successful run directory to contain these seven leaf files:
-
-```text
-garner.height.r16
-garner.block.raw
-garner.region.raw
-garner.terrain.json
-garner.albedo_17_21.png
-garner.terrain_17_21.gltf
-garner.terrain_17_21.bin
-```
-
-The eighth output is only the published top-level
-`artifacts/maps/garner.reference-albedo.json`; no run-internal manifest is a
-consumer input.
-
-Require this literal schema shape (hash/path values abbreviated only here):
+The complete schema is the literal schema below: version 1, algorithm
+`legacy-fixed-pipeline-v1`, page `(17,21)`, source bounds
+`{2176,2688,128,128}`, `pixelsPerCell=32`, dimensions `4096x4096`, ambient
+`[1,1,1]`, `dwTColor=0`, required-present rect `{2193,2756,80,47}`, sorted
+unique real texture IDs, a `16x16` section mask rooted at `(272,336)` with
+exactly 256 ones, complete source provenance, all seven path/hash/size entries,
+and every metric from the canonical DTO. `source.usedTextures` is the exact
+sorted Task 3 mapping for `usedTextureIds`; its representative single record
+below is abbreviated, as are hash strings, `[1]`, every `sizeBytes: 0`, and
+observational metric zeros. The real Garner manifest contains every used
+texture record, exactly 256 mask ones, seven disk-derived nonzero sizes, their
+checked total, measured process/file/geometry metrics, and literal zero
+absent/unresolved counts.
 
 ```json
 {
   "schemaVersion": 1,
   "algorithmVersion": "legacy-fixed-pipeline-v1",
   "source": {
-    "mapPath": "Client/map/garner.map",
-    "mapSha256": "<sha256>"
+    "map": {"path": "Client/map/garner.map", "sha256": "<sha256>"},
+    "database": {"path": "databases/gamedata.sqlite", "sha256": "<sha256>"},
+    "clientRoot": "Client",
+    "alphaAtlas": {
+      "path": "Client/texture/terrain/alpha/total.png",
+      "sha256": "<sha256>"
+    },
+    "usedTextures": [
+      {
+        "textureId": 4,
+        "path": "Client/texture/terrain/brick05.png",
+        "sha256": "<sha256>"
+      }
+    ]
   },
   "page": {
     "x": 17,
     "y": 21,
-    "sourceCellBounds": {
-      "x": 2176,
-      "y": 2688,
-      "width": 128,
-      "height": 128
-    },
+    "sourceCellBounds": {"x": 2176, "y": 2688, "width": 128, "height": 128},
     "pixelsPerCell": 32,
     "pixelWidth": 4096,
     "pixelHeight": 4096,
     "ambient": [1.0, 1.0, 1.0],
     "dwTColor": 0
   },
-  "requiredPresentRect": {
-    "x": 2193,
-    "y": 2756,
-    "width": 80,
-    "height": 47
-  },
-  "usedTextureIds": [4, 5],
+  "requiredPresentRect": {"x": 2193, "y": 2756, "width": 80, "height": 47},
+  "usedTextureIds": [4],
   "sectionPresence": {
     "originX": 272,
     "originY": 336,
@@ -1443,13 +1516,13 @@ Require this literal schema shape (hash/path values abbreviated only here):
     "rowMajorMask": [1]
   },
   "files": {
-    "height": {"path": "runs/run-001/garner.height.r16", "sha256": "<sha256>"},
-    "block": {"path": "runs/run-001/garner.block.raw", "sha256": "<sha256>"},
-    "region": {"path": "runs/run-001/garner.region.raw", "sha256": "<sha256>"},
-    "terrainMetadata": {"path": "runs/run-001/garner.terrain.json", "sha256": "<sha256>"},
-    "albedo": {"path": "runs/run-001/garner.albedo_17_21.png", "sha256": "<sha256>"},
-    "meshGltf": {"path": "runs/run-001/garner.terrain_17_21.gltf", "sha256": "<sha256>"},
-    "meshBin": {"path": "runs/run-001/garner.terrain_17_21.bin", "sha256": "<sha256>"}
+    "height": {"path": "runs/run-001/garner.height.r16", "sha256": "<sha256>", "sizeBytes": 0},
+    "block": {"path": "runs/run-001/garner.block.raw", "sha256": "<sha256>", "sizeBytes": 0},
+    "region": {"path": "runs/run-001/garner.region.raw", "sha256": "<sha256>", "sizeBytes": 0},
+    "terrainMetadata": {"path": "runs/run-001/garner.terrain.json", "sha256": "<sha256>", "sizeBytes": 0},
+    "albedo": {"path": "runs/run-001/garner.albedo_17_21.png", "sha256": "<sha256>", "sizeBytes": 0},
+    "meshGltf": {"path": "runs/run-001/garner.terrain_17_21.gltf", "sha256": "<sha256>", "sizeBytes": 0},
+    "meshBin": {"path": "runs/run-001/garner.terrain_17_21.bin", "sha256": "<sha256>", "sizeBytes": 0}
   },
   "metrics": {
     "peakRssBytes": 0,
@@ -1466,24 +1539,224 @@ Require this literal schema shape (hash/path values abbreviated only here):
 }
 ```
 
-`usedTextureIds` is the sorted real set, not hard-coded to the illustrative two IDs. `rowMajorMask` length must equal `width*height`; for Garner page `(17,21)` it has exactly 256 ones. RED DTO tests remove or alter every required field, use a wrong algorithm version/bounds/mask length/mask bit/used ID order, and require validation failure; command-path tests require that any issue prevents a newly published manifest.
+- [ ] **Step 1: Add the smallest RED C++ tests**
 
-- [ ] **Step 2: Verify RED**
+Add strict tests for:
 
-Expected compile error on the command header, and the installer module is absent:
+- serializer/parser roundtrip and deterministic bytes;
+- deletion of every required key, wrong type for every object/array/scalar,
+  duplicate/unknown keys, bad integer ranges, malformed/trailing JSON, with
+  exact issue code and JSON pointer;
+- DTO mutations for schema/algorithm/bounds/texture ordering/mask/file path/
+  hash/individual size/total bytes/metric/budget;
+- deletion/type/path/hash/tamper mutations for map, database, client root,
+  alpha atlas, and each used-texture record; reject unsorted/duplicate/missing
+  texture IDs, an ID set different from `usedTextureIds`, a catalog path outside
+  the client root, and a same-path file whose bytes changed after the callback;
+- path grammar using a manifest under `/tmp/maps` and files under one
+  `/tmp/maps/runs/run-001`, including leaf-only, mixed IDs, nested `runs`,
+  absolute/traversal paths, wrong leaves, duplicates, extra/eighth products,
+  wrong validation base, and symlink escape;
+- corrupt map offset, missing used texture, absent required section, PNG/RSS/
+  cache/row budget, and max/RMS/shared-boundary violation through the production
+  overload, with exit 1 and no changed top manifest;
+- the exact CLI argument vector, literal width/height interpretation, and proof
+  that `terrain-reference` dispatches before every legacy `ReadWholeFile` path;
+- two successful builds under one output root with distinct run IDs; after
+  normalizing only `files.*.path` from `runs/<actual-id>/...` to
+  `runs/<run-id>/...`, require byte-identical canonical serialization, equal
+  seven-file SHA-256/size tuples, and no other semantic difference.
+
+Add these injectable-path tests verbatim:
+
+```text
+TerrainReferenceCommand_RejectsInjectedInvalidBakeBeforePublish
+TerrainReferenceCommand_RejectsInjectedInvalidMeshBeforePublish
+TerrainReferenceCommand_RejectsSerializedRoundTripBeforePublish
+TerrainReferenceCommand_PublishesValidatedDtoExactlyOnce
+```
+
+Each injected builder creates real temporary files. Invalid cases require
+`publishCalls == 0` and a pre-existing manifest byte-identical. The valid case
+requires exactly one publish, parses the captured bytes, validates from the top
+manifest directory, and proves there is no eighth run-internal manifest.
+
+Add direct production-publisher fault tests with these literal injection
+points:
+
+```text
+MANIFEST_AFTER_TEMP_FSYNC
+MANIFEST_AFTER_BACKUP_FSYNC
+MANIFEST_AFTER_PREPARED_JOURNAL_FSYNC
+MANIFEST_AFTER_REPLACE
+MANIFEST_AFTER_REPLACE_PARENT_FSYNC
+MANIFEST_AFTER_REPLACED_JOURNAL_FSYNC
+MANIFEST_AFTER_READBACK_VERIFY
+MANIFEST_AFTER_COMMITTED_JOURNAL_FSYNC
+MANIFEST_ROLLBACK_REPLACE
+MANIFEST_ROLLBACK_PARENT_FSYNC
+MANIFEST_ROLLBACK_VERIFY
+```
+
+Route production publication filesystem primitives through a narrow injected
+operations adapter in direct tests; the normal dependency factory binds only
+real filesystem calls. The fault seam may not bypass serializer, temp
+readback, manifest validation, or final destination verification.
+
+For each pre-commit point test both a prior manifest with non-default mode and
+no prior manifest. A one-shot failure/crash must recover exact prior
+bytes/mode/existence either in the same call or on a fresh simulated process
+startup. Persistent rollback replace/fsync/verification failure is exactly
+`RECOVERY_REQUIRED`, retains the immutable verified backup and journal, and
+returns their paths plus the literal shell-quoted retry command. It must never
+masquerade as ordinary `WRITE_FAILED` or delete its only recovery evidence.
+`MANIFEST_AFTER_COMMITTED_JOURNAL_FSYNC` is the post-commit exception: a fresh
+startup retains and verifies the complete new manifest and only finishes owned
+artifact cleanup; it never rolls a durable `COMMITTED` publication back.
+
+- [ ] **Step 2: Add RED runtime-installer tests**
+
+`install_runtime_map_data.py` accepts exactly two positional arguments:
 
 ```bash
-cmake --build tools/AssetConverter/build --target AssetConverterTests -j4
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 \
+  CorsairsUE/Scripts/install_runtime_map_data.py \
+  artifacts/maps/garner.reference-albedo.json \
+  CorsairsUE/Data/Heights
+```
+
+It independently parses the top manifest, enforces the canonical one-run path
+grammar, resolves only from `manifest_path.parent`, verifies hashes, and stages
+`files.block` plus `files.terrainMetadata` before replacing
+`garner.block.raw` and `garner.terrain.json`. Tests reject leaf-only,
+wrong-base, mixed-run, traversal, symlink escape, missing/tampered files, wrong
+hash, wrong leaf, and partial staging.
+
+The installer is a recoverable two-file transaction, not two best-effort
+copies. It acquires the exact exclusive owned lock
+`CorsairsUE/Data/Heights/.garner-runtime-install.lock` and, before parsing a
+new manifest or creating a stage, resolves any existing same-directory
+`.garner-runtime-install.transaction.json`. The 0600 journal is itself updated
+by unique same-directory temp, file fsync, `os.replace`, and parent-directory
+fsync.
+
+The lock is a no-symlink regular file held with an OS advisory/exclusive file
+lock whose ownership is released automatically on process death; stale file
+presence alone is not treated as a live owner. If another process still holds
+the lock, fail without inspecting, recovering, or deleting its transaction.
+
+The journal records exact normalized target/stage/backup paths, prior
+existence/bytes hash/mode, intended source hashes, manifest hash, transaction
+ID, and one literal phase:
+
+```text
+SNAPSHOT -> PREPARED -> BLOCK_REPLACED -> PAIR_REPLACED -> COMMITTED
+```
+
+`SNAPSHOT` is durable before any stage/backup creation or target mutation.
+Both source files are copied to unique regular stages in
+`CorsairsUE/Data/Heights`, flushed, file-fsynced, closed, reopened, and hashed.
+For each existing target, copy exact prior bytes/mode to an immutable unique
+same-directory backup, file-fsync and verify it; record absence instead of
+inventing a backup for a missing target. Parent-directory fsync makes all
+stages/backups durable before `PREPARED` may be journaled.
+
+Replace `garner.block.raw` first with its already-fsynced stage, fsync the
+parent, then durably journal `BLOCK_REPLACED`. Replace
+`garner.terrain.json` second, fsync the parent, then durably journal
+`PAIR_REPLACED`. Reopen both installed targets, require the manifest SHA-256,
+exact bytes and intended modes, then durably journal `COMMITTED`. Only a
+verified `COMMITTED` pair may remain new; cleanup of journal/backups/stages and
+lock is followed by a final parent fsync. A successful return is forbidden
+before both targets verify and may never expose a mixed pair as success.
+
+Every journal phase update uses a unique same-directory regular temp, flush,
+file fsync, close, strict reparse, `os.replace`, and parent-directory fsync.
+An exception after `INSTALL_AFTER_COMMITTED_JOURNAL_FSYNC` retains the complete
+verified new pair; a fresh startup verifies that pair and finishes cleanup
+rather than rolling a durable commit back. Persistent post-commit cleanup
+failure returns `RECOVERY_REQUIRED` with the same literal retry command and
+retains the journal plus backups as evidence, but never reports a mixed pair.
+
+On an exception or startup with phase `SNAPSHOT`, `PREPARED`,
+`BLOCK_REPLACED`, or `PAIR_REPLACED`, restore the complete old pair. Preserve
+each immutable backup by copying it to a separate rollback stage, file-fsync
+that stage, atomically replace the target, restore its mode, fsync the parent,
+and verify exact prior bytes/mode; remove a target recorded absent, fsync, and
+verify absence. A `COMMITTED` startup verifies the complete new pair and only
+finishes cleanup. Persistent restore/remove/fsync/verification failure keeps
+the journal and every valid backup, exits nonzero with literal
+`RECOVERY_REQUIRED`, lists every uncertain path, and prints the exact original
+two-argument invocation as the recovery command; rerunning that command always
+performs recovery before a new install.
+
+Inject both an ordinary exception and a simulated process death at these exact
+boundaries, then create a fresh installer instance and require startup recovery:
+
+```text
+INSTALL_AFTER_BLOCK_STAGE_FSYNC
+INSTALL_AFTER_METADATA_STAGE_FSYNC
+INSTALL_AFTER_BACKUPS_PARENT_FSYNC
+INSTALL_AFTER_PREPARED_JOURNAL_FSYNC
+INSTALL_BEFORE_BLOCK_REPLACE
+INSTALL_AFTER_BLOCK_REPLACE
+INSTALL_AFTER_BLOCK_REPLACE_PARENT_FSYNC
+INSTALL_AFTER_BLOCK_REPLACED_JOURNAL_FSYNC
+INSTALL_BEFORE_METADATA_REPLACE
+INSTALL_AFTER_METADATA_REPLACE
+INSTALL_AFTER_METADATA_REPLACE_PARENT_FSYNC
+INSTALL_AFTER_PAIR_REPLACED_JOURNAL_FSYNC
+INSTALL_AFTER_PAIR_VERIFY
+INSTALL_AFTER_COMMITTED_JOURNAL_FSYNC
+INSTALL_RECOVERY_BLOCK_REPLACE
+INSTALL_RECOVERY_METADATA_REPLACE
+INSTALL_RECOVERY_PARENT_FSYNC
+INSTALL_RECOVERY_VERIFY
+```
+
+Python tests inject a narrow file-operations/fault adapter; the two-argument
+CLI always binds real `open`/flush/fsync/replace/chmod/remove calls. Injection
+cannot replace independent JSON parsing, source/destination hashing, phase
+validation, pair verification, or the no-op decision.
+
+A byte-identical second invocation is a true pre-transaction no-op: it briefly
+acquires/releases the required exclusive lock but creates no journal/stage/
+backup, performs no replace, leaves no lock artifact, and preserves each
+target's inode/file identity where available, bytes, mode, size, and mtime.
+Expose a pure `compare_deterministic_manifests(first, second)` helper for the
+real two-run gate; it independently validates both manifests/files, requires
+different run IDs and equal seven hash/size tuples, normalizes only that run-ID
+path segment, and compares every remaining DTO field.
+
+The installer intentionally does not overwrite tracked
+`CorsairsUE/Data/Heights/garner.height.r16`; `height` and `region` remain
+hash-verified run products for scene/future navigation consumers. Add ignored
+generated patterns for `*.block.raw`, `*.region.raw`, `*.terrain.json`, and the
+exact `.garner-runtime-install.*` transaction artifacts. It never writes a
+height/region alias, Unreal content, module file, gameplay configuration, or
+runtime-success report.
+
+- [ ] **Step 3: Verify RED**
+
+Run sequentially at low priority, with no other heavy command active:
+
+```bash
+nice -n 10 cmake --build tools/AssetConverter/build \
+  --target AssetConverterTests -j4
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 -m unittest \
   CorsairsUE.Scripts.tests.test_install_runtime_map_data -v
 ```
 
-- [ ] **Step 3: Implement command parsing and atomic publication**
+Expected: C++ compile failure on the new command header and Python import
+failure because the installer module is absent. Record both RED causes before
+production changes.
+
+- [ ] **Step 4: Implement command, strict validation, and atomic publication**
 
 Add this exact invocation:
 
 ```bash
-./tools/AssetConverter/build/AssetConverter terrain-reference \
+nice -n 10 ./tools/AssetConverter/build/AssetConverter terrain-reference \
   --map Client/map/garner.map \
   --database databases/gamedata.sqlite \
   --client-root Client \
@@ -1498,48 +1771,92 @@ Add this exact invocation:
   --max-rms-error-cm 2
 ```
 
-Interpret `--require-present-rect` as `X Y Width Height`, exactly matching `MapCellRect`.
+The three-argument `RunTerrainReference` constructs production dependencies
+and delegates to the injectable overload. Neither callback may bypass DTO
+construction, deterministic serialization, strict parse-roundtrip, disk hash/
+size checks, or validation inside `RunTerrainReference`.
 
-Generate each attempt under `artifacts/maps/runs/<run-id>/`. Production
-builders may use leaf paths while writing that private directory, but DTO
-construction must serialize all seven paths as
-`runs/<run-id>/<expected-leaf>` relative to `artifacts/maps`, the parent of
-the top manifest. Call `ValidateTerrainReferenceManifest(dto,
-options.Output, options)` with `options.Output == artifacts/maps`; never pass
-the run directory. Validate the complete set, including the paired
-`.gltf/.bin`, then publish only the small top-level
-`artifacts/maps/garner.reference-albedo.json` with an atomic temp-file
-rename. The installer and every later consumer resolve the same serialized
-path from that top-manifest parent. A crash or failed gate may leave an
-unreferenced run directory, but it cannot replace the last valid manifest.
+Publish only `artifacts/maps/garner.reference-albedo.json`; never rename the
+whole output directory, publish a run-internal manifest, or modify/delete an
+older run referenced by the current manifest. The production publisher uses an
+exclusive owned `artifacts/maps/.garner.reference-albedo.publish.lock` and
+recovers an unfinished owned transaction before a new build. Its exact 0600
+same-directory journal
+`artifacts/maps/.garner.reference-albedo.publish.json` records destination,
+unique temp, immutable backup, prior existence/hash/mode, intended manifest
+hash and run ID.
 
-Add a tracked runtime installer:
+This is likewise an OS advisory/exclusive lock on a no-symlink regular file,
+released by process death; a live foreign owner fails closed, while a fresh
+process may acquire the stale lock file and execute journal recovery.
 
-```bash
-PYTHONDONTWRITEBYTECODE=1 python3 \
-  CorsairsUE/Scripts/install_runtime_map_data.py \
-  artifacts/maps/garner.reference-albedo.json \
-  CorsairsUE/Data/Heights
+The journal contains one literal phase:
+
+```text
+SNAPSHOT -> PREPARED -> REPLACED -> COMMITTED
 ```
 
-It rejects paths outside the canonical `runs/<run-id>/<leaf>` grammar,
-resolves them only from the top manifest's parent, verifies manifest hashes,
-then copies `files.block` and `files.terrainMetadata` through temp files and
-rename into `CorsairsUE/Data/Heights`. Add generated
-`CorsairsUE/Data/Heights/*.block.raw`, `*.region.raw`, and `*.terrain.json` to
-`.gitignore`; existing tracked `.height.r16` files remain untouched. Unit
-tests require leaf-only/wrong-base/path-traversal rejection, hash rejection,
-and byte-identical repeat installation.
+Every journal phase update is itself a unique same-directory regular temp,
+flush, file fsync, close, strict reparse, atomic replacement, and parent-
+directory fsync. The lock and every recorded path are required to remain
+direct children of `options.Output`; an unexpected symlink or foreign journal
+fails closed without deleting it.
 
-- [ ] **Step 4: Verify GREEN and real command**
+Write `SNAPSHOT` durably before creating a manifest temp/backup or mutating the
+destination. Write JSON to a unique same-directory regular temp opened
+exclusively without following a symlink; flush, file-fsync (`fsync` on POSIX
+and the durable Windows equivalent), close, reopen, parse, validate, and hash
+the exact temp bytes. If
+the destination exists, require a non-symlink regular file, copy its exact
+bytes/mode into an immutable unique same-directory backup, file-fsync/reopen/
+verify it, and fsync the parent directory. Record prior absence without a fake
+backup. Only after temp/backup directory entries are durable may the atomically
+updated journal enter `PREPARED`.
+
+Atomically replace the destination from the same filesystem using a primitive
+that replaces an existing file on both POSIX and Windows; plain
+`std::filesystem::rename` without Windows replacement semantics is not
+sufficient. Fsync the parent directory, durably journal `REPLACED`, then reopen
+the top manifest, require exact intended bytes/hash and strict parse/
+validation. Durably journal `COMMITTED` only after that readback succeeds. A
+successful return requires `COMMITTED`, reports the top-manifest SHA-256 and
+run ID, removes only owned transaction artifacts, and fsyncs the parent again.
+
+Any pre-commit build/gate/roundtrip/publish failure restores exact prior
+bytes/mode/existence. Never consume the immutable backup directly: copy it to a
+new rollback temp, file-fsync it, atomically replace the destination, restore
+mode, fsync the parent, and verify prior hash/mode; for prior absence remove the
+new destination, fsync, and verify absence. A one-shot injected failure returns
+`WRITE_FAILED` only after verified rollback. Persistent rollback replace/
+remove/fsync/verification failure returns `RECOVERY_REQUIRED`, retains journal
+and all valid recovery evidence, and prints the exact shell-quoted full
+`terrain-reference` invocation; rerunning it performs recovery before any map,
+DB, alpha, catalog, or run-directory work. Startup phases `SNAPSHOT`,
+`PREPARED`, and `REPLACED` restore the old state; `COMMITTED` retains and
+verifies the new manifest, then finishes cleanup. An unreferenced new run may
+remain, but no failed return claims it through a successfully published top
+manifest.
+
+If cleanup fails after the `COMMITTED` journal is durable, the complete new
+manifest remains authoritative and a fresh startup verifies it before cleanup;
+it is never rolled back as though it were pre-commit. Persistent post-commit
+cleanup failure is `RECOVERY_REQUIRED` with journal/backup paths and the exact
+same full command, never `WRITE_FAILED` and never partial success.
+
+- [ ] **Step 5: Verify GREEN and the real Garner command**
+
+Run one command at a time. Do not start Unreal, Wine/CrossOver, or the original
+client during this task:
 
 ```bash
-cmake --build tools/AssetConverter/build \
+nice -n 10 cmake --build tools/AssetConverter/build \
   --target AssetConverter AssetConverterTests TerrainPageBudgetProbe -j4
-ctest --test-dir tools/AssetConverter/build --output-on-failure
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+nice -n 10 ./tools/AssetConverter/build/AssetConverterTests
+nice -n 10 ctest --test-dir tools/AssetConverter/build \
+  --output-on-failure -j1
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 -m unittest \
   CorsairsUE.Scripts.tests.test_install_runtime_map_data -v
-./tools/AssetConverter/build/AssetConverter terrain-reference \
+nice -n 10 ./tools/AssetConverter/build/AssetConverter terrain-reference \
   --map Client/map/garner.map \
   --database databases/gamedata.sqlite \
   --client-root Client \
@@ -1552,13 +1869,58 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
   --max-png-mib 96 \
   --max-height-error-cm 5 \
   --max-rms-error-cm 2
-PYTHONDONTWRITEBYTECODE=1 python3 \
+nice -n 10 cp \
+  artifacts/maps/garner.reference-albedo.json \
+  artifacts/maps/garner.reference-albedo.run-a.json
+nice -n 10 ./tools/AssetConverter/build/AssetConverter terrain-reference \
+  --map Client/map/garner.map \
+  --database databases/gamedata.sqlite \
+  --client-root Client \
+  --alpha Client/texture/terrain/alpha/total.png \
+  --output artifacts/maps \
+  --page 17 21 \
+  --require-present-rect 2193 2756 80 47 \
+  --max-rss-mib 128 \
+  --max-cache-mib 32 \
+  --max-png-mib 96 \
+  --max-height-error-cm 5 \
+  --max-rms-error-cm 2
+nice -n 10 cp \
+  artifacts/maps/garner.reference-albedo.json \
+  artifacts/maps/garner.reference-albedo.run-b.json
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 -c \
+  'import sys; from pathlib import Path; from CorsairsUE.Scripts.install_runtime_map_data import compare_deterministic_manifests; issues = compare_deterministic_manifests(Path(sys.argv[1]), Path(sys.argv[2])); print("\n".join(issues)); raise SystemExit(1 if issues else 0)' \
+  artifacts/maps/garner.reference-albedo.run-a.json \
+  artifacts/maps/garner.reference-albedo.run-b.json
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 \
   CorsairsUE/Scripts/install_runtime_map_data.py \
   artifacts/maps/garner.reference-albedo.json \
   CorsairsUE/Data/Heights
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 \
+  CorsairsUE/Scripts/install_runtime_map_data.py \
+  artifacts/maps/garner.reference-albedo.json \
+  CorsairsUE/Data/Heights
+nice -n 10 rm -f \
+  artifacts/maps/garner.reference-albedo.run-a.json \
+  artifacts/maps/garner.reference-albedo.run-b.json
+nice -n 10 ps -axo pid,etime,%cpu,%mem,nice,command | \
+  nice -n 10 rg -i 'UnrealEditor|Game\.exe|CrossOver|wine|Build\.sh' || true
+nice -n 10 pmset -g therm
 ```
 
-- [ ] **Step 5: Commit**
+GREEN evidence must name both distinct run IDs; two equal ordered sets of seven
+independently verified hashes/sizes; equal semantic manifests after only
+run-prefix normalization; complete equal input-provenance hashes/mappings; the
+exact published manifest path/hash; zero absent/unresolved counts; budget/
+geometry metrics; the two installed runtime files; and literal `NOOP` from the
+second installer invocation with unchanged file identity/bytes/mode/size/mtime.
+Generated outputs and recovery artifacts stay ignored and no transaction
+journal, lock, temp, or backup remains after success.
+
+- [ ] **Step 6: Commit only tracked Task 7 sources**
+
+Run `git diff --check`, inspect the exact path list, and exclude shared DB,
+pycache, artifacts, Content, installed runtime data, and other agents' work.
 
 ```bash
 git add \
@@ -1572,6 +1934,21 @@ git add \
   CorsairsUE/Scripts/tests/test_install_runtime_map_data.py
 git commit -m "feat(converter): add Garner terrain reference command"
 ```
+
+**Verified downstream boundary (not Task 7 work):**
+
+- Terrain Task 8 consumes the top manifest plus `albedo`, `meshGltf`, and
+  `meshBin`; its tracked clean-checkout builder owns `/Game/Maps/Garner`, the
+  exact `/Script/CorsairsGame.CorsairsGameMode`, material/assets, two-pass
+  idempotence, and the read-only checker. Task 7 must not depend on ignored
+  `Content` or attempt any UE import.
+- Movement Task 6 consumes the installed `garner.block.raw` and
+  `garner.terrain.json`, removes the runtime `CorsairsGame -> CorsairsImport`
+  editor-module dependency, and proves the Mac Game target. Task 7 changes no
+  Build.cs and makes no cook/runtime-success claim.
+- The exact 1920×1080 tick-120 original/UE visual capture, camera contract,
+  side-by-side image, and client cleanup belong to scene parity Task 8. Task 7
+  supplies its hash-linked terrain manifest only; it launches neither client.
 
 ---
 

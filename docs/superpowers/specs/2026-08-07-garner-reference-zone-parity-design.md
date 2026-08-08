@@ -225,24 +225,57 @@ Reference-bake использует `dwTColor=0`, поскольку это runt
 задачей и не влияет на доказательство выбора `brick05`. Значение `0.6`
 запрещено применять к terrain: оно относится к более поздней object-pass.
 
-Результат для каждой страницы:
+Каждая production-попытка сначала создаёт уникальный private run
+`artifacts/maps/runs/<run-id>/` ровно с семью immutable продуктами:
 
 ```text
-artifacts/maps/garner.albedo_17_21.png
-artifacts/maps/garner.reference-albedo.json
+garner.height.r16
+garner.block.raw
+garner.region.raw
+garner.terrain.json
+garner.albedo_17_21.png
+garner.terrain_17_21.gltf
+garner.terrain_17_21.bin
 ```
 
-Manifest содержит:
+Единственная publication boundary — маленький top manifest
+`artifacts/maps/garner.reference-albedo.json`. Внутри run нет второго
+manifest, а consumer не выбирает run по имени, времени или порядку каталога.
+Top manifest публикуется последним и содержит:
 
-- границы source cells;
-- `pixelsPerCell=32`;
-- список использованных texture IDs;
-- число absent sections и unresolved layers;
-- SHA-256 PNG;
-- peak RSS и суммарный размер outputs;
-- версию алгоритма и terrain ambient `(1.0,1.0,1.0)`.
+- точные границы source cells, `pixelsPerCell=32`, ambient `(1.0,1.0,1.0)` и
+  `dwTColor=0`;
+- полный provenance: нормализованные пути и SHA-256 `garner.map`,
+  `gamedata.sqlite`, `alpha/total.png`, client root, а также отсортированное
+  отображение каждого реально использованного texture ID в разрешённый
+  catalog path и SHA-256 texture-файла;
+- отсортированный список использованных texture IDs, точную section-presence
+  mask, нулевые absent/unresolved counters и все budget/geometry metrics;
+- семь нормализованных путей `runs/<one-run-id>/<canonical-leaf>`, SHA-256 и
+  размер каждого файла, а также checked-сумму этих семи размеров.
 
-Повторный прогон над теми же входами обязан давать те же hashes.
+Перед публикацией orchestrator заново открывает и хеширует inputs и все семь
+outputs; callback-provided hashes не считаются доказательством. Публикация
+top manifest использует unique same-directory temp, file fsync, атомарную
+replace на POSIX/Windows и parent-directory fsync. Существующий manifest
+сначала сохраняется с точными bytes/mode в durable same-directory backup.
+Journal phases `SNAPSHOT -> PREPARED -> REPLACED -> COMMITTED` и startup
+recovery гарантируют exact rollback до commit; persistent rollback failure
+является `RECOVERY_REQUIRED`, сохраняет backup/journal и печатает точную
+recovery-команду.
+
+Runtime installer независимо валидирует top manifest и семь hashes, но
+устанавливает только `garner.block.raw` и `garner.terrain.json` в
+`CorsairsUE/Data/Heights`; tracked `garner.height.r16` и run-private region не
+заменяются. Оба runtime-файла проходят одну recoverable transaction со
+same-directory stages/backups, fsync, durable journal phases
+`SNAPSHOT -> PREPARED -> BLOCK_REPLACED -> PAIR_REPLACED -> COMMITTED` и
+startup recovery, поэтому успешный возврат не может подтвердить mixed pair.
+
+Два production-прогона над теми же входами обязаны создать разные run IDs,
+но одинаковые семь hash/size tuples и семантически одинаковые manifests после
+нормализации только run-ID сегмента. Повторная установка byte-identical пары —
+истинный no-op без replace и изменения identity/mode/mtime.
 
 ### 4. Page mesh и UE material
 
