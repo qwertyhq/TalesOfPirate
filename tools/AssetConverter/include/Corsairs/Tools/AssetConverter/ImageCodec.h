@@ -17,6 +17,10 @@ struct DecodedImage {
     std::vector<std::uint8_t> Pixels;   // Width * Height * 4
 };
 
+// Читает поддерживаемый stb_image файл и возвращает RGBA8 без переворота строк.
+[[nodiscard]] std::optional<DecodedImage> DecodeImageFile(
+    const std::filesystem::path& path, std::string& detail);
+
 enum class DdsStatus : std::uint32_t {
     OK = 0,
     NOT_DDS,               // нет сигнатуры «DDS »

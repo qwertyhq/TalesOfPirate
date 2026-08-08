@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
-project(CorsairsAssetConverter LANGUAGES CXX)
+project(CorsairsAssetConverter LANGUAGES C CXX)
+
+find_package(Threads REQUIRED)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -43,8 +45,22 @@ add_library(AssetConverterLib STATIC
     src/DdsDecoder.cpp
     src/PngWriter.cpp
     src/TerrainMeshWriter.cpp
+    src/TerrainLayers.cpp
+    src/TerrainCatalog.cpp
+    src/TerrainTextureCache.cpp
+    src/TerrainTextureSampling.cpp
+    src/StbImageDecoder.cpp
+    ${CORSAIRS_REPO_ROOT}/sources/Libraries/sqlite3/sqlite3.c
 )
 target_include_directories(AssetConverterLib PUBLIC include)
+target_include_directories(AssetConverterLib PRIVATE
+    ${CORSAIRS_REPO_ROOT}/sources/Libraries/sqlite3
+    ${CORSAIRS_REPO_ROOT}/sources/Libraries/stb_image
+)
+target_link_libraries(AssetConverterLib PRIVATE
+    Threads::Threads
+    ${CMAKE_DL_LIBS}
+)
 corsairs_set_target_options(AssetConverterLib)
 
 add_executable(AssetConverter src/Main.cpp)
@@ -69,9 +85,15 @@ add_executable(AssetConverterTests
     tests/TestMapSectionReader.cpp
     tests/TestStreamingMapWriter.cpp
     tests/TestTextureResolver.cpp
+    tests/TestTerrainLayers.cpp
+    tests/TestTerrainCatalog.cpp
+    tests/TestTerrainTextureSampling.cpp
 )
 target_link_libraries(AssetConverterTests PRIVATE AssetConverterLib)
 target_include_directories(AssetConverterTests PRIVATE tests)
+target_include_directories(AssetConverterTests PRIVATE
+    ${CORSAIRS_REPO_ROOT}/sources/Libraries/sqlite3
+)
 corsairs_set_target_options(AssetConverterTests)
 target_compile_definitions(AssetConverterTests
     PRIVATE CORSAIRS_REPO_ROOT="${CORSAIRS_REPO_ROOT}")
