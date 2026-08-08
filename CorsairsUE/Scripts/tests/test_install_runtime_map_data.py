@@ -1871,6 +1871,46 @@ class RuntimeMapInstallerTests(unittest.TestCase):
             install_runtime_map_data.install_runtime_map_data(
                 fixture.manifest_path, fixture.target), "OK")
 
+    @unittest.skipIf(os.name == "nt", "POSIX barrier-failure fixture")
+    def test_later_journal_rename_before_barrier_preserves_recovery_contract(self):
+        fixture = ManifestFixture()
+        self.addCleanup(fixture.close)
+        journal = fixture.target / install_runtime_map_data._JOURNAL_NAME
+        expected_command = install_runtime_map_data._recovery_command(
+            fixture.manifest_path, fixture.target)
+
+        class FailSecondJournalBarrier(install_runtime_map_data.PosixDurableFs):
+            def __init__(self):
+                self.journal_replacements = 0
+                self.fail_next_barrier = False
+
+            def replace_same_volume(self, source, destination):
+                result = super().replace_same_volume(source, destination)
+                if source.name.startswith(".garner-runtime-install.journal."):
+                    self.journal_replacements += 1
+                    self.fail_next_barrier = self.journal_replacements == 2
+                return result
+
+            def sync_directory_or_equivalent(
+                    self, directory, entries_to_finalize=()):
+                if self.fail_next_barrier:
+                    self.fail_next_barrier = False
+                    raise install_runtime_map_data.DurableFsError(
+                        "second journal rename durability uncertain")
+                return super().sync_directory_or_equivalent(
+                    directory, entries_to_finalize)
+
+        durable_fs = FailSecondJournalBarrier()
+        with self.assertRaises(install_runtime_map_data.InstallError) as caught:
+            install_runtime_map_data.install_runtime_map_data(
+                fixture.manifest_path, fixture.target, durable_fs=durable_fs)
+
+        self.assertEqual(durable_fs.journal_replacements, 2)
+        self.assertEqual(caught.exception.status, "RECOVERY_REQUIRED")
+        self.assertIn(journal, caught.exception.recovery_paths)
+        self.assertEqual(caught.exception.recovery_command, expected_command)
+        self.assertTrue(journal.exists())
+
     def test_retired_journal_requires_independently_recorded_hash(self):
         fixture = ManifestFixture()
         self.addCleanup(fixture.close)

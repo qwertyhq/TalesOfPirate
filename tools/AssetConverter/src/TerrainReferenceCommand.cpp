@@ -165,7 +165,7 @@ public:
 
     std::optional<JsonValue> Parse(std::vector<TerrainManifestIssue>& issues) {
         SkipWhitespace();
-        auto value = ParseValue("", issues);
+        auto value = ParseValue("", issues, 0u);
         if (!value.has_value()) {
             return std::nullopt;
         }
@@ -197,15 +197,21 @@ private:
 
     std::optional<JsonValue> ParseValue(
         std::string_view path,
-        std::vector<TerrainManifestIssue>& issues) {
+        std::vector<TerrainManifestIssue>& issues,
+        std::size_t depth) {
+        constexpr std::size_t maxDepth = 128u;
+        if (depth > maxDepth) {
+            AddIssue(issues, std::string{path}, "nesting exceeds 128");
+            return std::nullopt;
+        }
         SkipWhitespace();
         if (_position >= _input.size()) {
             AddIssue(issues, std::string{path}, "unexpected end of JSON");
             return std::nullopt;
         }
         switch (_input[_position]) {
-        case '{': return ParseObject(path, issues);
-        case '[': return ParseArray(path, issues);
+        case '{': return ParseObject(path, issues, depth);
+        case '[': return ParseArray(path, issues, depth);
         case '"': {
             auto text = ParseString(path, issues);
             if (!text.has_value()) {
@@ -225,7 +231,8 @@ private:
 
     std::optional<JsonValue> ParseObject(
         std::string_view path,
-        std::vector<TerrainManifestIssue>& issues) {
+        std::vector<TerrainManifestIssue>& issues,
+        std::size_t depth) {
         ++_position;
         JsonValue result;
         result.Type = JsonType::OBJECT;
@@ -256,7 +263,8 @@ private:
                 return std::nullopt;
             }
             ++_position;
-            auto value = ParseValue(ChildPointer(path, *key), issues);
+            auto value = ParseValue(
+                ChildPointer(path, *key), issues, depth + 1u);
             if (!value.has_value()) {
                 return std::nullopt;
             }
@@ -279,7 +287,8 @@ private:
 
     std::optional<JsonValue> ParseArray(
         std::string_view path,
-        std::vector<TerrainManifestIssue>& issues) {
+        std::vector<TerrainManifestIssue>& issues,
+        std::size_t depth) {
         ++_position;
         JsonValue result;
         result.Type = JsonType::ARRAY;
@@ -290,7 +299,8 @@ private:
         }
         std::size_t index = 0u;
         while (true) {
-            auto value = ParseValue(std::format("{}/{}", path, index), issues);
+            auto value = ParseValue(
+                std::format("{}/{}", path, index), issues, depth + 1u);
             if (!value.has_value()) {
                 return std::nullopt;
             }
@@ -3224,12 +3234,18 @@ bool FinalizeWindowsPhysicalEntries(
 }
 #endif
 
+struct ExclusivePhysicalFileRecord {
+    PhysicalFileIdentity Identity;
+    std::uint32_t Mode{0u};
+};
+
 bool WriteExclusiveText(
     const std::filesystem::path& path,
     std::string_view bytes,
     std::uint32_t mode,
     std::string& detail,
-    const std::function<void()>& afterExclusiveCreate = {}) {
+    const std::function<void()>& afterExclusiveCreate = {},
+    ExclusivePhysicalFileRecord* createdRecord = nullptr) {
 #if defined(_WIN32)
     HANDLE handle = CreateFileW(
         path.c_str(), GENERIC_READ | GENERIC_WRITE, 0u, nullptr, CREATE_NEW,
@@ -3302,14 +3318,25 @@ bool WriteExclusiveText(
     }
     const auto finalIdentity = WindowsIdentityFromHandle(
         handle, path, "OpenExclusiveTemp", detail);
+    const auto capturedIdentity = PhysicalIdentityFromHandle(
+        handle, path, "OpenExclusiveTemp", detail);
+    FILE_BASIC_INFO finalBasic{};
     const bool identityOk = finalIdentity.has_value() &&
-        *finalIdentity == *originalIdentity;
+        capturedIdentity.has_value() && *finalIdentity == *originalIdentity &&
+        GetFileInformationByHandleEx(
+            handle, FileBasicInfo, &finalBasic, sizeof(finalBasic)) &&
+        finalBasic.FileAttributes == mode;
     const bool closeOk = CloseHandle(handle) != 0;
     if (!identityOk || !closeOk) {
         if (detail.empty()) {
             detail = "owned exclusive file identity changed before close";
         }
         return false;
+    }
+    if (createdRecord != nullptr) {
+        *createdRecord = ExclusivePhysicalFileRecord{
+            *capturedIdentity,
+            static_cast<std::uint32_t>(finalBasic.FileAttributes)};
     }
     return true;
 #else
@@ -3366,6 +3393,13 @@ bool WriteExclusiveText(
                   nativeError == 0 ? EIO : nativeError);
         return false;
     }
+    if (createdRecord != nullptr) {
+        *createdRecord = ExclusivePhysicalFileRecord{
+            PhysicalFileIdentity{
+                static_cast<std::uint64_t>(finalStatus.st_dev), 0u,
+                static_cast<std::uint64_t>(finalStatus.st_ino)},
+            static_cast<std::uint32_t>(finalStatus.st_mode & 07777u)};
+    }
     return true;
 #endif
 }
@@ -3407,6 +3441,180 @@ std::optional<std::uint32_t> PhysicalFileMode(
         return std::nullopt;
     }
     return static_cast<std::uint32_t>(status.st_mode & 07777u);
+#endif
+}
+
+struct RetainedPhysicalText {
+    std::string Bytes;
+    PhysicalFileIdentity Identity;
+    std::uint32_t Mode{0u};
+};
+
+std::optional<RetainedPhysicalText> ReadRetainedPhysicalText(
+    const std::filesystem::path& path,
+    std::string& detail,
+    std::string_view expectedIdentity = {}) {
+#if defined(_WIN32)
+    HANDLE handle = CreateFileW(
+        path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        detail = DurableNativeError(
+            "ReadRetained", path, static_cast<int>(GetLastError()));
+        return std::nullopt;
+    }
+    const auto openedIdentity = PhysicalIdentityFromHandle(
+        handle, path, "ReadRetained", detail);
+    FILE_BASIC_INFO openedBasic{};
+    LARGE_INTEGER openedSize{};
+    if (!openedIdentity.has_value() ||
+        (!expectedIdentity.empty() &&
+         SerializePhysicalIdentity(*openedIdentity) != expectedIdentity) ||
+        !GetFileInformationByHandleEx(
+            handle, FileBasicInfo, &openedBasic, sizeof(openedBasic)) ||
+        !GetFileSizeEx(handle, &openedSize) || openedSize.QuadPart < 0 ||
+        static_cast<unsigned long long>(openedSize.QuadPart) >
+            static_cast<unsigned long long>(
+                std::numeric_limits<std::size_t>::max())) {
+        const DWORD nativeError = GetLastError();
+        CloseHandle(handle);
+        if (detail.empty()) {
+            detail = !expectedIdentity.empty() && openedIdentity.has_value() &&
+                    SerializePhysicalIdentity(*openedIdentity) != expectedIdentity
+                ? std::format(
+                      "retained physical identity differs from recorded "
+                      "identity: {}", path.generic_string())
+                : DurableNativeError(
+                      "ReadRetained", path,
+                      static_cast<int>(nativeError == ERROR_SUCCESS
+                                           ? ERROR_INVALID_DATA
+                                           : nativeError));
+        }
+        return std::nullopt;
+    }
+    std::string bytes(
+        static_cast<std::size_t>(openedSize.QuadPart), '\0');
+    std::size_t offset = 0u;
+    DWORD nativeError = ERROR_SUCCESS;
+    while (offset < bytes.size()) {
+        const DWORD requested = static_cast<DWORD>(std::min<std::size_t>(
+            bytes.size() - offset, static_cast<std::size_t>(UINT32_MAX)));
+        DWORD read = 0u;
+        if (!ReadFile(handle, bytes.data() + offset, requested, &read, nullptr)) {
+            nativeError = GetLastError();
+            break;
+        }
+        if (read == 0u || read > requested) {
+            nativeError = ERROR_HANDLE_EOF;
+            break;
+        }
+        offset += read;
+    }
+    const auto finalIdentity = PhysicalIdentityFromHandle(
+        handle, path, "ReadRetained", detail);
+    FILE_BASIC_INFO finalBasic{};
+    LARGE_INTEGER finalSize{};
+    const bool finalMetadata = finalIdentity.has_value() &&
+        GetFileInformationByHandleEx(
+            handle, FileBasicInfo, &finalBasic, sizeof(finalBasic)) &&
+        GetFileSizeEx(handle, &finalSize);
+    const auto pathIdentity = PhysicalIdentityNoFollow(path, detail);
+    const bool closeOk = CloseHandle(handle) != 0;
+    if (nativeError != ERROR_SUCCESS || !finalMetadata || !pathIdentity.has_value() ||
+        !closeOk || *finalIdentity != *openedIdentity ||
+        *pathIdentity != *openedIdentity ||
+        finalBasic.FileAttributes != openedBasic.FileAttributes ||
+        finalSize.QuadPart != openedSize.QuadPart) {
+        if (detail.empty()) {
+            detail = nativeError == ERROR_SUCCESS
+                ? std::format("retained physical identity changed: {}",
+                              path.generic_string())
+                : DurableNativeError(
+                      "ReadRetained", path, static_cast<int>(nativeError));
+        }
+        return std::nullopt;
+    }
+    return RetainedPhysicalText{
+        std::move(bytes), *openedIdentity,
+        static_cast<std::uint32_t>(openedBasic.FileAttributes)};
+#else
+    const int descriptor = ::open(
+        path.c_str(), O_RDONLY | O_NOFOLLOW
+#if defined(O_CLOEXEC)
+            | O_CLOEXEC
+#endif
+    );
+    if (descriptor < 0) {
+        detail = DurableNativeError("ReadRetained", path, errno);
+        return std::nullopt;
+    }
+    struct stat openedStatus {};
+    if (::fstat(descriptor, &openedStatus) != 0 ||
+        !S_ISREG(openedStatus.st_mode) || openedStatus.st_nlink != 1 ||
+        openedStatus.st_size < 0 ||
+        static_cast<unsigned long long>(openedStatus.st_size) >
+            static_cast<unsigned long long>(
+                std::numeric_limits<std::size_t>::max())) {
+        const int nativeError = errno == 0 ? EINVAL : errno;
+        ::close(descriptor);
+        detail = DurableNativeError("ReadRetained", path, nativeError);
+        return std::nullopt;
+    }
+    const PhysicalFileIdentity openedIdentity{
+        static_cast<std::uint64_t>(openedStatus.st_dev), 0u,
+        static_cast<std::uint64_t>(openedStatus.st_ino)};
+    if (!expectedIdentity.empty() &&
+        SerializePhysicalIdentity(openedIdentity) != expectedIdentity) {
+        ::close(descriptor);
+        detail = std::format(
+            "retained physical identity differs from recorded identity: {}",
+            path.generic_string());
+        return std::nullopt;
+    }
+    std::string bytes(
+        static_cast<std::size_t>(openedStatus.st_size), '\0');
+    std::size_t offset = 0u;
+    while (offset < bytes.size()) {
+        const std::size_t requested = std::min<std::size_t>(
+            bytes.size() - offset, 1024u * 1024u);
+        const ssize_t count = ::pread(
+            descriptor, bytes.data() + offset, requested,
+            static_cast<off_t>(offset));
+        if (count <= 0) {
+            const int nativeError = errno == 0 ? EIO : errno;
+            ::close(descriptor);
+            detail = DurableNativeError("ReadRetained", path, nativeError);
+            return std::nullopt;
+        }
+        offset += static_cast<std::size_t>(count);
+    }
+    struct stat finalStatus {};
+    struct stat pathStatus {};
+    const bool stable = ::fstat(descriptor, &finalStatus) == 0 &&
+        ::lstat(path.c_str(), &pathStatus) == 0 &&
+        S_ISREG(finalStatus.st_mode) && finalStatus.st_nlink == 1 &&
+        S_ISREG(pathStatus.st_mode) && pathStatus.st_nlink == 1 &&
+        finalStatus.st_dev == openedStatus.st_dev &&
+        finalStatus.st_ino == openedStatus.st_ino &&
+        pathStatus.st_dev == openedStatus.st_dev &&
+        pathStatus.st_ino == openedStatus.st_ino &&
+        finalStatus.st_size == openedStatus.st_size &&
+        (finalStatus.st_mode & 07777u) == (openedStatus.st_mode & 07777u);
+    const bool closeOk = ::close(descriptor) == 0;
+    const int closeError = errno;
+    if (!stable || !closeOk) {
+        detail = stable
+            ? DurableNativeError(
+                  "ReadRetained", path, closeError == 0 ? EIO : closeError)
+            : std::format("retained physical identity changed: {}",
+                          path.generic_string());
+        return std::nullopt;
+    }
+    return RetainedPhysicalText{
+        std::move(bytes), openedIdentity,
+        static_cast<std::uint32_t>(openedStatus.st_mode & 07777u)};
 #endif
 }
 
@@ -4493,18 +4701,41 @@ bool WriteManifestJournal(
         detail = std::move(primaryDetail);
         return false;
     };
-    if (!WriteExclusiveText(update, bytes, PrivatePhysicalMode(), detail)) {
+    ExclusivePhysicalFileRecord creation;
+    if (!WriteExclusiveText(
+            update, bytes, PrivatePhysicalMode(), detail, {}, &creation)) {
         return failWithCheckedUpdateCleanup(detail);
     }
-    const auto createdIdentity = PhysicalIdentityNoFollow(update, detail);
-    const auto createdHash = Sha256File(update, detail);
-    updateMode = PhysicalFileMode(update, detail);
-    if (!createdIdentity.has_value() || !createdHash.has_value() ||
-        !updateMode.has_value()) {
+    updateIdentity = SerializePhysicalIdentity(creation.Identity);
+    updateHash = Sha256Bytes(std::span{
+        reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()});
+    updateMode = creation.Mode;
+    if (injectFault) {
+        const TerrainReferenceFaultAction action = injectFault(
+            "MANIFEST_JOURNAL_UPDATE_AFTER_WRITER_CLOSE");
+        if (action != TerrainReferenceFaultAction::NONE) {
+            if (action == TerrainReferenceFaultAction::CRASH) {
+                detail = std::format(
+                    "RECOVERY_REQUIRED journal update retained path={} "
+                    "cause=injected fault "
+                    "MANIFEST_JOURNAL_UPDATE_AFTER_WRITER_CLOSE",
+                    update.generic_string());
+                return false;
+            }
+            return failWithCheckedUpdateCleanup(
+                "injected fault "
+                "MANIFEST_JOURNAL_UPDATE_AFTER_WRITER_CLOSE");
+        }
+    }
+    const auto created = ReadRetainedPhysicalText(
+        update, detail, updateIdentity);
+    if (!created.has_value() || created->Bytes != bytes ||
+        created->Mode != *updateMode) {
+        if (detail.empty()) {
+            detail = "publication journal exclusive write mismatch";
+        }
         return failWithCheckedUpdateCleanup(detail);
     }
-    updateIdentity = SerializePhysicalIdentity(*createdIdentity);
-    updateHash = *createdHash;
     if (injectFault) {
         const TerrainReferenceFaultAction action = injectFault(
             "MANIFEST_JOURNAL_UPDATE_AFTER_EXCLUSIVE_CREATE");
@@ -4522,13 +4753,20 @@ bool WriteManifestJournal(
                 "MANIFEST_JOURNAL_UPDATE_AFTER_EXCLUSIVE_CREATE");
         }
     }
-    std::string readback;
-    if (!ReadPhysicalText(update, readback, detail)) {
+    const auto readback = ReadRetainedPhysicalText(
+        update, detail, updateIdentity);
+    if (!readback.has_value() || readback->Mode != *updateMode ||
+        Sha256Bytes(std::span{
+            reinterpret_cast<const std::uint8_t*>(readback->Bytes.data()),
+            readback->Bytes.size()}) != updateHash) {
+        if (detail.empty()) {
+            detail = "publication journal retained readback mismatch";
+        }
         return failWithCheckedUpdateCleanup(detail);
     }
-    const auto parsed = ParseManifestJournal(readback, detail);
+    const auto parsed = ParseManifestJournal(readback->Bytes, detail);
     if (!parsed.has_value() ||
-        SerializeManifestJournal(*parsed) != bytes || readback != bytes) {
+        SerializeManifestJournal(*parsed) != bytes || readback->Bytes != bytes) {
         if (detail.empty()) {
             detail = "publication journal readback mismatch";
         }
@@ -4572,64 +4810,97 @@ std::string SerializeManifestJournalAuth(std::string_view journalBytes) {
         Sha256Text(journalBytes), journalBytes);
 }
 
-std::optional<std::string> ReadManifestJournalAuth(
+struct ManifestJournalAuthRecord {
+    std::string JournalBytes;
+    std::string Identity;
+    std::uint32_t Mode{0u};
+};
+
+std::optional<ManifestJournalAuthRecord> ReadManifestJournalAuth(
     const std::filesystem::path& authPath,
-    std::string& detail) {
+    std::string& detail,
+    std::string_view expectedIdentity = {}) {
     constexpr std::string_view prefix =
         "corsairs-journal-retired-auth-v1\nsha256=";
-    std::string authBytes;
-    if (!ReadPhysicalText(authPath, authBytes, detail) ||
-        !authBytes.starts_with(prefix)) {
+    const auto retained = ReadRetainedPhysicalText(
+        authPath, detail, expectedIdentity);
+    if (!retained.has_value() || !retained->Bytes.starts_with(prefix)) {
         if (detail.empty()) {
             detail = "invalid publication journal retirement authentication";
         }
         return std::nullopt;
     }
     const std::size_t hashBegin = prefix.size();
-    const std::size_t hashEnd = authBytes.find('\n', hashBegin);
+    const std::size_t hashEnd = retained->Bytes.find('\n', hashBegin);
     if (hashEnd == std::string::npos || hashEnd - hashBegin != 64u) {
         detail = "invalid publication journal retirement authentication";
         return std::nullopt;
     }
     const std::string_view expectedHash{
-        authBytes.data() + hashBegin, hashEnd - hashBegin};
-    const std::string journalBytes = authBytes.substr(hashEnd + 1u);
+        retained->Bytes.data() + hashBegin, hashEnd - hashBegin};
+    const std::string journalBytes = retained->Bytes.substr(hashEnd + 1u);
     if (!IsLowerHexSha256(expectedHash) ||
         Sha256Text(journalBytes) != expectedHash) {
         detail = "publication journal retirement authentication mismatch";
         return std::nullopt;
     }
-    const auto mode = PhysicalFileMode(authPath, detail);
-    const auto identity = PhysicalIdentityNoFollow(authPath, detail);
-    if (!mode.has_value() || *mode != PrivatePhysicalMode() ||
-        !identity.has_value()) {
+    if (retained->Mode != PrivatePhysicalMode()) {
         detail = "publication journal retirement authentication is foreign";
         return std::nullopt;
     }
-    return journalBytes;
+    return ManifestJournalAuthRecord{
+        journalBytes, SerializePhysicalIdentity(retained->Identity),
+        retained->Mode};
 }
 
 bool EnsureManifestJournalAuth(
     const std::filesystem::path& canonicalJournal,
     std::string_view journalBytes,
+    const TerrainReferenceFaultInjector& injectFault,
+    ManifestJournalAuthRecord& record,
     std::string& detail) {
     const std::filesystem::path authPath =
         ManifestJournalAuthPath(canonicalJournal);
     const std::string expected = SerializeManifestJournalAuth(journalBytes);
+    std::string creationIdentity;
+    std::optional<std::uint32_t> creationMode;
     if (PhysicalPathAbsent(authPath)) {
+        ExclusivePhysicalFileRecord creation;
         if (!WriteExclusiveText(
-                authPath, expected, PrivatePhysicalMode(), detail) ||
-            !SyncPhysicalDirectory(authPath.parent_path(), detail)) {
+                authPath, expected, PrivatePhysicalMode(), detail, {},
+                &creation)) {
+            return false;
+        }
+        creationIdentity = SerializePhysicalIdentity(creation.Identity);
+        creationMode = creation.Mode;
+        if (injectFault &&
+            injectFault("MANIFEST_JOURNAL_AUTH_AFTER_WRITER_CLOSE") !=
+                TerrainReferenceFaultAction::NONE) {
+            detail = std::format(
+                "RECOVERY_REQUIRED publication journal authentication "
+                "retained path={} cause=injected fault "
+                "MANIFEST_JOURNAL_AUTH_AFTER_WRITER_CLOSE",
+                authPath.generic_string());
+            return false;
+        }
+        if (!SyncPhysicalDirectory(authPath.parent_path(), detail)) {
             return false;
         }
     }
-    const auto recorded = ReadManifestJournalAuth(authPath, detail);
-    return recorded.has_value() && *recorded == journalBytes;
+    const auto recorded = ReadManifestJournalAuth(
+        authPath, detail, creationIdentity);
+    if (!recorded.has_value() || recorded->JournalBytes != journalBytes ||
+        (creationMode.has_value() && recorded->Mode != *creationMode)) {
+        return false;
+    }
+    record = *recorded;
+    return true;
 }
 
 bool RemoveManifestJournalAuth(
     const std::filesystem::path& canonicalJournal,
     std::string_view journalBytes,
+    const ManifestJournalAuthRecord& expectedRecord,
     std::string& detail) {
     const std::filesystem::path authPath =
         ManifestJournalAuthPath(canonicalJournal);
@@ -4637,17 +4908,22 @@ bool RemoveManifestJournalAuth(
         detail = "publication journal retirement authentication is missing";
         return false;
     }
-    const auto recorded = ReadManifestJournalAuth(authPath, detail);
-    const auto identity = PhysicalIdentityNoFollow(authPath, detail);
-    const auto mode = PhysicalFileMode(authPath, detail);
+    if (expectedRecord.JournalBytes != journalBytes ||
+        expectedRecord.Identity.empty()) {
+        detail = "publication journal retirement authentication record mismatch";
+        return false;
+    }
+    const auto recorded = ReadManifestJournalAuth(
+        authPath, detail, expectedRecord.Identity);
     const std::string expected = SerializeManifestJournalAuth(journalBytes);
-    if (!recorded.has_value() || *recorded != journalBytes ||
-        !identity.has_value() || !mode.has_value()) {
+    if (!recorded.has_value() || recorded->JournalBytes != journalBytes ||
+        recorded->Identity != expectedRecord.Identity ||
+        recorded->Mode != expectedRecord.Mode) {
         return false;
     }
     return RemoveOwnedPhysical(
-        authPath, detail, SerializePhysicalIdentity(*identity),
-        Sha256Text(expected), *mode);
+        authPath, detail, recorded->Identity,
+        Sha256Text(expected), recorded->Mode);
 }
 
 bool RetireManifestJournal(
@@ -4656,6 +4932,7 @@ bool RetireManifestJournal(
     const std::filesystem::path& retiredJournal,
     std::string_view expectedIdentity,
     const TerrainReferenceFaultInjector& injectFault,
+    ManifestJournalAuthRecord& authRecord,
     std::string& detail) {
     std::string journalBytes;
     const auto identity = PhysicalIdentityNoFollow(canonicalJournal, detail);
@@ -4671,7 +4948,7 @@ bool RetireManifestJournal(
         return false;
     }
     if (!EnsureManifestJournalAuth(
-            canonicalJournal, journalBytes, detail)) {
+            canonicalJournal, journalBytes, injectFault, authRecord, detail)) {
         return false;
     }
 #if defined(_WIN32)
@@ -5147,7 +5424,7 @@ ManifestRecoveryResult RecoverManifestPublication(
     const bool authAbsent =
         authStatus.type() == std::filesystem::file_type::not_found &&
         (!authError || authError == std::errc::no_such_file_or_directory);
-    std::optional<std::string> authenticatedJournalBytes;
+    std::optional<ManifestJournalAuthRecord> authenticatedJournal;
     if (!authAbsent) {
         if (authError ||
             authStatus.type() != std::filesystem::file_type::regular) {
@@ -5156,9 +5433,9 @@ ManifestRecoveryResult RecoverManifestPublication(
             result.Evidence = authPath;
             return result;
         }
-        authenticatedJournalBytes =
+        authenticatedJournal =
             ReadManifestJournalAuth(authPath, result.Detail);
-        if (!authenticatedJournalBytes.has_value()) {
+        if (!authenticatedJournal.has_value()) {
             result.Evidence = authPath;
             return result;
         }
@@ -5206,9 +5483,9 @@ ManifestRecoveryResult RecoverManifestPublication(
     }
 #endif
     if (canonicalAbsent && retiredAbsent) {
-        if (authenticatedJournalBytes.has_value()) {
+        if (authenticatedJournal.has_value()) {
             auto authenticated = ParseManifestJournal(
-                *authenticatedJournalBytes, result.Detail);
+                authenticatedJournal->JournalBytes, result.Detail);
             if (authenticated.has_value()) {
                 result.RecoveryCommand = authenticated->RecoveryCommand;
             }
@@ -5242,8 +5519,8 @@ ManifestRecoveryResult RecoverManifestPublication(
                     authenticated->Destination);
             }
             if (!stateMatches || !RemoveManifestJournalAuth(
-                    canonicalJournal, *authenticatedJournalBytes,
-                    result.Detail)) {
+                    canonicalJournal, authenticatedJournal->JournalBytes,
+                    *authenticatedJournal, result.Detail)) {
                 if (result.Detail.empty()) {
                     result.Detail =
                         "publication journal authentication-only recovery "
@@ -5278,14 +5555,14 @@ ManifestRecoveryResult RecoverManifestPublication(
         result.Evidence = journalPath;
         return result;
     }
-    if (canonicalAbsent && !authenticatedJournalBytes.has_value()) {
+    if (canonicalAbsent && !authenticatedJournal.has_value()) {
         result.Detail =
             "retired publication journal lacks independent authentication";
         result.Evidence = retiredJournal;
         return result;
     }
-    if (authenticatedJournalBytes.has_value() &&
-        *authenticatedJournalBytes != bytes) {
+    if (authenticatedJournal.has_value() &&
+        authenticatedJournal->JournalBytes != bytes) {
         result.Detail =
             "retired publication journal authentication does not match payload";
         result.Evidence = journalPath;
@@ -5660,11 +5937,15 @@ ManifestRecoveryResult RecoverManifestPublication(
         return result;
     }
     std::filesystem::path cleanupJournal = journalPath;
+    ManifestJournalAuthRecord cleanupAuth;
+    if (authenticatedJournal.has_value()) {
+        cleanupAuth = *authenticatedJournal;
+    }
     if (journalPath == canonicalJournal) {
         if (!RetireManifestJournal(
                 *journal, canonicalJournal, retiredJournal,
                 SerializePhysicalIdentity(*journalIdentity),
-                injectFault, result.Detail)) {
+                injectFault, cleanupAuth, result.Detail)) {
             result.Evidence = canonicalJournal;
             return result;
         }
@@ -5687,7 +5968,7 @@ ManifestRecoveryResult RecoverManifestPublication(
         return result;
     }
     if (!RemoveManifestJournalAuth(
-            canonicalJournal, bytes, result.Detail)) {
+            canonicalJournal, bytes, cleanupAuth, result.Detail)) {
         result.Evidence = ManifestJournalAuthPath(canonicalJournal);
         return result;
     }
@@ -6251,9 +6532,11 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
     if (!journalIdentity.has_value()) {
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
+    ManifestJournalAuthRecord authRecord;
     if (!RetireManifestJournal(
             journal, journalPath, retiredJournalPath,
-            SerializePhysicalIdentity(*journalIdentity), injectFault, detail)) {
+            SerializePhysicalIdentity(*journalIdentity), injectFault,
+            authRecord, detail)) {
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
     std::string retiredJournalBytes;
@@ -6273,7 +6556,7 @@ TerrainPublicationResult PublishTerrainReferenceManifestForTesting(
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
     if (!RemoveManifestJournalAuth(
-            journalPath, retiredJournalBytes, detail)) {
+            journalPath, retiredJournalBytes, authRecord, detail)) {
         return failure(detail, TerrainReferenceFaultAction::FAIL);
     }
     if (!RetirePublicationLock(*lock, injectFault, detail)) {

@@ -2074,9 +2074,13 @@ def _write_journal(
         try:
             durable_fs.sync_directory_or_equivalent(canonical.parent)
         except (DurableFsError, OSError) as exc:
-            raise DurableFsError(
-                "RECOVERY_REQUIRED install journal rename durability uncertain "
-                f"path={canonical.as_posix()} cause={exc}") from exc
+            raise InstallError(
+                "install journal rename durability uncertain "
+                f"path={canonical.as_posix()} cause={exc}",
+                status="RECOVERY_REQUIRED",
+                recovery_paths=(canonical,),
+                recovery_command=journal["recoveryCommand"],
+            ) from exc
     except BaseException as exc:
         if update.exists() or update.is_symlink():
             if not update_identity:
@@ -2888,6 +2892,10 @@ def install_runtime_map_data(
                 ) from recovery_exc
             raise InstallError(f"injected fault {exc.point}") from exc
         except (InstallError, DurableFsError, OSError) as exc:
+            if (isinstance(exc, InstallError) and
+                    exc.status == "RECOVERY_REQUIRED"):
+                durable_fs.abandon_lock(lock)
+                raise
             if committed:
                 durable_fs.abandon_lock(lock)
                 raise InstallError(

@@ -19,7 +19,12 @@
 #include <system_error>
 #include <vector>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#else
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/file.h>
@@ -101,6 +106,18 @@ bool WriteText(const std::filesystem::path& path, std::string_view text) {
     output.write(text.data(), static_cast<std::streamsize>(text.size()));
     output.flush();
     return static_cast<bool>(output);
+}
+
+bool SetExactPrivateMode(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    return SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL) != 0 &&
+        GetFileAttributesW(path.c_str()) == FILE_ATTRIBUTE_NORMAL;
+#else
+    struct stat status {};
+    return ::chmod(path.c_str(), 0600) == 0 &&
+        ::lstat(path.c_str(), &status) == 0 &&
+        static_cast<std::uint32_t>(status.st_mode & 07777u) == 0600u;
+#endif
 }
 
 std::optional<std::pair<std::size_t, std::size_t>> JsonMemberValueRange(
@@ -502,6 +519,18 @@ CORSAIRS_TEST(TerrainReferenceManifest_RejectsInvalidUtf8String) {
     REQUIRE_EQ(issues.size(), 1u);
     REQUIRE_EQ(issues[0].Field, std::string{"/source/map/path"});
     REQUIRE_EQ(issues[0].Detail, std::string{"invalid UTF-8 string"});
+}
+
+CORSAIRS_TEST(TerrainReferenceManifest_RejectsExcessiveJsonNesting) {
+    std::string json(512u, '[');
+    json += "null";
+    json.append(512u, ']');
+
+    std::vector<AC::TerrainManifestIssue> issues;
+    REQUIRE(!AC::ParseTerrainReferenceManifest(json, issues).has_value());
+    REQUIRE_EQ(issues.size(), 1u);
+    REQUIRE(issues[0].Code == AC::TerrainManifestIssueCode::INVALID_SCHEMA);
+    REQUIRE(issues[0].Detail.contains("nesting exceeds 128"));
 }
 
 CORSAIRS_TEST(TerrainManifest_RejectsZeroPeakRss) {
@@ -1782,6 +1811,99 @@ CORSAIRS_TEST(TerrainReferencePublisher_JournalUpdateSwapIsRetainedAndBlocksStar
     REQUIRE_EQ(ReadText(destination).value_or(""), std::string{"prior-top"});
 }
 
+CORSAIRS_TEST(TerrainReferencePublisher_JournalUpdateRejectsExactCloneReplacement) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    const std::filesystem::path destination =
+        options.Output / "garner.reference-albedo.json";
+    REQUIRE(WriteText(destination, "prior-top"));
+    const std::string json =
+        AC::SerializeTerrainReferenceManifest(fixture.Manifest());
+    std::filesystem::path update;
+    std::filesystem::path displaced;
+    std::string clonedBytes;
+    bool swapped = false;
+    const AC::TerrainPublicationResult failed =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options,
+            [&](std::string_view point) {
+                if (!swapped && point ==
+                        "MANIFEST_JOURNAL_UPDATE_AFTER_EXCLUSIVE_CREATE") {
+                    for (const auto& entry :
+                         std::filesystem::directory_iterator{options.Output}) {
+                        if (entry.path().filename().generic_string().starts_with(
+                                ".garner.reference-albedo.publish.update.")) {
+                            update = entry.path();
+                            break;
+                        }
+                    }
+                    const auto original = ReadText(update);
+                    if (original.has_value()) {
+                        clonedBytes = *original;
+                        displaced = update;
+                        displaced += ".owned";
+                        std::error_code error;
+                        std::filesystem::rename(update, displaced, error);
+                        swapped = !error && WriteText(update, clonedBytes);
+                        swapped = swapped && SetExactPrivateMode(update);
+                    }
+                }
+                return AC::TerrainReferenceFaultAction::NONE;
+            });
+
+    REQUIRE(swapped);
+    REQUIRE(failed.Status == AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
+    REQUIRE(failed.Detail.contains("identity"));
+    REQUIRE_EQ(ReadText(update).value_or(""), clonedBytes);
+}
+
+CORSAIRS_TEST(TerrainReferencePublisher_JournalUpdateRejectsWriterCloseClone) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    const std::filesystem::path destination =
+        options.Output / "garner.reference-albedo.json";
+    REQUIRE(WriteText(destination, "prior-top"));
+    const std::string json =
+        AC::SerializeTerrainReferenceManifest(fixture.Manifest());
+    std::filesystem::path update;
+    std::string clonedBytes;
+    bool swapped = false;
+    const AC::TerrainPublicationResult failed =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options,
+            [&](std::string_view point) {
+                if (!swapped && point ==
+                        "MANIFEST_JOURNAL_UPDATE_AFTER_WRITER_CLOSE") {
+                    for (const auto& entry :
+                         std::filesystem::directory_iterator{options.Output}) {
+                        if (entry.path().filename().generic_string().starts_with(
+                                ".garner.reference-albedo.publish.update.")) {
+                            update = entry.path();
+                            break;
+                        }
+                    }
+                    const auto original = ReadText(update);
+                    if (original.has_value()) {
+                        clonedBytes = *original;
+                        std::filesystem::path displaced = update;
+                        displaced += ".owned";
+                        std::error_code error;
+                        std::filesystem::rename(update, displaced, error);
+                        swapped = !error && WriteText(update, clonedBytes);
+                        swapped = swapped && SetExactPrivateMode(update);
+                    }
+                }
+                return AC::TerrainReferenceFaultAction::NONE;
+            });
+
+    REQUIRE(swapped);
+    REQUIRE(failed.Status == AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
+    REQUIRE(failed.Detail.contains("identity"));
+    REQUIRE_EQ(ReadText(update).value_or(""), clonedBytes);
+}
+
 CORSAIRS_TEST(TerrainReferencePublisher_JournalRenameBeforeBarrierIsUncertain) {
     ReferenceFixture fixture;
     REQUIRE(fixture.Ready());
@@ -1856,6 +1978,84 @@ CORSAIRS_TEST(TerrainReferencePublisher_RetiredJournalRequiresIndependentHash) {
     REQUIRE(recovered.Status == AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
     REQUIRE_EQ(ReadText(retired).value_or(""), changed);
     REQUIRE_EQ(ReadText(destination).value_or(""), json);
+}
+
+CORSAIRS_TEST(TerrainReferencePublisher_JournalAuthRejectsExactCloneReplacement) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    const std::filesystem::path destination =
+        options.Output / "garner.reference-albedo.json";
+    REQUIRE(WriteText(destination, "prior-top"));
+    const std::string json =
+        AC::SerializeTerrainReferenceManifest(fixture.Manifest());
+    const std::filesystem::path auth = options.Output /
+        ".garner.reference-albedo.publish.json.retired-auth";
+    std::filesystem::path displaced;
+    std::string clonedBytes;
+    bool swapped = false;
+    const AC::TerrainPublicationResult failed =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options,
+            [&](std::string_view point) {
+                if (!swapped && point == "MANIFEST_AFTER_JOURNAL_RETIRE") {
+                    const auto original = ReadText(auth);
+                    if (original.has_value()) {
+                        clonedBytes = *original;
+                        displaced = auth;
+                        displaced += ".owned";
+                        std::error_code error;
+                        std::filesystem::rename(auth, displaced, error);
+                        swapped = !error && WriteText(auth, clonedBytes);
+                        swapped = swapped && SetExactPrivateMode(auth);
+                    }
+                }
+                return AC::TerrainReferenceFaultAction::NONE;
+            });
+
+    REQUIRE(swapped);
+    REQUIRE(failed.Status == AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
+    REQUIRE(failed.Detail.contains("identity"));
+    REQUIRE_EQ(ReadText(auth).value_or(""), clonedBytes);
+}
+
+CORSAIRS_TEST(TerrainReferencePublisher_JournalAuthRejectsWriterCloseClone) {
+    ReferenceFixture fixture;
+    REQUIRE(fixture.Ready());
+    const AC::TerrainReferenceOptions options = fixture.Options();
+    const std::filesystem::path destination =
+        options.Output / "garner.reference-albedo.json";
+    REQUIRE(WriteText(destination, "prior-top"));
+    const std::string json =
+        AC::SerializeTerrainReferenceManifest(fixture.Manifest());
+    const std::filesystem::path auth = options.Output /
+        ".garner.reference-albedo.publish.json.retired-auth";
+    std::string clonedBytes;
+    bool swapped = false;
+    const AC::TerrainPublicationResult failed =
+        AC::PublishTerrainReferenceManifestForTesting(
+            destination, json, options,
+            [&](std::string_view point) {
+                if (!swapped && point ==
+                        "MANIFEST_JOURNAL_AUTH_AFTER_WRITER_CLOSE") {
+                    const auto original = ReadText(auth);
+                    if (original.has_value()) {
+                        clonedBytes = *original;
+                        std::filesystem::path displaced = auth;
+                        displaced += ".owned";
+                        std::error_code error;
+                        std::filesystem::rename(auth, displaced, error);
+                        swapped = !error && WriteText(auth, clonedBytes);
+                        swapped = swapped && SetExactPrivateMode(auth);
+                    }
+                }
+                return AC::TerrainReferenceFaultAction::NONE;
+            });
+
+    REQUIRE(swapped);
+    REQUIRE(failed.Status == AC::TerrainPublicationStatus::RECOVERY_REQUIRED);
+    REQUIRE(failed.Detail.contains("identity"));
+    REQUIRE_EQ(ReadText(auth).value_or(""), clonedBytes);
 }
 
 CORSAIRS_TEST(TerrainReferencePublisher_CleanupRejectsForeignBackupReplacement) {
