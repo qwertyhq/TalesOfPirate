@@ -30,18 +30,27 @@
 
 namespace Corsairs::Tools::AssetConverter {
 
+namespace {
+
+std::string PathToUtf8(const std::filesystem::path& path) {
+    const std::u8string utf8 = path.u8string();
+    return std::string{reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+}
+
+} // namespace
+
 std::optional<DecodedImage> DecodeImageFile(
     const std::filesystem::path& path, std::string& detail) {
     detail.clear();
     std::ifstream stream{path, std::ios::binary | std::ios::ate};
     if (!stream) {
-        detail = "не удалось открыть изображение: " + path.string();
+        detail = "не удалось открыть изображение: " + PathToUtf8(path);
         return std::nullopt;
     }
 
     const std::streampos end = stream.tellg();
     if (end <= 0 || end > static_cast<std::streamoff>(std::numeric_limits<int>::max())) {
-        detail = "некорректный размер изображения: " + path.string();
+        detail = "некорректный размер изображения: " + PathToUtf8(path);
         return std::nullopt;
     }
     std::vector<unsigned char> bytes(static_cast<std::size_t>(end));
@@ -49,7 +58,7 @@ std::optional<DecodedImage> DecodeImageFile(
     stream.read(reinterpret_cast<char*>(bytes.data()),
                 static_cast<std::streamsize>(bytes.size()));
     if (!stream) {
-        detail = "не удалось прочитать изображение: " + path.string();
+        detail = "не удалось прочитать изображение: " + PathToUtf8(path);
         return std::nullopt;
     }
 
@@ -60,7 +69,7 @@ std::optional<DecodedImage> DecodeImageFile(
         bytes.data(), static_cast<int>(bytes.size()),
         &width, &height, &sourceChannels, 4);
     if (pixels == nullptr || width <= 0 || height <= 0) {
-        detail = "stb_image не декодировал " + path.string();
+        detail = "stb_image не декодировал " + PathToUtf8(path);
         if (const char* reason = stbi_failure_reason(); reason != nullptr) {
             detail += ": ";
             detail += reason;
@@ -73,7 +82,7 @@ std::optional<DecodedImage> DecodeImageFile(
                                    static_cast<std::size_t>(height);
     if (pixelCount > std::numeric_limits<std::size_t>::max() / 4u) {
         stbi_image_free(pixels);
-        detail = "размер RGBA изображения переполнен: " + path.string();
+        detail = "размер RGBA изображения переполнен: " + PathToUtf8(path);
         return std::nullopt;
     }
 

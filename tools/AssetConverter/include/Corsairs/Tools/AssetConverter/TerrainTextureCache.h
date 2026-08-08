@@ -26,14 +26,14 @@ private:
     struct Entry {
         std::shared_ptr<const DecodedImage> Image;
         std::size_t Bytes{0};
-        std::list<std::string>::iterator Recency;
+        std::list<std::filesystem::path>::iterator Recency;
     };
 
     std::size_t _maxDecodedBytes{0};
     std::size_t _decodedBytes{0};
     std::size_t _peakDecodedBytes{0};
-    std::list<std::string> _recency;
-    std::unordered_map<std::string, Entry> _entries;
+    std::list<std::filesystem::path> _recency;
+    std::unordered_map<std::filesystem::path, Entry> _entries;
 };
 
 } // namespace Corsairs::Tools::AssetConverter

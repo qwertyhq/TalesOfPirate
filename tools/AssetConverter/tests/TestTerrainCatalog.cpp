@@ -155,6 +155,51 @@ CORSAIRS_TEST(TerrainCatalog_UsesUtf8ForDatabaseAndSourcePaths) {
     const auto resolved = catalog->Resolve(4u);
     REQUIRE(resolved.has_value());
     REQUIRE_EQ(PathUtf8(*resolved), PathUtf8(std::filesystem::canonical(pngPath)));
+
+    AC::TerrainTextureCache cache{1024u};
+    const auto decoded = cache.Load(*resolved, detail);
+    REQUIRE(decoded != nullptr);
+    REQUIRE_EQ(decoded->Width, 1u);
+    REQUIRE_EQ(decoded->Height, 1u);
+    REQUIRE_EQ(decoded->Pixels.size(), 4u);
+    REQUIRE_EQ(decoded->Pixels[0], 10u);
+    REQUIRE_EQ(decoded->Pixels[1], 20u);
+    REQUIRE_EQ(decoded->Pixels[2], 30u);
+    REQUIRE_EQ(decoded->Pixels[3], 255u);
+
+    const auto cached = cache.Load(*resolved, detail);
+    REQUIRE(cached.get() == decoded.get());
+    REQUIRE_EQ(cache.EntryCount(), 1u);
+    REQUIRE_EQ(cache.DecodedBytes(), 4u);
+    REQUIRE_EQ(cache.PeakDecodedBytes(), 4u);
+
+    // То же имя файла под другим non-ASCII client root обязано быть отдельным
+    // cache key, а не столкнуться после потери каталога или кодировки.
+    const auto secondClientRoot = caseRoot / std::filesystem::path{u8"другой-клиент"};
+    const auto secondPngPath = secondClientRoot / relativePng;
+    std::filesystem::create_directories(secondPngPath.parent_path(), error);
+    REQUIRE(!error);
+    AC::DecodedImage secondPixel{1u, 1u, {200u, 150u, 100u, 255u}};
+    REQUIRE(AC::WritePng(secondPngPath, secondPixel));
+    const auto secondDatabase = caseRoot / std::filesystem::path{u8"другие-данные.sqlite"};
+    REQUIRE(CreateTerrainDatabase(secondDatabase, GenericUtf8(relativeBmp)));
+    const auto secondCatalog =
+        AC::TerrainCatalog::Load(secondDatabase, secondClientRoot, detail);
+    REQUIRE(secondCatalog.has_value());
+    const auto secondResolved = secondCatalog->Resolve(4u);
+    REQUIRE(secondResolved.has_value());
+    const auto secondDecoded = cache.Load(*secondResolved, detail);
+    REQUIRE(secondDecoded != nullptr);
+    REQUIRE(secondDecoded.get() != decoded.get());
+    REQUIRE_EQ(secondDecoded->Pixels[0], 200u);
+    REQUIRE_EQ(cache.EntryCount(), 2u);
+    REQUIRE_EQ(cache.DecodedBytes(), 8u);
+    REQUIRE_EQ(cache.PeakDecodedBytes(), 8u);
+
+    const auto missing = caseRoot / std::filesystem::path{u8"нет/файл.png"};
+    const auto missingImage = AC::DecodeImageFile(missing, detail);
+    REQUIRE(!missingImage.has_value());
+    REQUIRE(detail.find(PathUtf8(missing)) != std::string::npos);
 }
 
 CORSAIRS_TEST(TerrainDecoder_DecodesTrackedPngsAsTopDownRgba) {

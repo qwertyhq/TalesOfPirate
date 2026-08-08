@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <string>
 #include <system_error>
 
 namespace Corsairs::Tools::AssetConverter {
@@ -11,10 +10,10 @@ namespace {
 
 constexpr std::size_t kHardDecodedByteLimit = 32u * 1024u * 1024u;
 
-std::string CacheKey(const std::filesystem::path& path) {
+std::filesystem::path CacheKey(const std::filesystem::path& path) {
     std::error_code error;
     const std::filesystem::path absolute = std::filesystem::absolute(path, error);
-    return (error ? path : absolute).lexically_normal().string();
+    return (error ? path : absolute).lexically_normal();
 }
 
 } // namespace
@@ -25,7 +24,7 @@ TerrainTextureCache::TerrainTextureCache(std::size_t maxDecodedBytes)
 
 std::shared_ptr<const DecodedImage> TerrainTextureCache::Load(
     const std::filesystem::path& path, std::string& detail) {
-    const std::string key = CacheKey(path);
+    const std::filesystem::path key = CacheKey(path);
     if (const auto found = _entries.find(key); found != _entries.end()) {
         _recency.splice(_recency.begin(), _recency, found->second.Recency);
         detail.clear();
@@ -44,7 +43,7 @@ std::shared_ptr<const DecodedImage> TerrainTextureCache::Load(
     }
 
     while (!_recency.empty() && _decodedBytes > _maxDecodedBytes - bytes) {
-        const std::string& evictedKey = _recency.back();
+        const std::filesystem::path& evictedKey = _recency.back();
         const auto evicted = _entries.find(evictedKey);
         _decodedBytes -= evicted->second.Bytes;
         _entries.erase(evicted);
