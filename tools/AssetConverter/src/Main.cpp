@@ -6,7 +6,10 @@
 #include "Corsairs/Tools/AssetConverter/LgoParser.h"
 #include "Corsairs/Tools/AssetConverter/LmoParser.h"
 #include "Corsairs/Tools/AssetConverter/MapParser.h"
+#include "Corsairs/Tools/AssetConverter/MapSectionReader.h"
 #include "Corsairs/Tools/AssetConverter/MapWriter.h"
+#include "Corsairs/Tools/AssetConverter/SceneParity.h"
+#include "Corsairs/Tools/AssetConverter/Sha256.h"
 #include "Corsairs/Tools/AssetConverter/TerrainMeshWriter.h"
 #include "Corsairs/Tools/AssetConverter/SceneObjParser.h"
 #include "Corsairs/Tools/AssetConverter/TerrainReferenceCommand.h"
@@ -16,6 +19,7 @@
 #include <cctype>
 #include <map>
 #include <optional>
+#include <span>
 #include <filesystem>
 #include <format>
 #include <iostream>
@@ -37,6 +41,7 @@ void PrintUsage() {
         "  AssetConverter <входной-каталог> <выходной-каталог> [--report <файл.csv>]\n"
         "                  [--textures <каталог-текстур>]\n"
         "                  [--skeletons <каталог-скелетов>]\n"
+        "  AssetConverter scene-manifest MAP OBJ BASE\n"
         "\n"
         "Рекурсивно обходит входной каталог и конвертирует в glTF 2.0:\n"
         "  .lgo — геометрия, материалы и точки крепления;\n"
@@ -347,6 +352,123 @@ bool ConvertOne(const std::filesystem::path& input, const std::filesystem::path&
     return true;
 }
 
+std::string_view SceneManifestStatusName(AC::SceneManifestStatus status) {
+    switch (status) {
+    case AC::SceneManifestStatus::OK: return "OK";
+    case AC::SceneManifestStatus::WRITE_FAILED: return "WRITE_FAILED";
+    case AC::SceneManifestStatus::UNKNOWN_OBJECT_TYPE:
+        return "UNKNOWN_OBJECT_TYPE";
+    case AC::SceneManifestStatus::INVALID_SOURCE_CONTEXT:
+        return "INVALID_SOURCE_CONTEXT";
+    case AC::SceneManifestStatus::TERRAIN_READ_FAILED:
+        return "TERRAIN_READ_FAILED";
+    case AC::SceneManifestStatus::COUNT_MISMATCH: return "COUNT_MISMATCH";
+    case AC::SceneManifestStatus::RECOVERY_REQUIRED:
+        return "RECOVERY_REQUIRED";
+    }
+    return "WRITE_FAILED";
+}
+
+std::optional<int> TryRunSceneManifestSubcommand(
+    std::span<const std::string_view> arguments,
+    std::ostream& output,
+    std::ostream& error) {
+    if (arguments.size() < 2u || arguments[1] != "scene-manifest") {
+        return std::nullopt;
+    }
+    if (arguments.size() != 5u) {
+        error << "Использование: AssetConverter scene-manifest MAP OBJ BASE\n";
+        return 2;
+    }
+
+    const std::filesystem::path mapPath{arguments[2]};
+    const std::filesystem::path objectPath{arguments[3]};
+    const std::filesystem::path basePath{arguments[4]};
+
+    // Объектный контекст сохраняется до BuildSceneSelection: header и hash
+    // принадлежат точным байтам аргумента CLI, а не выводятся из выборки.
+    const auto objectBytes = AC::ReadWholeFile(objectPath);
+    if (!objectBytes.has_value()) {
+        error << std::format("FILE_READ_FAILED object={}\n",
+                             objectPath.generic_string());
+        return 1;
+    }
+    AC::SceneObjDiagnostics objectDiagnostics;
+    const auto scene = AC::ParseSceneObj(*objectBytes, objectDiagnostics);
+    if (!scene.has_value()) {
+        error << std::format("{} {}\n",
+                             AC::ToString(objectDiagnostics.Status),
+                             objectDiagnostics.Detail);
+        return 1;
+    }
+    const AC::SceneFileHeader independentObjectHeader = scene->Header;
+    const std::string objectSha256 = AC::Sha256Bytes(
+        std::span<const std::uint8_t>{*objectBytes});
+
+    AC::SceneSelection selection;
+    std::string detail;
+    const AC::SceneSelectionStatus selectionStatus =
+        AC::BuildSceneSelection(*scene, {}, selection, detail);
+    if (selectionStatus != AC::SceneSelectionStatus::OK) {
+        error << std::format("SCENE_SELECTION_FAILED {}\n", detail);
+        return 1;
+    }
+
+    // Sha256File читает .map потоково; MapSectionReader отдельно держит лишь
+    // таблицу секций и ленивый cache одной секции.
+    const auto mapSha256 = AC::Sha256File(mapPath, detail);
+    if (!mapSha256.has_value()) {
+        error << std::format("MAP_HASH_FAILED {}\n", detail);
+        return 1;
+    }
+    AC::MapDiagnostics mapDiagnostics;
+    auto reader = AC::MapSectionReader::Open(mapPath, mapDiagnostics);
+    if (!reader.has_value()) {
+        error << std::format("{} {}\n", AC::ToString(mapDiagnostics.Status),
+                             mapDiagnostics.Detail);
+        return 1;
+    }
+    AC::MapSectionTileSource terrain{*reader};
+
+    AC::SceneManifestSourceContext context;
+    context.ObjectHeader = independentObjectHeader;
+    context.SourceMapSha256 = *mapSha256;
+    context.SourceObjectSha256 = objectSha256;
+    context.ExpectedSourceRecordCount = 50017u;
+    context.ExpectedSceneModelCount = 46991u;
+    context.ExpectedDeferredEffectCount = 3026u;
+    context.ExpectedReferenceObjectCount = 1634u;
+    context.ExpectedReferenceIslandCounts = {
+        {0u, 3u}, {1u, 1625u}, {2u, 6u}};
+
+    const std::filesystem::path parent = basePath.parent_path().empty()
+        ? std::filesystem::path{"."}
+        : basePath.parent_path();
+    std::error_code directoryError;
+    std::filesystem::create_directories(parent, directoryError);
+    if (directoryError) {
+        error << std::format("OUTPUT_DIR_FAILED {}\n",
+                             directoryError.message());
+        return 1;
+    }
+
+    AC::SceneManifestStats stats;
+    const AC::SceneManifestStatus manifestStatus =
+        AC::WriteSceneSourceManifest(
+            selection, terrain, context, basePath, stats, detail);
+    if (manifestStatus != AC::SceneManifestStatus::OK) {
+        error << std::format("{} {}\n",
+                             SceneManifestStatusName(manifestStatus), detail);
+        return 1;
+    }
+    output << std::format(
+        "scene-manifest: records={} models={} deferred={} reference={} {}\n",
+        stats.SourceRecordCount, stats.SceneModelCount,
+        stats.DeferredEffectCount, stats.ReferenceObjectCount,
+        detail.empty() ? std::string_view{"OK"} : std::string_view{detail});
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -354,6 +476,11 @@ int main(int argc, char** argv) {
     arguments.reserve(static_cast<std::size_t>(argc));
     for (int index = 0; index < argc; ++index) {
         arguments.emplace_back(argv[index]);
+    }
+    if (const auto sceneManifest =
+            TryRunSceneManifestSubcommand(arguments, std::cout, std::cerr);
+        sceneManifest.has_value()) {
+        return *sceneManifest;
     }
     if (const auto terrainReference =
             AC::TryRunTerrainReferenceSubcommand(arguments, std::cout, std::cerr);
