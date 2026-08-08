@@ -122,6 +122,18 @@ class OrchestratorContractTests(unittest.TestCase):
         self.assertEqual(emitted_cook_switches, ("-SkipZenStore",))
         self.assertNotIn("-ZenStore", emitted_cook_switches)
 
+    def test_cook_output_dir_ends_in_uat_platform_leaf(self):
+        command = next(
+            item for item in build.production_commands(self.repo.root, TXN, HEAD)
+            if item.name == "cook-package")
+        output_args = tuple(
+            item for item in command.argv if item.startswith("-CookOutputDir="))
+        expected = (
+            "-CookOutputDir="
+            f"{self.repo.root}/artifacts/maps/package-run/{TXN}/cooked/Mac")
+        self.assertEqual(output_args, (expected,))
+        self.assertEqual(Path(output_args[0].split("=", 1)[1]).name, "Mac")
+
     def test_clean_checkout_orders_installer_before_game_build_and_cook(self):
         seen = []
 
