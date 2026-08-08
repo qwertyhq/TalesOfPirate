@@ -171,20 +171,54 @@ class OrchestratorContractTests(unittest.TestCase):
         member = (
             'LogPakFile: Display: "CorsairsUE/Data/Heights/garner.block.raw" '
             'offset: 0, size: 1 bytes, sha1: ABC, compression: None.')
+        summary = (
+            'LogPakFile: Display: 1 files (1 bytes), (0 filtered bytes).')
         cases = {
-            "missing mount": member,
-            "wrong mount": header.replace('../../../', '../../') + "\n" + member,
-            "multiple mounts": header + "\n" + header + "\n" + member,
-            "duplicate member": header + "\n" + member + "\n" + member,
-            "absolute member": header + "\n" + member.replace(
-                '"CorsairsUE/', '"/CorsairsUE/'),
-            "traversal member": header + "\n" + member.replace(
-                "Data/Heights", "Data/../Heights"),
+            "missing mount": "\n".join((member, summary)),
+            "wrong mount": "\n".join((
+                header.replace('../../../', '../../'), member, summary)),
+            "multiple mounts": "\n".join((header, header, member, summary)),
+            "duplicate member": "\n".join((
+                header, member, member, summary.replace("1 files", "2 files"))),
+            "absolute member": "\n".join((
+                header, member.replace('"CorsairsUE/', '"/CorsairsUE/'),
+                summary)),
+            "traversal member": "\n".join((
+                header, member.replace("Data/Heights", "Data/../Heights"),
+                summary)),
         }
         for name, output in cases.items():
             with self.subTest(name=name):
                 with self.assertRaises(build.Task8Error):
                     build.parse_unrealpak_list(output)
+
+    def test_unrealpak_list_requires_one_matching_terminal_summary(self):
+        header = (
+            'LogPakFile: Display: Listing CorsairsUE-Mac.pak with mount point '
+            '"../../../"')
+        member = (
+            'LogPakFile: Display: "CorsairsUE/Data/Heights/garner.block.raw" '
+            'offset: 0, size: 1 bytes, sha1: ABC, compression: None.')
+        summary = (
+            'LogPakFile: Display: 1 files (1 bytes), (0 filtered bytes).')
+        cases = {
+            "missing": "\n".join((header, member)),
+            "mismatched count": "\n".join((
+                header, member, summary.replace("1 files", "2 files"))),
+            "multiple": "\n".join((header, member, summary, summary)),
+            "nonterminal": "\n".join((header, summary, member)),
+        }
+        for name, output in cases.items():
+            with self.subTest(name=name):
+                with self.assertRaises(build.Task8Error):
+                    build.parse_unrealpak_list(output)
+
+    def test_normalized_relative_rejects_bare_dot_and_empty_components(self):
+        self.assertFalse(build._normalized_relative("."))
+        self.assertFalse(build._normalized_relative(""))
+        self.assertFalse(build._normalized_relative("CorsairsUE//Data/file"))
+        self.assertFalse(build._normalized_relative("CorsairsUE/Data/file/"))
+        self.assertTrue(build._normalized_relative("CorsairsUE/Data/file"))
 
     def test_clean_checkout_orders_installer_before_game_build_and_cook(self):
         seen = []

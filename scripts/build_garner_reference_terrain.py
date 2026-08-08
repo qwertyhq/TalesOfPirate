@@ -423,7 +423,7 @@ def _normalized_relative(value: Any) -> bool:
         return False
     path = PurePosixPath(value)
     return (not path.is_absolute() and path.as_posix() == value and
-            all(part not in ("", ".", "..") for part in path.parts))
+            all(part not in ("", ".", "..") for part in value.split("/")))
 
 
 def _contained(root: Path, relative: str) -> Path:
@@ -1420,31 +1420,51 @@ _UNREALPAK_MEMBER = re.compile(
     r'^\s*(?:LogPakFile:\s*Display:\s*)?"(?P<path>[^\"]+)".*?'
     r'\bsize:\s*(?P<size>[0-9]+)\s+bytes\b',
     re.IGNORECASE)
+_UNREALPAK_SUMMARY = re.compile(
+    r'^\s*(?:LogPakFile:\s*Display:\s*)?(?P<count>[0-9]+)\s+files\s+'
+    r'\([0-9]+\s+bytes\),\s+\([0-9]+\s+filtered\s+bytes\)\.\s*$',
+    re.IGNORECASE)
 
 
 def parse_unrealpak_list(output: str) -> list[dict[str, Any]]:
+    lines = output.splitlines()
     mounts = [
-        match.group("mount")
-        for line in output.splitlines()
+        (index, match.group("mount"))
+        for index, line in enumerate(lines)
         if (match := _UNREALPAK_MOUNT.search(line)) is not None
     ]
-    if mounts != ["../../../"]:
+    if len(mounts) != 1 or mounts[0][1] != "../../../":
         raise Task8Error("UnrealPak emitted missing or ambiguous mount point")
+    summaries = [
+        (index, int(match.group("count")))
+        for index, line in enumerate(lines)
+        if (match := _UNREALPAK_SUMMARY.search(line)) is not None
+    ]
+    if len(summaries) != 1:
+        raise Task8Error("UnrealPak emitted missing or ambiguous file summary")
     members = []
-    for line in output.splitlines():
+    member_lines = []
+    for index, line in enumerate(lines):
         match = _UNREALPAK_MEMBER.search(line)
         if match is None:
             continue
         relative = match.group("path")
         if not _normalized_relative(relative):
             raise Task8Error(f"UnrealPak emitted invalid member path: {relative}")
+        member_lines.append(index)
         members.append({
             "path": "../../../" + relative,
             "sizeBytes": int(match.group("size")),
         })
     members.sort(key=lambda item: item["path"])
-    if not members or len({item["path"] for item in members}) != len(members):
+    unique_count = len({item["path"] for item in members})
+    if not members or unique_count != len(members):
         raise Task8Error("UnrealPak member list is empty or duplicated")
+    if not (mounts[0][0] < min(member_lines) and
+            summaries[0][0] > max(member_lines)):
+        raise Task8Error("UnrealPak member list is not terminally framed")
+    if summaries[0][1] != unique_count:
+        raise Task8Error("UnrealPak member count differs from terminal summary")
     return members
 
 
