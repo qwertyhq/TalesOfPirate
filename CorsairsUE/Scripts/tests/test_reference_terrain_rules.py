@@ -874,6 +874,64 @@ class ReferenceTerrainRulesTests(unittest.TestCase):
         self.assertTrue(issues)
         self.assertEqual(issues[0]["field"], "/builds/editor/products/0/path")
 
+    def test_editor_build_allows_editor_module_but_game_build_rejects_it(self):
+        run_root = (
+            self.fixture.root / f"artifacts/maps/reports/runs/{TXN}/builds")
+
+        def build_evidence(target, product_leaf):
+            build_root = run_root / target
+            build_root.mkdir(parents=True)
+            receipt = build_root / f"{target}.target"
+            product = build_root / "products/Binaries/Mac" / product_leaf
+            product.parent.mkdir(parents=True)
+            receipt.write_text(json.dumps({
+                "TargetName": target,
+                "BuildProducts": [{
+                    "Path": f"$(ProjectDir)/Binaries/Mac/{product_leaf}",
+                    "Type": "DynamicLibrary",
+                }],
+            }, sort_keys=True), encoding="utf-8")
+            product.write_bytes(b"module")
+            return {
+                "transactionId": TXN,
+                "target": target,
+                "platform": "Mac",
+                "configuration": "Development",
+                "sourceHead": HEAD,
+                "receipt": self.fixture.file_evidence(receipt),
+                "products": [self.fixture.file_evidence(product)],
+            }
+
+        editor = build_evidence(
+            "CorsairsUEEditor", "libUnrealEditor-CorsairsImport.dylib")
+        self.assertEqual(rules.validate_build_evidence(
+            editor, "/builds/editor", self.fixture.root, TXN, HEAD,
+            "CorsairsUEEditor"), [])
+
+        game = build_evidence("CorsairsUE", "libCorsairsImport.dylib")
+        issues = rules.validate_build_evidence(
+            game, "/builds/game", self.fixture.root, TXN, HEAD, "CorsairsUE")
+        self.assertTrue(issues)
+        self.assertEqual(
+            (issues[0]["code"], issues[0]["field"]),
+            ("EDITOR_MODULE_LEAK", "/builds/game/receipt/path"))
+
+        game_receipt = self.fixture.root / game["receipt"]["path"]
+        game_receipt.write_text(json.dumps({
+            "TargetName": "CorsairsUE",
+            "BuildProducts": [{
+                "Path": "$(ProjectDir)/Binaries/Mac/CorsairsUE",
+                "Type": "Executable",
+            }],
+        }, sort_keys=True), encoding="utf-8")
+        game["receipt"] = self.fixture.file_evidence(game_receipt)
+        issues = rules.validate_build_evidence(
+            game, "/builds/game", self.fixture.root, TXN, HEAD, "CorsairsUE")
+        self.assertTrue(issues)
+        self.assertEqual(
+            (issues[0]["code"], issues[0]["field"]),
+            ("EDITOR_MODULE_LEAK", "/builds/game/products/0/path"))
+
     def test_package_family_hashes_include_every_sidecar(self):
         stem = self.fixture.root / "CorsairsUE/Content/Terrain/Reference/Garner/T_Garner_17_21"
         stem.parent.mkdir(parents=True, exist_ok=True)

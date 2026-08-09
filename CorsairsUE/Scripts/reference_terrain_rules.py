@@ -1529,7 +1529,7 @@ def validate_build_evidence(
     if receipt_target is not None and receipt_target != target:
         return [_issue("INVALID_BUILD", pointer + "/receipt/path",
                        "receipt target identity differs")]
-    if "corsairsimport" in receipt_text.lower():
+    if target == "CorsairsUE" and "corsairsimport" in receipt_text.lower():
         return [_issue("EDITOR_MODULE_LEAK", pointer + "/receipt/path",
                        "CorsairsImport leaked into target receipt")]
     if type(root["products"]) is not list or not root["products"]:
@@ -1543,7 +1543,8 @@ def validate_build_evidence(
             return issues
         if not _require_file_below(item, item_pointer, prefix + "/products", issues):
             return issues
-        if "corsairsimport" in item["path"].lower():
+        if (target == "CorsairsUE" and
+                "corsairsimport" in item["path"].lower()):
             return [_issue("EDITOR_MODULE_LEAK", item_pointer + "/path",
                            "CorsairsImport leaked into build products")]
         paths.append(item["path"])

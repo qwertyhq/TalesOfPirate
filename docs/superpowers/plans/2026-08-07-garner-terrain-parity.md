@@ -3709,10 +3709,13 @@ container-list report, `CookPackageReport`, `SandboxAttestation`, and
 `RuntimeObservation`; duplicated
 package fields must be byte-for-byte equal after canonical parsing. It also
 verifies the three source/staged/extracted/runtime hash identities and absence
-of `CorsairsImport` from receipts, stage/archive manifests, containers, and
-runtime module descriptors. Package/build target receipts must be the same
-evidence record, every container has exactly one matching container-list
-report, and every runtime file names one listed container/member/extraction.
+of `CorsairsImport` from the Game receipt/build products, stage/archive
+manifests, containers, and runtime module descriptors. The Editor receipt and
+products may contain the required `Type=Editor` `CorsairsImport` module but do
+not weaken either Game/package rejection. Package/build target receipts must be
+the same evidence record, every container has exactly one matching
+container-list report, and every runtime file names one listed
+container/member/extraction.
 The bundle is the only
 terrain-base input accepted by scene parity Task 8; loose report discovery is
 forbidden.
