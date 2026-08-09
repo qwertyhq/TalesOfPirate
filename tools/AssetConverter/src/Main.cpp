@@ -41,6 +41,8 @@ void PrintUsage() {
         "  AssetConverter <входной-каталог> <выходной-каталог> [--report <файл.csv>]\n"
         "                  [--textures <каталог-текстур>]\n"
         "                  [--skeletons <каталог-скелетов>]\n"
+        "                  [--profile generic|scene-map]\n"
+        "                  [--static-reference-pose]\n"
         "  AssetConverter scene-manifest MAP OBJ BASE\n"
         "\n"
         "Рекурсивно обходит входной каталог и конвертирует в glTF 2.0:\n"
@@ -215,7 +217,9 @@ bool ConvertSceneObjects(const std::filesystem::path& input,
 bool ConvertModel(const std::filesystem::path& input, const std::filesystem::path& output,
                   const std::filesystem::path& relativePath, AC::ConversionReport& report,
                   const AC::TextureResolver& resolver,
-                  const std::filesystem::path& outputRoot) {
+                  const std::filesystem::path& outputRoot,
+                  AC::GltfCoordinateProfile profile,
+                  AC::GltfSkinPolicy skinPolicy) {
     const std::string relative = relativePath.generic_string();
     const auto bytes = AC::ReadWholeFile(input);
     if (!bytes) {
@@ -254,7 +258,8 @@ bool ConvertModel(const std::filesystem::path& input, const std::filesystem::pat
 
         std::string detail;
         const AC::GltfStatus status =
-            AC::WriteGltf(model->Objects[i], part, detail, textures);
+            AC::WriteGltf(model->Objects[i], part, detail, textures, nullptr,
+                          profile, skinPolicy);
         if (status != AC::GltfStatus::OK) {
             const std::string_view name =
                 status == AC::GltfStatus::EMPTY_MESH ? "EMPTY_MESH" : "WRITE_FAILED";
@@ -311,7 +316,9 @@ bool ConvertAnimation(const std::filesystem::path& input,
 bool ConvertOne(const std::filesystem::path& input, const std::filesystem::path& output,
                 const std::filesystem::path& relativePath, AC::ConversionReport& report,
                 const AC::TextureResolver& resolver,
-                const std::filesystem::path& outputRoot) {
+                const std::filesystem::path& outputRoot,
+                AC::GltfCoordinateProfile profile,
+                AC::GltfSkinPolicy skinPolicy) {
     const std::string relative = relativePath.generic_string();
 
     const auto bytes = AC::ReadWholeFile(input);
@@ -340,7 +347,8 @@ bool ConvertOne(const std::filesystem::path& input, const std::filesystem::path&
     const AC::LabAnimation* skeleton = FindSkeleton(input, g_skeletonRoot);
 
     std::string detail;
-    const AC::GltfStatus status = AC::WriteGltf(*obj, output, detail, textures, skeleton);
+    const AC::GltfStatus status =
+        AC::WriteGltf(*obj, output, detail, textures, skeleton, profile, skinPolicy);
     if (status != AC::GltfStatus::OK) {
         const std::string_view name =
             status == AC::GltfStatus::EMPTY_MESH ? "EMPTY_MESH" : "WRITE_FAILED";
@@ -497,6 +505,8 @@ int main(int argc, char** argv) {
     const std::filesystem::path outputRoot{argv[2]};
     std::filesystem::path reportPath;
     std::filesystem::path textureRoot;
+    AC::GltfCoordinateProfile profile = AC::GltfCoordinateProfile::Generic;
+    bool staticReferencePose = false;
 
     for (int i = 3; i < argc; ++i) {
         const std::string_view arg{argv[i]};
@@ -512,6 +522,22 @@ int main(int argc, char** argv) {
             g_skeletonRoot = argv[i + 1];
             ++i;
         }
+        else if (arg == "--profile" && i + 1 < argc) {
+            const std::string_view value{argv[++i]};
+            if (value == "generic") {
+                profile = AC::GltfCoordinateProfile::Generic;
+            }
+            else if (value == "scene-map") {
+                profile = AC::GltfCoordinateProfile::SceneMap;
+            }
+            else {
+                PrintUsage();
+                return 2;
+            }
+        }
+        else if (arg == "--static-reference-pose") {
+            staticReferencePose = true;
+        }
         else {
             PrintUsage();
             return 2;
@@ -522,6 +548,15 @@ int main(int argc, char** argv) {
         std::cout << std::format("Входной каталог не найден: {}\n", inputRoot.string());
         return 2;
     }
+
+    if (staticReferencePose && profile != AC::GltfCoordinateProfile::SceneMap) {
+        PrintUsage();
+        return 2;
+    }
+
+    const AC::GltfSkinPolicy skinPolicy = staticReferencePose
+        ? AC::GltfSkinPolicy::StaticReferencePose
+        : AC::GltfSkinPolicy::Preserve;
 
     AC::ConversionReport report;
     const AC::TextureResolver resolver{textureRoot};
@@ -566,10 +601,12 @@ int main(int argc, char** argv) {
         output.replace_extension(".gltf");
 
         if (isGeometry) {
-            ConvertOne(entry.path(), output, relative, report, resolver, outputRoot);
+            ConvertOne(entry.path(), output, relative, report, resolver, outputRoot,
+                       profile, skinPolicy);
         }
         else if (isModel) {
-            ConvertModel(entry.path(), output, relative, report, resolver, outputRoot);
+            ConvertModel(entry.path(), output, relative, report, resolver, outputRoot,
+                         profile, skinPolicy);
         }
         else {
             ConvertAnimation(entry.path(), output, relativeText, report);

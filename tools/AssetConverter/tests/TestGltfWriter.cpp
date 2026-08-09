@@ -4,7 +4,9 @@
 
 #include "TestHarness.h"
 
+#include <array>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <string>
@@ -20,6 +22,123 @@ std::filesystem::path SampleLgo() {
 
 std::filesystem::path OutputDir() {
     return std::filesystem::temp_directory_path() / "corsairs-gltf-tests";
+}
+
+CORSAIRS_TEST(GltfWriter_SceneMapMirrorsStaticPartExactlyOnce) {
+    AC::LgoGeomObj object;
+    object.Version = 0x1004u;
+    object.Mesh.Positions = {
+        AC::Vector3{0.0f, 0.0f, 0.0f},
+        AC::Vector3{2.0f, 0.0f, 0.0f},
+        AC::Vector3{0.0f, 1.0f, 0.0f},
+    };
+    object.Mesh.Normals = {
+        AC::Vector3{0.0f, 0.0f, 1.0f},
+        AC::Vector3{0.0f, 0.0f, 1.0f},
+        AC::Vector3{0.0f, 0.0f, 1.0f},
+    };
+    object.Mesh.Indices = {0u, 1u, 2u};
+    object.Mesh.Subsets.push_back(AC::SubsetInfo{1u, 0u, 3u, 0u});
+    object.MatModel[12] = 3.0f;
+    object.MatModel[13] = 4.0f;
+
+    std::filesystem::create_directories(OutputDir());
+    const std::filesystem::path gltfPath = OutputDir() / "scene-map-static.gltf";
+
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(
+                   object, gltfPath, detail, {}, nullptr,
+                   AC::GltfCoordinateProfile::SceneMap)),
+               static_cast<std::uint32_t>(AC::GltfStatus::OK));
+
+    auto binPath = gltfPath;
+    binPath.replace_extension(".bin");
+    const auto binary = AC::ReadWholeFile(binPath);
+    REQUIRE(binary.has_value());
+    REQUIRE(binary->size() >=
+            sizeof(AC::Vector3) * 6 + sizeof(std::uint32_t) * 3);
+
+    std::array<AC::Vector3, 3> positions{};
+    std::array<AC::Vector3, 3> normals{};
+    std::array<std::uint32_t, 3> indices{};
+    std::memcpy(positions.data(), binary->data(), sizeof(positions));
+    std::memcpy(normals.data(), binary->data() + sizeof(positions), sizeof(normals));
+    std::memcpy(indices.data(),
+                binary->data() + sizeof(positions) + sizeof(normals),
+                sizeof(indices));
+
+    REQUIRE_EQ(positions[0].X, 0.0f);
+    REQUIRE_EQ(positions[0].Y, 0.0f);
+    REQUIRE_EQ(positions[0].Z, 0.0f);
+    REQUIRE_EQ(positions[1].X, 2.0f);
+    REQUIRE_EQ(positions[1].Y, 0.0f);
+    REQUIRE_EQ(positions[1].Z, 0.0f);
+    REQUIRE_EQ(positions[2].X, 0.0f);
+    REQUIRE_EQ(positions[2].Y, 0.0f);
+    REQUIRE_EQ(positions[2].Z, -1.0f);
+    REQUIRE_EQ(normals[0].X, 0.0f);
+    REQUIRE_EQ(normals[0].Y, 1.0f);
+    REQUIRE_EQ(normals[0].Z, 0.0f);
+    REQUIRE_EQ(indices[0], 0u);
+    REQUIRE_EQ(indices[1], 1u);
+    REQUIRE_EQ(indices[2], 2u);
+
+    const auto written = AC::ReadWholeFile(gltfPath);
+    REQUIRE(written.has_value());
+    const std::string text{reinterpret_cast<const char*>(written->data()), written->size()};
+    REQUIRE(text.find(
+        R"("nodes":[{"name":"part_root","children":[1],"matrix":[1,0,0,0,0,1,0,0,0,0,1,0,3,0,-4,1]},{"mesh":0,"name":"mesh"}])") !=
+            std::string::npos);
+    REQUIRE(text.find(R"("scenes":[{"nodes":[0]}])") != std::string::npos);
+}
+
+CORSAIRS_TEST(GltfWriter_SceneMapStaticReferencePoseIsExplicitOptIn) {
+    AC::LgoGeomObj object;
+    object.Version = 0x1004u;
+    object.Mesh.Positions = {
+        AC::Vector3{0.0f, 0.0f, 0.0f},
+        AC::Vector3{1.0f, 0.0f, 0.0f},
+        AC::Vector3{0.0f, 1.0f, 0.0f},
+    };
+    object.Mesh.Indices = {0u, 1u, 2u};
+    object.Mesh.Subsets.push_back(AC::SubsetInfo{1u, 0u, 3u, 0u});
+    object.Mesh.BoneIndices = {0u};
+    object.Mesh.Blends.resize(3);
+    for (AC::BlendInfo& blend : object.Mesh.Blends) {
+        blend.Weight[0] = 1.0f;
+    }
+
+    std::filesystem::create_directories(OutputDir());
+    const std::filesystem::path rejectedPath =
+        OutputDir() / "scene-map-skinned-rejected.gltf";
+    auto rejectedBin = rejectedPath;
+    rejectedBin.replace_extension(".bin");
+    std::filesystem::remove(rejectedPath);
+    std::filesystem::remove(rejectedBin);
+
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(
+                   object, rejectedPath, detail, {}, nullptr,
+                   AC::GltfCoordinateProfile::SceneMap)),
+               static_cast<std::uint32_t>(AC::GltfStatus::WRITE_FAILED));
+    REQUIRE(!std::filesystem::exists(rejectedPath));
+    REQUIRE(!std::filesystem::exists(rejectedBin));
+
+    const std::filesystem::path staticPath =
+        OutputDir() / "scene-map-skinned-static.gltf";
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(
+                   object, staticPath, detail, {}, nullptr,
+                   AC::GltfCoordinateProfile::SceneMap,
+                   AC::GltfSkinPolicy::StaticReferencePose)),
+               static_cast<std::uint32_t>(AC::GltfStatus::OK));
+
+    const auto written = AC::ReadWholeFile(staticPath);
+    REQUIRE(written.has_value());
+    const std::string text{reinterpret_cast<const char*>(written->data()), written->size()};
+    REQUIRE(text.find(R"("name":"part_root")") != std::string::npos);
+    REQUIRE(text.find(R"("JOINTS_0")") == std::string::npos);
+    REQUIRE(text.find(R"("WEIGHTS_0")") == std::string::npos);
+    REQUIRE(text.find(R"("skins")") == std::string::npos);
 }
 
 CORSAIRS_TEST(GltfWriter_WritesGltfAndBinForRealFile) {

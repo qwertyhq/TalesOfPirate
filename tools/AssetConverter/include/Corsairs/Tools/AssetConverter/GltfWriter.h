@@ -10,18 +10,26 @@
 
 namespace Corsairs::Tools::AssetConverter {
 
+enum class GltfCoordinateProfile : std::uint8_t {
+    Generic,
+    SceneMap,
+};
+
+enum class GltfSkinPolicy : std::uint8_t {
+    Preserve,
+    StaticReferencePose,
+};
+
 enum class GltfStatus : std::uint32_t {
     OK = 0,
     EMPTY_MESH,
     WRITE_FAILED,
 };
 
-// Переводит матрицу трансформации из левосторонней системы MindPower3D в
-// правостороннюю систему glTF.
+// Переводит матрицу трансформации из системы MindPower3D в glTF.
 //
-// Выполняется ровно одна операция — смена системы координат: M' = S*M*S, где
-// S = diag(1,1,-1,1). Отрицаются элементы, у которых ровно один индекс равен 2,
-// то есть смешивающие Z с X/Y, и Z-перенос. Диагональный m22 не меняется.
+// Generic выполняет замену базиса P*M*P, где P переставляет Y и Z. SceneMap
+// после неё применяет зеркало G=diag(1,1,-1,1): G*(P*M*P)*G.
 //
 // Транспонирование НЕ выполняется, и это не упущение. DirectX использует
 // строки-векторы (p' = p*M) и хранит матрицу по строкам; glTF использует
@@ -33,7 +41,10 @@ enum class GltfStatus : std::uint32_t {
 // 3,7,11 и получить сломанную трансформацию.
 //
 // `in` и `out` — по 16 float, перекрываться не должны.
-void ConvertMatrixToGltf(const float* in, float* out);
+void ConvertMatrixToGltf(
+    const float* in,
+    float* out,
+    GltfCoordinateProfile profile = GltfCoordinateProfile::Generic);
 
 // Настройки записи текстур. Если ResolvedTextures пуст, материалы пишутся без
 // изображений — с именами и цветами, но без ссылок на файлы.
@@ -65,6 +76,10 @@ struct GltfTextureOptions {
                                    const std::filesystem::path& gltfPath,
                                    std::string& detail,
                                    const GltfTextureOptions& textures = {},
-                                   const LabAnimation* skeleton = nullptr);
+                                   const LabAnimation* skeleton = nullptr,
+                                   GltfCoordinateProfile profile =
+                                       GltfCoordinateProfile::Generic,
+                                   GltfSkinPolicy skinPolicy =
+                                       GltfSkinPolicy::Preserve);
 
 } // namespace Corsairs::Tools::AssetConverter

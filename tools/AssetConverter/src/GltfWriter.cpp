@@ -265,7 +265,8 @@ void CollectImages(const LgoGeomObj& obj, const GltfTextureOptions& textures,
 
 } // namespace
 
-void ConvertMatrixToGltf(const float* in, float* out) {
+void ConvertMatrixToGltf(const float* in, float* out,
+                         GltfCoordinateProfile profile) {
     // Замена базиса P*M*P, где P переставляет оси Y и Z. P обратна самой себе,
     // поэтому обе стороны — она же. На уровне элементов это значит взять
     // элемент с переставленными индексами строки и столбца.
@@ -278,16 +279,41 @@ void ConvertMatrixToGltf(const float* in, float* out) {
             out[row * 4 + col] = in[swapAxis(row) * 4 + swapAxis(col)];
         }
     }
+
+    if (profile == GltfCoordinateProfile::SceneMap) {
+        constexpr float axisSign[4]{1.0f, 1.0f, -1.0f, 1.0f};
+        for (int row = 0; row < 4; ++row) {
+            for (int col = 0; col < 4; ++col) {
+                float& value = out[row * 4 + col];
+                value *= axisSign[row] * axisSign[col];
+                if (value == 0.0f) {
+                    value = 0.0f;
+                }
+            }
+        }
+    }
 }
 
 GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPath,
                      std::string& detail, const GltfTextureOptions& textures,
-                     const LabAnimation* skeleton) {
+                     const LabAnimation* skeleton,
+                     GltfCoordinateProfile profile,
+                     GltfSkinPolicy skinPolicy) {
     const LgoMesh& mesh = obj.Mesh;
 
     if (mesh.Positions.empty() || mesh.Indices.empty() || mesh.Subsets.empty()) {
         detail = "меш не содержит вершин, индексов или подсетов";
         return GltfStatus::EMPTY_MESH;
+    }
+
+    const bool sourceHasSkinData =
+        !mesh.Blends.empty() || !mesh.BoneIndices.empty();
+    const bool hasSkin = skinPolicy == GltfSkinPolicy::Preserve &&
+                         !mesh.Blends.empty() && !mesh.BoneIndices.empty();
+    if (profile == GltfCoordinateProfile::SceneMap &&
+        sourceHasSkinData && skinPolicy == GltfSkinPolicy::Preserve) {
+        detail = "профиль scene-map пока поддерживает только статические меши";
+        return GltfStatus::WRITE_FAILED;
     }
 
     // Перевод в систему координат glTF перестановкой Y и Z.
@@ -305,11 +331,17 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     std::vector<Vector3> positions = mesh.Positions;
     for (Vector3& p : positions) {
         std::swap(p.Y, p.Z);
+        if (profile == GltfCoordinateProfile::SceneMap) {
+            p.Z = p.Z == 0.0f ? 0.0f : -p.Z;
+        }
     }
 
     std::vector<Vector3> normals = mesh.Normals;
     for (Vector3& n : normals) {
         std::swap(n.Y, n.Z);
+        if (profile == GltfCoordinateProfile::SceneMap) {
+            n.Z = n.Z == 0.0f ? 0.0f : -n.Z;
+        }
     }
 
     // Исходные данные местами содержат NaN и бесконечности — в нормалях у
@@ -322,10 +354,12 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
 
     // Смена порядка обхода треугольника — парная операция к смене рукости.
     std::vector<std::uint32_t> indices = mesh.Indices;
-    for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
-        const std::uint32_t tmp = indices[i + 1];
-        indices[i + 1] = indices[i + 2];
-        indices[i + 2] = tmp;
+    if (profile == GltfCoordinateProfile::Generic) {
+        for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
+            const std::uint32_t tmp = indices[i + 1];
+            indices[i + 1] = indices[i + 2];
+            indices[i + 2] = tmp;
+        }
     }
 
     std::vector<std::uint8_t> buffer;
@@ -354,8 +388,6 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     // глобальный id кости), а glTF JOINTS_0 индексирует массив skin.joints.
     // Строим joints в том же порядке, что BoneIndices, — тогда индексы
     // переносятся один в один без перенумерации.
-    const bool hasSkin = !mesh.Blends.empty() && !mesh.BoneIndices.empty();
-
     // Скелет прикладывается, только если его кости индексируются одним байтом:
     // JOINTS_0 здесь пишется как UNSIGNED_BYTE, и 256-я кость в него не влезет.
     // Ни один скелет в наборе такого размера не достигает, но молча испортить
@@ -754,11 +786,33 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     json.EndObject();
     json.EndArray();
 
-    // Узел 0 — сам меш. Следом по узлу на каждую dummy-точку крепления:
-    // так UE и Blender видят их как обычные объекты сцены с трансформацией,
-    // и к ним можно привязывать оружие и эффекты.
+    // В профиле SceneMap узел 0 — корень части. Он единственный владеет
+    // MatModel, а меш и dummy-точки остаются в локальном пространстве части.
+    // Generic сохраняет прежний плоский граф: узел 0 — сам меш.
     json.Key("nodes");
     json.BeginArray();
+    if (profile == GltfCoordinateProfile::SceneMap) {
+        float matrix[16]{};
+        ConvertMatrixToGltf(obj.MatModel, matrix, profile);
+
+        json.BeginObject();
+        json.Key("name");
+        json.Value("part_root");
+        json.Key("children");
+        json.BeginArray();
+        for (std::size_t i = 0; i < 1 + obj.Helper.Dummies.size(); ++i) {
+            json.Value(static_cast<std::int64_t>(i + 1));
+        }
+        json.EndArray();
+        json.Key("matrix");
+        json.BeginArray();
+        for (const float value : matrix) {
+            json.Value(static_cast<double>(value));
+        }
+        json.EndArray();
+        json.EndObject();
+    }
+
     json.BeginObject();
     json.Key("mesh");
     json.Value(static_cast<std::int64_t>(0));
@@ -776,7 +830,7 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     // Скиннутый меш исключён намеренно: по спецификации glTF трансформ узла
     // скиннутого меша игнорируется, вершины полностью задаются суставами.
     // Записывать туда матрицу бессмысленно, а вводить в заблуждение — вредно.
-    if (!hasSkin) {
+    if (!hasSkin && profile == GltfCoordinateProfile::Generic) {
         float matrix[16]{};
         ConvertMatrixToGltf(obj.MatModel, matrix);
 
@@ -802,7 +856,7 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
 
     for (std::size_t i = 0; i < obj.Helper.Dummies.size(); ++i) {
         float matrix[16]{};
-        ConvertMatrixToGltf(obj.Helper.Dummies[i].Mat, matrix);
+        ConvertMatrixToGltf(obj.Helper.Dummies[i].Mat, matrix, profile);
 
         json.BeginObject();
         json.Key("name");
@@ -897,7 +951,7 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
             json.EndObject();
         }
     }
-    else {
+    else if (skinPolicy == GltfSkinPolicy::Preserve) {
         for (std::size_t i = 0; i < mesh.BoneIndices.size(); ++i) {
             json.BeginObject();
             json.Key("name");
@@ -946,8 +1000,13 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     json.BeginObject();
     json.Key("nodes");
     json.BeginArray();
-    for (std::size_t i = 0; i < sceneNodeCount; ++i) {
-        json.Value(static_cast<std::int64_t>(i));
+    if (profile == GltfCoordinateProfile::SceneMap) {
+        json.Value(static_cast<std::int64_t>(0));
+    }
+    else {
+        for (std::size_t i = 0; i < sceneNodeCount; ++i) {
+            json.Value(static_cast<std::int64_t>(i));
+        }
     }
     json.EndArray();
     json.EndObject();
