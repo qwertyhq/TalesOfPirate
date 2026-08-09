@@ -30,7 +30,9 @@ OWNED_TARGET = "/Game/Maps/GarnerSceneProgressCity"
 DEFAULT_CONTENT_ROOT = "/Game/SceneParityCity"
 DEFAULT_CHARACTER_TYPE = "1"
 
-CHARACTER_LOCATION = (226603.0, -277019.0, 148.0)
+# Каноническая точка parity-кадра: тот же фонтанный квартал, который виден
+# в оригинальном клиенте. Координата Y уже переведена в систему UE.
+CHARACTER_LOCATION = (223325.0, -278475.0, 100.0)
 CHARACTER_LABEL = "SceneProgressCity_Test195126"
 CAMERA_LABEL = "SceneProgressCity_Camera"
 ACTOR_PREFIX = "SceneProgressCity_Part_"
@@ -385,15 +387,57 @@ def recreate_target_level(report, source, target):
     return levels
 
 
+def component_mesh_asset(component):
+    if isinstance(component, unreal.StaticMeshComponent):
+        return component.get_editor_property("static_mesh")
+    if isinstance(component, unreal.SkeletalMeshComponent):
+        return component.get_editor_property("skeletal_mesh_asset")
+    return None
+
+
+def legacy_scene_asset_paths(actor):
+    paths = []
+    component_types = (
+        unreal.StaticMeshComponent,
+        unreal.SkeletalMeshComponent,
+    )
+    for component_type in component_types:
+        for component in actor.get_components_by_class(component_type):
+            asset = component_mesh_asset(component)
+            if asset is None:
+                continue
+            path = asset.get_path_name()
+            if path.startswith("/Game/All/"):
+                paths.append(path)
+    return paths
+
+
 def remove_legacy_scene_actors(report):
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     removed = 0
+    removed_by_asset = 0
     for actor in list(actors.get_all_level_actors()):
         label = actor.get_actor_label()
-        if label.startswith("Inst_") or label.startswith("Obj_"):
+        legacy_paths = legacy_scene_asset_paths(actor)
+        if (label.startswith("Inst_") or label.startswith("Obj_")
+                or legacy_paths):
             if actors.destroy_actor(actor):
                 removed += 1
-    report.line(f"legacy scene actors удалено: {removed}")
+                if legacy_paths:
+                    removed_by_asset += 1
+
+    leftovers = [
+        (actor.get_actor_label(), legacy_scene_asset_paths(actor))
+        for actor in actors.get_all_level_actors()
+        if legacy_scene_asset_paths(actor)
+    ]
+    report.line(
+        f"legacy scene actors удалено: {removed} "
+        f"(по /Game/All asset: {removed_by_asset})")
+    if leftovers:
+        raise RuntimeError(
+            f"НЕВЕРНОЕ_КОЛИЧЕСТВО: осталось /Game/All actors="
+            f"{len(leftovers)} {leftovers[:5]}")
 
 
 def unwind_degrees(value):
@@ -555,8 +599,11 @@ def look_at_rotation(origin, target):
 
 def place_camera(report):
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
-    location = unreal.Vector(224900.0, -279100.0, 1900.0)
-    target = unreal.Vector(227100.0, -276820.0, 320.0)
+    # Оригинал: 35 м по плоскости, 50 м по высоте, vertical FOV 32 degrees.
+    # Для viewport 16:9 это horizontal FOV 54.0222067 degrees.
+    # Original eye=(2233.25,2749.75,51.0) m; source +Y maps to UE -Y.
+    location = unreal.Vector(223325.0, -274975.0, 5100.0)
+    target = unreal.Vector(*CHARACTER_LOCATION)
     rotation = look_at_rotation(location, target)
     camera = actors.spawn_actor_from_class(
         unreal.CameraActor, location, rotation)
@@ -564,9 +611,11 @@ def place_camera(report):
         raise RuntimeError("НЕВЕРНОЕ_КОЛИЧЕСТВО: camera actor=0")
     camera.set_actor_label(CAMERA_LABEL)
     camera.get_editor_property("camera_component").set_editor_property(
-        "field_of_view", 55.0)
+        "field_of_view", 54.0222067)
     unreal.EditorLevelLibrary.set_level_viewport_camera_info(location, rotation)
-    report.line("CAMERA: street view сохранён")
+    report.line(
+        "CAMERA: parity target=(223325,-278475,100) "
+        "eye=(223325,-274975,5100) HFOV=54.0222067")
 
 
 def verify_saved_actor_count(report, expected_placements):
