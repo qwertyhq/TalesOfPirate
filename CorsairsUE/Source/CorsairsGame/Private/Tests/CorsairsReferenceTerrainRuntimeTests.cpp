@@ -2,6 +2,7 @@
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Components/StaticMeshComponent.h"
+#include "Containers/StringConv.h"
 #include "Engine/Level.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
@@ -9,6 +10,7 @@
 #include "Engine/World.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/WorldSettings.h"
+#include "HAL/PlatformFile.h"
 #include "HAL/PlatformMisc.h"
 #include "HAL/PlatformProcess.h"
 #include "Internationalization/Regex.h"
@@ -25,6 +27,13 @@
 
 #if PLATFORM_MAC
 #include <CommonCrypto/CommonDigest.h>
+#endif
+
+#if PLATFORM_MAC
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogCorsairsReferenceTerrainRuntime, Log, All);
@@ -137,6 +146,279 @@ namespace
 		FPaths::NormalizeDirectoryName(Out);
 		return !Out.IsEmpty() && !FPaths::IsRelative(Out) && Out != TEXT("/");
 	}
+
+	bool SandboxDirectoryComponents(
+		const FString& ContainerDataRoot,
+		const FString& AutomationReportsRoot,
+		TArray<FString>& OutComponents)
+	{
+		OutComponents.Reset();
+		const FString Prefix = ContainerDataRoot + TEXT("/");
+		if (!AutomationReportsRoot.StartsWith(
+			Prefix, ESearchCase::CaseSensitive))
+		{
+			return false;
+		}
+		const FString RelativeSuffix = AutomationReportsRoot.Mid(Prefix.Len());
+		RelativeSuffix.ParseIntoArray(OutComponents, TEXT("/"), false);
+		if (OutComponents.IsEmpty())
+		{
+			return false;
+		}
+
+		FString ReconstructedRoot = ContainerDataRoot;
+		for (const FString& Component : OutComponents)
+		{
+			if (Component.IsEmpty() || Component == TEXT(".") ||
+				Component == TEXT("..") || Component.Contains(TEXT("\\")) ||
+				Component.Contains(TEXT("/")))
+			{
+				return false;
+			}
+			ReconstructedRoot = FPaths::Combine(ReconstructedRoot, Component);
+		}
+		if (ReconstructedRoot != AutomationReportsRoot)
+		{
+			return false;
+		}
+		return true;
+	}
+
+#if PLATFORM_MAC
+	struct FSandboxDirectoryIdentity
+	{
+		uint64 Device = 0;
+		uint64 Inode = 0;
+		uint32 Owner = 0;
+		uint32 Mode = 0;
+	};
+
+	bool SameSandboxDirectoryIdentity(
+		const FSandboxDirectoryIdentity& Left,
+		const FSandboxDirectoryIdentity& Right)
+	{
+		return Left.Device == Right.Device && Left.Inode == Right.Inode &&
+			Left.Owner == Right.Owner && Left.Mode == Right.Mode;
+	}
+
+	bool IsSafeSandboxDirectory(
+		const int Descriptor,
+		const bool bRequireExactOwnerMode,
+		FSandboxDirectoryIdentity* OutIdentity = nullptr)
+	{
+		struct stat DirectoryInfo = {};
+		if (::fstat(Descriptor, &DirectoryInfo) != 0 ||
+			!S_ISDIR(DirectoryInfo.st_mode) ||
+			DirectoryInfo.st_uid != ::geteuid() ||
+			(DirectoryInfo.st_mode & (S_IWGRP | S_IWOTH)) != 0)
+		{
+			return false;
+		}
+		if (bRequireExactOwnerMode &&
+			(DirectoryInfo.st_mode & static_cast<mode_t>(ALLPERMS)) !=
+				static_cast<mode_t>(0700))
+		{
+			return false;
+		}
+		if (OutIdentity != nullptr)
+		{
+			OutIdentity->Device = static_cast<uint64>(DirectoryInfo.st_dev);
+			OutIdentity->Inode = static_cast<uint64>(DirectoryInfo.st_ino);
+			OutIdentity->Owner = static_cast<uint32>(DirectoryInfo.st_uid);
+			OutIdentity->Mode = static_cast<uint32>(
+				DirectoryInfo.st_mode & static_cast<mode_t>(ALLPERMS));
+		}
+		return true;
+	}
+
+	int OpenVerifiedSandboxDirectory(
+		const FString& Path,
+		FSandboxDirectoryIdentity* OutIdentity = nullptr)
+	{
+		const FTCHARToUTF8 PathUtf8(*Path);
+		const int Descriptor = ::open(
+			PathUtf8.Get(),
+			O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC);
+		if (Descriptor < 0 ||
+			!IsSafeSandboxDirectory(Descriptor, false, OutIdentity))
+		{
+			if (Descriptor >= 0)
+			{
+				::close(Descriptor);
+			}
+			return -1;
+		}
+		return Descriptor;
+	}
+
+	int OpenVerifiedSandboxDirectoryAt(
+		const int ParentDescriptor,
+		const FString& Component,
+		const bool bRequireExactOwnerMode,
+		FSandboxDirectoryIdentity* OutIdentity = nullptr)
+	{
+		const FTCHARToUTF8 ComponentUtf8(*Component);
+		const int Descriptor = ::openat(
+			ParentDescriptor,
+			ComponentUtf8.Get(),
+			O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+		if (Descriptor < 0 ||
+			!IsSafeSandboxDirectory(
+				Descriptor, bRequireExactOwnerMode, OutIdentity))
+		{
+			if (Descriptor >= 0)
+			{
+				::close(Descriptor);
+			}
+			return -1;
+		}
+		return Descriptor;
+	}
+
+	bool VerifySandboxDirectoryChain(
+		const FString& ContainerDataRoot,
+		const TArray<FString>& Components,
+		const TArray<FSandboxDirectoryIdentity>& ExpectedIdentities)
+	{
+		if (ExpectedIdentities.Num() != Components.Num() + 1)
+		{
+			return false;
+		}
+		FSandboxDirectoryIdentity ObservedIdentity;
+		int ParentDescriptor = OpenVerifiedSandboxDirectory(
+			ContainerDataRoot, &ObservedIdentity);
+		if (ParentDescriptor < 0 || !SameSandboxDirectoryIdentity(
+			ObservedIdentity, ExpectedIdentities[0]))
+		{
+			if (ParentDescriptor >= 0)
+			{
+				::close(ParentDescriptor);
+			}
+			return false;
+		}
+		for (int32 Index = 0; Index < Components.Num(); ++Index)
+		{
+			ObservedIdentity = {};
+			const int ChildDescriptor = OpenVerifiedSandboxDirectoryAt(
+				ParentDescriptor, Components[Index], false, &ObservedIdentity);
+			if (ChildDescriptor < 0 || !SameSandboxDirectoryIdentity(
+				ObservedIdentity, ExpectedIdentities[Index + 1]))
+			{
+				if (ChildDescriptor >= 0)
+				{
+					::close(ChildDescriptor);
+				}
+				::close(ParentDescriptor);
+				return false;
+			}
+			::close(ParentDescriptor);
+			ParentDescriptor = ChildDescriptor;
+		}
+		::close(ParentDescriptor);
+		return true;
+	}
+#endif
+
+	bool BootstrapSandboxAutomationReportsDirectory(
+		const FString& ContainerDataRoot,
+		const FString& AutomationReportsRoot)
+	{
+		TArray<FString> Components;
+		if (!SandboxDirectoryComponents(
+			ContainerDataRoot, AutomationReportsRoot, Components))
+		{
+			return false;
+		}
+#if PLATFORM_MAC
+		TArray<FSandboxDirectoryIdentity> ExpectedIdentities;
+		ExpectedIdentities.Reserve(Components.Num() + 1);
+		FSandboxDirectoryIdentity ParentIdentity;
+		int ParentDescriptor = OpenVerifiedSandboxDirectory(
+			ContainerDataRoot, &ParentIdentity);
+		if (ParentDescriptor < 0)
+		{
+			return false;
+		}
+		ExpectedIdentities.Add(ParentIdentity);
+		for (const FString& Component : Components)
+		{
+			const FTCHARToUTF8 ComponentUtf8(*Component);
+			bool bCreated = false;
+			FSandboxDirectoryIdentity ChildIdentity;
+			int ChildDescriptor = ::openat(
+				ParentDescriptor,
+				ComponentUtf8.Get(),
+				O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+			if (ChildDescriptor < 0)
+			{
+				const int OpenError = errno;
+				if (OpenError != ENOENT)
+				{
+					::close(ParentDescriptor);
+					return false;
+				}
+				if (::mkdirat(
+						ParentDescriptor,
+						ComponentUtf8.Get(),
+						static_cast<mode_t>(0700)) != 0)
+				{
+					::close(ParentDescriptor);
+					return false;
+				}
+				bCreated = true;
+				ChildDescriptor = OpenVerifiedSandboxDirectoryAt(
+					ParentDescriptor, Component, false, &ChildIdentity);
+			}
+			else if (!IsSafeSandboxDirectory(
+				ChildDescriptor, false, &ChildIdentity))
+			{
+				::close(ChildDescriptor);
+				::close(ParentDescriptor);
+				return false;
+			}
+			if (ChildDescriptor < 0)
+			{
+				::close(ParentDescriptor);
+				return false;
+			}
+			if (bCreated &&
+				(::fchmod(ChildDescriptor, static_cast<mode_t>(0700)) != 0 ||
+				 !IsSafeSandboxDirectory(
+					 ChildDescriptor, true, &ChildIdentity)))
+			{
+				::close(ChildDescriptor);
+				::close(ParentDescriptor);
+				return false;
+			}
+			const bool bChildSynced = ::fsync(ChildDescriptor) == 0;
+			const bool bParentSynced = ::fsync(ParentDescriptor) == 0;
+			if (!bChildSynced || !bParentSynced)
+			{
+				::close(ChildDescriptor);
+				::close(ParentDescriptor);
+				return false;
+			}
+			::close(ParentDescriptor);
+			ParentDescriptor = ChildDescriptor;
+			ExpectedIdentities.Add(ChildIdentity);
+		}
+		::close(ParentDescriptor);
+		return VerifySandboxDirectoryChain(
+			ContainerDataRoot, Components, ExpectedIdentities);
+#else
+		IPlatformFile& PhysicalPlatformFile = IPlatformFile::GetPlatformPhysical();
+		if (!PhysicalPlatformFile.DirectoryExists(*ContainerDataRoot))
+		{
+			return false;
+		}
+		if (!PhysicalPlatformFile.CreateDirectoryTree(*AutomationReportsRoot) &&
+			!PhysicalPlatformFile.DirectoryExists(*AutomationReportsRoot))
+		{
+			return false;
+		}
+		return PhysicalPlatformFile.DirectoryExists(*AutomationReportsRoot);
+#endif
+	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -185,6 +467,12 @@ bool FCorsairsReferenceTerrainRuntimeTest::RunTest(const FString&)
 			FPaths::IsUnderDirectory(AutomationReportsRoot, ContainerDataRoot));
 		if (HasAnyErrors())
 		{
+			return false;
+		}
+		if (!BootstrapSandboxAutomationReportsDirectory(
+			ContainerDataRoot, AutomationReportsRoot))
+		{
+			AddError(TEXT("sandbox automation reports bootstrap failed"));
 			return false;
 		}
 		const FString Json = FString::Printf(

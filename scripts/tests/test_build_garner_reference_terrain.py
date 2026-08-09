@@ -516,6 +516,47 @@ class OrchestratorContractTests(unittest.TestCase):
         self.assertFalse(scratch.reservation_path.exists())
         self.assertTrue((destination / "index.json").is_file())
 
+    def test_host_rejects_missing_probe_reports_root_without_creating_it(self):
+        transaction = build.OuterTransaction.begin(self.repo.root, TXN, HEAD)
+        self.addCleanup(transaction.close)
+        probe = self._sandbox_probe()
+        reports_root = Path(probe["automationReportsRoot"])
+        reports_root.rmdir()
+        container = Path(probe["containerDataRoot"]).parent
+        metadata = container / ".com.apple.containermanagerd.metadata.plist"
+        metadata.write_bytes(plistlib.dumps({
+            "MCMMetadataCreator": probe["bundleIdentifier"],
+            "MCMMetadataIdentifier": probe["bundleIdentifier"],
+        }, fmt=plistlib.FMT_XML, sort_keys=True))
+
+        with self.assertRaises(build.Task8Error):
+            build.prepare_sandbox_attestation(
+                transaction, HEAD, self._verified_sandbox_app(), probe)
+
+        self.assertFalse(reports_root.exists())
+        package_reports = build.evidence_root(self.repo.root, TXN) / "package"
+        self.assertFalse((package_reports / "app-entitlements.plist").exists())
+        self.assertFalse((package_reports / "app-sandbox.json").exists())
+
+    def test_scratch_cleanup_preserves_probe_bootstrap_root_and_sentinel(self):
+        transaction = build.OuterTransaction.begin(self.repo.root, TXN, HEAD)
+        self.addCleanup(transaction.close)
+        binding = self._attested_sandbox_environment(transaction)
+        reports_root = binding.automation_reports_root
+        sentinel = reports_root / "probe-owned-sentinel.txt"
+        sentinel.write_bytes(b"persistent probe state\n")
+        sentinel.chmod(0o600)
+
+        scratch = build.prepare_sandbox_report_scratch(transaction, binding)
+        (scratch.report_root / "index.json").write_bytes(b'{"succeeded":1}\n')
+        build.copy_sandbox_runtime_reports(transaction)
+        build.cleanup_sandbox_report_scratch(transaction)
+
+        self.assertTrue(reports_root.is_dir())
+        self.assertEqual(sentinel.read_bytes(), b"persistent probe state\n")
+        self.assertFalse(scratch.transaction_root.exists())
+        self.assertFalse(scratch.reservation_path.exists())
+
     def test_sandbox_prepare_rejects_post_attestation_reports_replacement(self):
         transaction = build.OuterTransaction.begin(self.repo.root, TXN, HEAD)
         self.addCleanup(transaction.close)

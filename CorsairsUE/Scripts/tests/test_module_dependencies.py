@@ -99,6 +99,109 @@ class ModuleDependencyTests(unittest.TestCase):
         self.assertIn("CORSAIRS_TERRAIN_RUNTIME_JSON=", world_branch)
         self.assertNotIn("CORSAIRS_TERRAIN_SANDBOX_JSON=", world_branch)
 
+    def test_runtime_sandbox_probe_bootstraps_only_its_strict_reports_suffix(self):
+        runtime = (ROOT / "CorsairsUE/Source/CorsairsGame/Private/Tests/"
+                   "CorsairsReferenceTerrainRuntimeTests.cpp").read_text(
+                       encoding="utf-8")
+        for token in (
+            '#include "HAL/PlatformFile.h"',
+            "bool BootstrapSandboxAutomationReportsDirectory(",
+            "bool VerifySandboxDirectoryChain(",
+            "::open(",
+            "::openat(",
+            "::mkdirat(",
+            "O_NOFOLLOW_ANY",
+            "O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC",
+            "OpenError != ENOENT",
+            "::fstat(",
+            "::geteuid()",
+            "S_IWGRP | S_IWOTH",
+            "static_cast<mode_t>(ALLPERMS)",
+            "bRequireExactOwnerMode &&",
+            "static_cast<mode_t>(0700)",
+            "::fchmod(ChildDescriptor, static_cast<mode_t>(0700))",
+            "ChildDescriptor, false, &ChildIdentity",
+            "ParentDescriptor, Component, false, &ChildIdentity",
+            "const bool bChildSynced = ::fsync(ChildDescriptor) == 0;",
+            "const bool bParentSynced = ::fsync(ParentDescriptor) == 0;",
+            "if (!bChildSynced || !bParentSynced)",
+            "::fsync(",
+            "::close(",
+            "ReconstructedRoot != AutomationReportsRoot",
+            "ExpectedIdentities",
+            "SameSandboxDirectoryIdentity(",
+            "IPlatformFile::GetPlatformPhysical()",
+            "CreateDirectoryTree(*AutomationReportsRoot)",
+            "DirectoryExists(*AutomationReportsRoot)",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, runtime)
+        self.assertNotIn("CreateDirectoryTree(*ContainerDataRoot)", runtime)
+        self.assertEqual(
+            runtime.count("BootstrapSandboxAutomationReportsDirectory("), 2)
+
+        helper_start = runtime.index(
+            "bool BootstrapSandboxAutomationReportsDirectory(")
+        absolute_open_start = runtime.index(
+            "int OpenVerifiedSandboxDirectory(")
+        absolute_open_end = runtime.index(
+            "int OpenVerifiedSandboxDirectoryAt(", absolute_open_start)
+        self.assertIn(
+            "O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC",
+            runtime[absolute_open_start:absolute_open_end])
+        components = runtime.index(
+            "if (!SandboxDirectoryComponents(", helper_start)
+        data_open = runtime.index(
+            "int ParentDescriptor = OpenVerifiedSandboxDirectory(", helper_start)
+        suffix_mkdir = runtime.index("::mkdirat(", helper_start)
+        created_normalize = runtime.index(
+            "::fchmod(ChildDescriptor, static_cast<mode_t>(0700))",
+            suffix_mkdir)
+        child_barrier = runtime.index("const bool bChildSynced", suffix_mkdir)
+        parent_barrier = runtime.index("const bool bParentSynced", child_barrier)
+        barrier_gate = runtime.index(
+            "if (!bChildSynced || !bParentSynced)", parent_barrier)
+        component_helper = runtime.index("bool SandboxDirectoryComponents(")
+        reconstruction = runtime.index(
+            "ReconstructedRoot != AutomationReportsRoot", component_helper)
+        second_walk = runtime.index(
+            "return VerifySandboxDirectoryChain(", helper_start)
+        self.assertLess(component_helper, reconstruction)
+        self.assertLess(components, data_open)
+        self.assertLess(data_open, suffix_mkdir)
+        self.assertLess(suffix_mkdir, created_normalize)
+        self.assertLess(created_normalize, child_barrier)
+        self.assertLess(child_barrier, parent_barrier)
+        self.assertLess(parent_barrier, barrier_gate)
+        self.assertLess(suffix_mkdir, second_walk)
+        bootstrap_mac = runtime[helper_start:runtime.index("#else", helper_start)]
+        self.assertNotIn("::fsync(ChildDescriptor) != 0 ||", bootstrap_mac)
+        self.assertNotIn("static_cast<mode_t>(0777)", bootstrap_mac)
+
+        sandbox_start = runtime.index("if (bSandboxProbe)")
+        world_else = runtime.index("\n\telse\n\t{", sandbox_start)
+        sandbox_branch = runtime[sandbox_start:world_else]
+        world_branch = runtime[world_else:]
+        containment = sandbox_branch.index("FPaths::IsUnderDirectory")
+        containment_gate = sandbox_branch.index(
+            "if (HasAnyErrors())", containment)
+        bootstrap = sandbox_branch.index(
+            "if (!BootstrapSandboxAutomationReportsDirectory(",
+            containment_gate)
+        failure = sandbox_branch.index("AddError(", bootstrap)
+        failure_return = sandbox_branch.index("return false;", failure)
+        json_build = sandbox_branch.index("const FString Json", failure_return)
+        event = sandbox_branch.index(
+            "CORSAIRS_TERRAIN_SANDBOX_JSON=", json_build)
+        self.assertLess(containment, containment_gate)
+        self.assertLess(containment_gate, bootstrap)
+        self.assertLess(bootstrap, failure)
+        self.assertLess(failure, failure_return)
+        self.assertLess(failure_return, json_build)
+        self.assertLess(json_build, event)
+        self.assertNotIn(
+            "BootstrapSandboxAutomationReportsDirectory(", world_branch)
+
     def test_contract_enum_uses_equality_not_python_alias_spelling(self):
         entrypoint = ROOT / "CorsairsUE/Scripts/import_reference_terrain.py"
         probe = f"""

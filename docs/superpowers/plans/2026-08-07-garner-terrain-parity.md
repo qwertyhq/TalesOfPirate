@@ -3249,6 +3249,25 @@ container `Data` root from `FPlatformProcess::UserHomeDir()`, the normalized
 absolute no-trailing-slash reports root from `FPaths::AutomationReportsDir()`,
 and empty `issues`. Zero, duplicate, noncanonical, or mismatched events fail.
 
+Before emitting that event, the signed sandboxed probe requires the reported
+container `Data` root to exist and bootstraps only the exact nonempty relative
+suffix leading to `FPaths::AutomationReportsDir()`. On Mac it opens `Data`
+without following a symlink in any absolute-path component and walks each
+suffix component with no-follow descriptor-relative operations,
+creates only a missing component with mode `0700`, requires every existing or
+new component to belong to the effective UID and not be group/world writable,
+records all permission bits so the reopen detects any special-bit change,
+flushes every opened child and its parent including a component retained from
+an interrupted prior bootstrap, then reopens and verifies the same full
+identity chain before `PASS`. A non-Mac probe uses the physical platform file
+for the same suffix-only operation.
+Missing `Data`, a symlink or non-directory collision, unsafe ownership/mode, a
+non-`ENOENT` error, or any durability or reopen mismatch emits no sandbox event.
+The created automation suffix is
+persistent probe-owned application state: the host never creates it, and
+`SandboxScratch` cleanup never owns or removes it or any partial suffix left by
+a failed probe; a later probe must revalidate that state.
+
 The host requires the probed bundle ID to equal both the archived
 `CFBundleIdentifier` and the signing `Identifier`, requires the reported
 container root to be a physical directory whose leaf is exactly `Data`, and
@@ -3261,8 +3280,9 @@ physical non-hard-linked regular
 `MCMMetadataIdentifier` and `MCMMetadataCreator` must equal the same signed
 bundle ID. These OS-reported roots and the archived metadata/signature are the
 sole derivation inputs: Task 8 does not interpolate `$HOME`, hard-code a user or
-bundle ID, enumerate sibling containers, create a missing application
-container/reports root, follow a symlink, or fall back to the repository path.
+bundle ID, or enumerate sibling containers. The host does not create a missing
+application container or reported automation root, follow a symlink, or fall
+back to the repository path.
 The exact container, `Data`, automation-root device/inode/owner/mode identities
 are reopened and compared before every scratch mutation.
 
