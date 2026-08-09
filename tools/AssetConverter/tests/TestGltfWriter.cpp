@@ -1,6 +1,7 @@
 #include "Corsairs/Tools/AssetConverter/BinaryReader.h"
 #include "Corsairs/Tools/AssetConverter/GltfWriter.h"
 #include "Corsairs/Tools/AssetConverter/LgoParser.h"
+#include "Corsairs/Tools/AssetConverter/Sha256.h"
 
 #include "TestHarness.h"
 
@@ -8,8 +9,10 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <initializer_list>
 #include <limits>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -22,6 +25,376 @@ std::filesystem::path SampleLgo() {
 
 std::filesystem::path OutputDir() {
     return std::filesystem::temp_directory_path() / "corsairs-gltf-tests";
+}
+
+AC::LgoMaterial MaterialWithStates(
+    std::uint32_t rawTranspType,
+    std::uint32_t effectiveTranspType,
+    float opacity,
+    std::initializer_list<std::pair<std::uint32_t, std::uint32_t>> states) {
+    AC::LgoMaterial material;
+    material.Opacity = opacity;
+    material.RawTranspType = rawTranspType;
+    material.EffectiveTranspType = effectiveTranspType;
+    material.Mtl.Dif = AC::ColorValue4f{1.0f, 1.0f, 1.0f, 1.0f};
+    for (AC::RenderStateAtom& atom : material.RenderStates) {
+        atom = AC::RenderStateAtom{0xFFFFFFFFu, 0u, 0u};
+    }
+
+    std::size_t index = 0;
+    for (const auto& [state, value] : states) {
+        material.RenderStates[index++] = AC::RenderStateAtom{state, value, value};
+    }
+    return material;
+}
+
+AC::LgoGeomObj MaterialFixtureObject(std::vector<AC::LgoMaterial> materials) {
+    AC::LgoGeomObj object;
+    object.Version = 0x1004u;
+    object.Mesh.Positions = {
+        AC::Vector3{0.0f, 0.0f, 0.0f},
+        AC::Vector3{1.0f, 0.0f, 0.0f},
+        AC::Vector3{0.0f, 1.0f, 0.0f},
+    };
+    object.Mesh.Indices = {0u, 1u, 2u};
+    for (std::size_t i = 0; i < materials.size(); ++i) {
+        object.Mesh.Subsets.push_back(AC::SubsetInfo{1u, 0u, 3u, 0u});
+    }
+    object.Materials = std::move(materials);
+    return object;
+}
+
+std::string ReadText(const std::filesystem::path& path) {
+    const auto bytes = AC::ReadWholeFile(path);
+    if (!bytes) {
+        return {};
+    }
+    return std::string{reinterpret_cast<const char*>(bytes->data()), bytes->size()};
+}
+
+CORSAIRS_TEST(LegacyMaterialResolver_NormalizesLiteralRawTypes) {
+    std::uint32_t effective = 99u;
+    std::string detail;
+
+    REQUIRE_EQ(static_cast<std::uint32_t>(
+                   AC::NormalizeLegacyTransparencyType(0u, effective, detail)),
+               static_cast<std::uint32_t>(AC::LegacyMaterialStatus::OK));
+    REQUIRE_EQ(effective, 0u);
+    REQUIRE_EQ(static_cast<std::uint32_t>(
+                   AC::NormalizeLegacyTransparencyType(1u, effective, detail)),
+               static_cast<std::uint32_t>(AC::LegacyMaterialStatus::OK));
+    REQUIRE_EQ(effective, 1u);
+    REQUIRE_EQ(static_cast<std::uint32_t>(
+                   AC::NormalizeLegacyTransparencyType(2u, effective, detail)),
+               static_cast<std::uint32_t>(AC::LegacyMaterialStatus::OK));
+    REQUIRE_EQ(effective, 5u);
+    REQUIRE_EQ(static_cast<std::uint32_t>(
+                   AC::NormalizeLegacyTransparencyType(8u, effective, detail)),
+               static_cast<std::uint32_t>(AC::LegacyMaterialStatus::OK));
+    REQUIRE_EQ(effective, 8u);
+}
+
+CORSAIRS_TEST(LegacyMaterialResolver_ResolvesFiveLiteralModes) {
+    struct Case {
+        AC::LgoMaterial Material;
+        AC::LegacyMaterialMode Mode;
+        bool AlphaTestEnabled;
+        std::uint32_t AlphaRef;
+        std::uint32_t AlphaFunc;
+        bool AlphaBlendEnabled;
+        std::uint32_t SrcBlend;
+        std::uint32_t DestBlend;
+    };
+
+    const std::array<Case, 5> cases{{
+        {MaterialWithStates(0u, 0u, 1.0f, {{15u, 0u}, {27u, 0u}}),
+         AC::LegacyMaterialMode::Opaque, false, 0u, 0u, false, 0u, 0u},
+        {MaterialWithStates(0u, 0u, 1.0f,
+                            {{15u, 1u}, {25u, 5u}, {24u, 129u}}),
+         AC::LegacyMaterialMode::Masked, true, 129u, 5u, false, 0u, 0u},
+        {MaterialWithStates(0u, 0u, 0.5f, {{19u, 5u}, {20u, 6u}}),
+         AC::LegacyMaterialMode::Alpha, false, 0u, 0u, true, 5u, 6u},
+        {MaterialWithStates(1u, 1u, 1.0f, {{19u, 2u}, {20u, 2u}}),
+         AC::LegacyMaterialMode::Additive, false, 0u, 0u, true, 2u, 2u},
+        {MaterialWithStates(2u, 5u, 1.0f, {{19u, 1u}, {20u, 4u}}),
+         AC::LegacyMaterialMode::Subtractive, false, 0u, 0u, true, 1u, 4u},
+    }};
+
+    for (const Case& testCase : cases) {
+        AC::LegacyMaterialMetadata metadata;
+        std::string detail;
+        REQUIRE_EQ(static_cast<std::uint32_t>(
+                       AC::ResolveLegacyMaterial(testCase.Material, metadata, detail)),
+                   static_cast<std::uint32_t>(AC::LegacyMaterialStatus::OK));
+        REQUIRE_EQ(static_cast<std::uint32_t>(metadata.Mode),
+                   static_cast<std::uint32_t>(testCase.Mode));
+        REQUIRE_EQ(metadata.Opacity, testCase.Material.Opacity);
+        REQUIRE_EQ(metadata.RawTranspType, testCase.Material.RawTranspType);
+        REQUIRE_EQ(metadata.EffectiveTranspType,
+                   testCase.Material.EffectiveTranspType);
+        REQUIRE_EQ(metadata.AlphaTestEnabled, testCase.AlphaTestEnabled);
+        REQUIRE_EQ(metadata.AlphaRef, testCase.AlphaRef);
+        REQUIRE_EQ(metadata.AlphaFunc, testCase.AlphaFunc);
+        REQUIRE_EQ(metadata.AlphaBlendEnabled, testCase.AlphaBlendEnabled);
+        REQUIRE_EQ(metadata.SrcBlend, testCase.SrcBlend);
+        REQUIRE_EQ(metadata.DestBlend, testCase.DestBlend);
+    }
+}
+
+CORSAIRS_TEST(LegacyMaterialResolver_RejectsLiteralContradictions) {
+    auto conflicting = MaterialWithStates(
+        0u, 0u, 1.0f, {{19u, 5u}, {19u, 2u}, {20u, 6u}});
+    auto maskedAndBlended = MaterialWithStates(
+        0u, 0u, 1.0f,
+        {{15u, 1u}, {25u, 5u}, {24u, 129u}, {19u, 5u}, {20u, 6u}});
+    auto unsupportedAlpha = MaterialWithStates(
+        0u, 0u, 1.0f, {{15u, 1u}, {25u, 4u}, {24u, 129u}});
+    auto unsupportedBlend = MaterialWithStates(
+        0u, 0u, 0.5f, {{19u, 2u}, {20u, 4u}});
+    auto normalizationMismatch = MaterialWithStates(
+        2u, 2u, 1.0f, {{19u, 1u}, {20u, 4u}});
+    auto unsupportedTransparency = MaterialWithStates(7u, 7u, 1.0f, {});
+
+    struct Case {
+        const AC::LgoMaterial* Material;
+        AC::LegacyMaterialStatus Status;
+    };
+    const std::array<Case, 6> cases{{
+        {&conflicting, AC::LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE},
+        {&maskedAndBlended, AC::LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE},
+        {&unsupportedAlpha, AC::LegacyMaterialStatus::UNSUPPORTED_ALPHA_TEST},
+        {&unsupportedBlend, AC::LegacyMaterialStatus::UNSUPPORTED_BLEND_PAIR},
+        {&normalizationMismatch,
+         AC::LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE},
+        {&unsupportedTransparency,
+         AC::LegacyMaterialStatus::UNSUPPORTED_TRANSPARENCY_TYPE},
+    }};
+
+    for (const Case& testCase : cases) {
+        AC::LegacyMaterialMetadata metadata;
+        std::string detail;
+        REQUIRE_EQ(static_cast<std::uint32_t>(
+                       AC::ResolveLegacyMaterial(*testCase.Material, metadata, detail)),
+                   static_cast<std::uint32_t>(testCase.Status));
+        REQUIRE(!detail.empty());
+    }
+}
+
+CORSAIRS_TEST(LegacyMaterialResolver_CanonicalizesEveryStateBeforeTerminator) {
+    auto conflictingUnknown = MaterialWithStates(
+        0u, 0u, 1.0f, {{137u, 10u}, {137u, 11u}});
+    auto repeatedUnknown = MaterialWithStates(
+        0u, 0u, 1.0f, {{137u, 10u}, {137u, 10u}});
+    auto conflictingEndValue = repeatedUnknown;
+    conflictingEndValue.RenderStates[1].Value1 = 11u;
+    auto poisonAfterTerminator = MaterialWithStates(0u, 0u, 1.0f, {});
+    poisonAfterTerminator.RenderStates[0] =
+        AC::RenderStateAtom{137u, 10u, 10u};
+    poisonAfterTerminator.RenderStates[1] =
+        AC::RenderStateAtom{0xFFFFFFFFu, 0u, 0u};
+    poisonAfterTerminator.RenderStates[2] =
+        AC::RenderStateAtom{137u, 99u, 99u};
+    poisonAfterTerminator.RenderStates[3] =
+        AC::RenderStateAtom{15u, 1u, 1u};
+
+    AC::LegacyMaterialMetadata metadata;
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(
+                   AC::ResolveLegacyMaterial(conflictingUnknown, metadata, detail)),
+               static_cast<std::uint32_t>(
+                   AC::LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE));
+    REQUIRE(!detail.empty());
+
+    REQUIRE_EQ(static_cast<std::uint32_t>(
+                   AC::ResolveLegacyMaterial(conflictingEndValue, metadata, detail)),
+               static_cast<std::uint32_t>(
+                   AC::LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE));
+    REQUIRE(!detail.empty());
+
+    REQUIRE_EQ(static_cast<std::uint32_t>(
+                   AC::ResolveLegacyMaterial(repeatedUnknown, metadata, detail)),
+               static_cast<std::uint32_t>(AC::LegacyMaterialStatus::OK));
+    REQUIRE_EQ(static_cast<std::uint32_t>(metadata.Mode),
+               static_cast<std::uint32_t>(AC::LegacyMaterialMode::Opaque));
+
+    REQUIRE_EQ(static_cast<std::uint32_t>(
+                   AC::ResolveLegacyMaterial(poisonAfterTerminator, metadata, detail)),
+               static_cast<std::uint32_t>(AC::LegacyMaterialStatus::OK));
+    REQUIRE_EQ(static_cast<std::uint32_t>(metadata.Mode),
+               static_cast<std::uint32_t>(AC::LegacyMaterialMode::Opaque));
+    REQUIRE(!metadata.AlphaTestEnabled);
+}
+
+CORSAIRS_TEST(LegacyMaterialResolver_SubtractiveEquationIsDestinationTimesInverseSource) {
+    const AC::LgoMaterial material = MaterialWithStates(
+        2u, 5u, 1.0f, {{19u, 1u}, {20u, 4u}});
+    AC::LegacyMaterialMetadata metadata;
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(
+                   AC::ResolveLegacyMaterial(material, metadata, detail)),
+               static_cast<std::uint32_t>(AC::LegacyMaterialStatus::OK));
+    REQUIRE_EQ(static_cast<std::uint32_t>(metadata.Mode),
+               static_cast<std::uint32_t>(AC::LegacyMaterialMode::Subtractive));
+    REQUIRE(static_cast<std::uint32_t>(metadata.Mode) !=
+            static_cast<std::uint32_t>(AC::LegacyMaterialMode::Alpha));
+    REQUIRE(static_cast<std::uint32_t>(metadata.Mode) !=
+            static_cast<std::uint32_t>(AC::LegacyMaterialMode::Additive));
+
+    const std::array<float, 3> source{0.25f, 0.5f, 0.75f};
+    const std::array<float, 3> destination{0.8f, 0.6f, 0.4f};
+    const std::array<float, 3> result{
+        destination[0] * (1.0f - source[0]),
+        destination[1] * (1.0f - source[1]),
+        destination[2] * (1.0f - source[2]),
+    };
+    REQUIRE_EQ(result[0], 0.6f);
+    REQUIRE_EQ(result[1], 0.3f);
+    REQUIRE_EQ(result[2], 0.1f);
+}
+
+CORSAIRS_TEST(GltfWriter_SceneMapEmitsAuthoritativeLegacyMaterialExtras) {
+    AC::LgoGeomObj object = MaterialFixtureObject({
+        MaterialWithStates(0u, 0u, 1.0f, {{15u, 0u}, {27u, 0u}}),
+        MaterialWithStates(0u, 0u, 1.0f,
+                           {{15u, 1u}, {25u, 5u}, {24u, 129u}}),
+        MaterialWithStates(0u, 0u, 0.5f, {{19u, 5u}, {20u, 6u}}),
+        MaterialWithStates(1u, 1u, 1.0f, {{19u, 2u}, {20u, 2u}}),
+        MaterialWithStates(2u, 5u, 1.0f, {{19u, 1u}, {20u, 4u}}),
+    });
+
+    std::filesystem::create_directories(OutputDir());
+    const std::filesystem::path path = OutputDir() / "material-modes.gltf";
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(
+                   object, path, detail, {}, nullptr,
+                   AC::GltfCoordinateProfile::SceneMap)),
+               static_cast<std::uint32_t>(AC::GltfStatus::OK));
+
+    const std::string text = ReadText(path);
+    REQUIRE(!text.empty());
+    REQUIRE(text.find(R"("alphaMode":"OPAQUE")") != std::string::npos);
+    REQUIRE(text.find(
+        R"("alphaMode":"MASK","alphaCutoff":0.5098039215686274)") !=
+            std::string::npos);
+    REQUIRE(text.find(R"("alphaMode":"BLEND")") != std::string::npos);
+    REQUIRE(text.find(
+        R"("corsairsLegacyMaterial":{"schemaVersion":1,"mode":"opaque","opacity":1,"rawTranspType":0,"effectiveTranspType":0,"alphaTestEnabled":false,"alphaRef":0,"alphaFunc":0,"alphaBlendEnabled":false,"srcBlend":0,"destBlend":0})") !=
+            std::string::npos);
+    REQUIRE(text.find(
+        R"("corsairsLegacyMaterial":{"schemaVersion":1,"mode":"masked","opacity":1,"rawTranspType":0,"effectiveTranspType":0,"alphaTestEnabled":true,"alphaRef":129,"alphaFunc":5,"alphaBlendEnabled":false,"srcBlend":0,"destBlend":0})") !=
+            std::string::npos);
+    REQUIRE(text.find(
+        R"("corsairsLegacyMaterial":{"schemaVersion":1,"mode":"alpha","opacity":0.5,"rawTranspType":0,"effectiveTranspType":0,"alphaTestEnabled":false,"alphaRef":0,"alphaFunc":0,"alphaBlendEnabled":true,"srcBlend":5,"destBlend":6})") !=
+            std::string::npos);
+    REQUIRE(text.find(
+        R"("corsairsLegacyMaterial":{"schemaVersion":1,"mode":"additive","opacity":1,"rawTranspType":1,"effectiveTranspType":1,"alphaTestEnabled":false,"alphaRef":0,"alphaFunc":0,"alphaBlendEnabled":true,"srcBlend":2,"destBlend":2})") !=
+            std::string::npos);
+    REQUIRE(text.find(
+        R"("corsairsLegacyMaterial":{"schemaVersion":1,"mode":"subtractive","opacity":1,"rawTranspType":2,"effectiveTranspType":5,"alphaTestEnabled":false,"alphaRef":0,"alphaFunc":0,"alphaBlendEnabled":true,"srcBlend":1,"destBlend":4})") !=
+            std::string::npos);
+}
+
+CORSAIRS_TEST(GltfWriter_UnsupportedSceneMapMaterialLeavesNoOutput) {
+    AC::LgoGeomObj object = MaterialFixtureObject({
+        MaterialWithStates(7u, 7u, 1.0f, {}),
+    });
+    std::filesystem::create_directories(OutputDir());
+    const std::filesystem::path path = OutputDir() / "unsupported-material.gltf";
+    std::filesystem::path binPath = path;
+    binPath.replace_extension(".bin");
+    std::filesystem::remove(path);
+    std::filesystem::remove(binPath);
+
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(
+                   object, path, detail, {}, nullptr,
+                   AC::GltfCoordinateProfile::SceneMap)),
+               static_cast<std::uint32_t>(
+                   AC::GltfStatus::UNSUPPORTED_MATERIAL_MODE));
+    REQUIRE(!detail.empty());
+    REQUIRE(!std::filesystem::exists(path));
+    REQUIRE(!std::filesystem::exists(binPath));
+}
+
+CORSAIRS_TEST(GltfWriter_GltfPublicationFailureLeavesNoOrphanPairOrTemps) {
+    const std::filesystem::path root = OutputDir() / "atomic-pair-failure";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    REQUIRE(std::filesystem::create_directories(root));
+
+    const std::filesystem::path path = root / "blocked.gltf";
+    REQUIRE(std::filesystem::create_directory(path));
+    std::filesystem::path binPath = path;
+    binPath.replace_extension(".bin");
+
+    AC::LgoGeomObj object = MaterialFixtureObject({
+        MaterialWithStates(0u, 0u, 1.0f, {}),
+    });
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(object, path, detail)),
+               static_cast<std::uint32_t>(AC::GltfStatus::WRITE_FAILED));
+    REQUIRE(!detail.empty());
+    REQUIRE(std::filesystem::is_directory(path));
+    REQUIRE(!std::filesystem::exists(binPath));
+
+    std::size_t unexpectedEntries = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(root)) {
+        if (entry.path() != path) {
+            ++unexpectedEntries;
+        }
+    }
+    REQUIRE_EQ(unexpectedEntries, 0u);
+}
+
+CORSAIRS_TEST(GltfWriter_SceneMapMaterialNamesIncludeSourceIndex) {
+    auto opaque = MaterialWithStates(0u, 0u, 1.0f, {});
+    auto additive = MaterialWithStates(
+        1u, 1u, 1.0f, {{19u, 2u}, {20u, 2u}});
+    opaque.Textures[0] = "shared.bmp";
+    additive.Textures[0] = "shared.bmp";
+    AC::LgoGeomObj object = MaterialFixtureObject({opaque, additive});
+
+    std::filesystem::create_directories(OutputDir());
+    const std::filesystem::path path = OutputDir() / "unique-material-names.gltf";
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(
+                   object, path, detail, {}, nullptr,
+                   AC::GltfCoordinateProfile::SceneMap)),
+               static_cast<std::uint32_t>(AC::GltfStatus::OK));
+
+    const std::string text = ReadText(path);
+    REQUIRE(text.find(R"("name":"shared.bmp0")") !=
+            std::string::npos);
+    REQUIRE(text.find(R"("name":"shared.bmp1")") !=
+            std::string::npos);
+    REQUIRE(text.find(R"("name":"material_0_shared.bmp")") ==
+            std::string::npos);
+    REQUIRE(text.find(R"("name":"shared.bmp")") == std::string::npos);
+}
+
+CORSAIRS_TEST(GltfWriter_GenericProfileKeepsLiteralBytes) {
+    const auto bytes = AC::ReadWholeFile(SampleLgo());
+    REQUIRE(bytes.has_value());
+    AC::LgoDiagnostics diag;
+    const auto object = AC::ParseLgo(*bytes, diag);
+    REQUIRE(object.has_value());
+
+    std::filesystem::create_directories(OutputDir());
+    const std::filesystem::path path = OutputDir() / "sample.gltf";
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(AC::WriteGltf(*object, path, detail)),
+               static_cast<std::uint32_t>(AC::GltfStatus::OK));
+
+    std::filesystem::path binPath = path;
+    binPath.replace_extension(".bin");
+    const auto gltfHash = AC::Sha256File(path, detail);
+    const auto binHash = AC::Sha256File(binPath, detail);
+    REQUIRE(gltfHash.has_value());
+    REQUIRE(binHash.has_value());
+    REQUIRE_EQ(*gltfHash,
+               std::string{"30ae6c2dc2bcc9ab90c6868c21fd5d94b08ee6ce13d5bd4217155e2914b0deb4"});
+    REQUIRE_EQ(*binHash,
+               std::string{"c6556ee2a67875919aa1bd270fd511caf11710bc516568328feea6862db21057"});
 }
 
 CORSAIRS_TEST(GltfWriter_SceneMapMirrorsStaticPartExactlyOnce) {

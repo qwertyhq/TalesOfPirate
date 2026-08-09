@@ -2,6 +2,7 @@
 
 #include "Corsairs/Tools/AssetConverter/BinaryReader.h"
 
+#include <algorithm>
 #include <format>
 
 namespace Corsairs::Tools::AssetConverter {
@@ -31,6 +32,96 @@ std::string LgoMaterial::TextureName(std::size_t stage) const {
 }
 
 namespace {
+
+constexpr std::uint32_t kInvalidRenderState = 0xFFFFFFFFu;
+constexpr std::uint32_t kRsAlphaTestEnable = 15u;
+constexpr std::uint32_t kRsSrcBlend = 19u;
+constexpr std::uint32_t kRsDestBlend = 20u;
+constexpr std::uint32_t kRsAlphaRef = 24u;
+constexpr std::uint32_t kRsAlphaFunc = 25u;
+constexpr std::uint32_t kRsAlphaBlendEnable = 27u;
+constexpr std::uint32_t kCompareGreater = 5u;
+
+struct CanonicalRenderState {
+    bool Present{false};
+    std::uint32_t Value{0};
+};
+
+LegacyMaterialStatus RecordCanonicalState(
+    CanonicalRenderState& state,
+    const RenderStateAtom& atom,
+    std::string& detail) {
+    if (state.Present && state.Value != atom.Value0) {
+        detail = std::format(
+            "render state {} задан противоречиво: {} и {}",
+            atom.State, state.Value, atom.Value0);
+        return LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE;
+    }
+    state.Present = true;
+    state.Value = atom.Value0;
+    return LegacyMaterialStatus::OK;
+}
+
+LegacyMaterialStatus CanonicalizeRenderStates(
+    const std::array<RenderStateAtom, kMtlRsNum>& source,
+    std::array<RenderStateAtom, kMtlRsNum>& canonical,
+    std::size_t& canonicalCount,
+    std::string& detail) {
+    canonicalCount = 0;
+    for (const RenderStateAtom& atom : source) {
+        if (atom.State == kInvalidRenderState) {
+            break;
+        }
+
+        const auto end = canonical.begin() +
+            static_cast<std::ptrdiff_t>(canonicalCount);
+        const auto duplicate = std::find_if(
+            canonical.begin(), end,
+            [&](const RenderStateAtom& existing) {
+                return existing.State == atom.State;
+            });
+        if (duplicate != end) {
+            if (duplicate->Value0 != atom.Value0 ||
+                duplicate->Value1 != atom.Value1) {
+                detail = std::format(
+                    "render state {} задан противоречиво: ({},{}) и ({},{})",
+                    atom.State, duplicate->Value0, duplicate->Value1,
+                    atom.Value0, atom.Value1);
+                return LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE;
+            }
+            continue;
+        }
+
+        canonical[canonicalCount++] = atom;
+    }
+    return LegacyMaterialStatus::OK;
+}
+
+void InitializeCanonicalRenderStates(LgoMaterial& material) {
+    for (RenderStateAtom& atom : material.RenderStates) {
+        atom = RenderStateAtom{kInvalidRenderState, 0u, 0u};
+    }
+}
+
+void ConvertLegacyRenderStates(const RenderStateSet2x8& source,
+                               LgoMaterial& material) {
+    InitializeCanonicalRenderStates(material);
+    for (std::size_t i = 0; i < kMtlRsNum; ++i) {
+        const RenderStateValue& sourceState = source.Rsv[0][i];
+        if (sourceState.State == kInvalidRenderState) {
+            break;
+        }
+
+        std::uint32_t value = sourceState.Value;
+        if (sourceState.State == kRsAlphaFunc) {
+            value = kCompareGreater;
+        }
+        else if (sourceState.State == kRsAlphaRef) {
+            value = 129u;
+        }
+        material.RenderStates[i] = RenderStateAtom{sourceState.State, value, value};
+    }
+}
 
 // Поле имени на диске может не иметь завершающего нуля, поэтому длина ищется
 // вручную с явным пределом. strnlen не используется: он объявлен в разных
@@ -144,7 +235,16 @@ bool ParseMaterialBlock(BinaryReader& reader, std::uint32_t mtlSize,
             ok = reader.Read(raw);
             if (ok) {
                 out[i].Opacity = raw.Opacity;
-                out[i].TranspType = raw.TranspType;
+                out[i].RawTranspType = raw.TranspType;
+                const LegacyMaterialStatus normalizeStatus =
+                    NormalizeLegacyTransparencyType(
+                        out[i].RawTranspType, out[i].EffectiveTranspType,
+                        diag.Detail);
+                if (normalizeStatus != LegacyMaterialStatus::OK) {
+                    diag.Status = LgoStatus::MTL_BLOCK_MALFORMED;
+                    return false;
+                }
+                std::copy_n(raw.RsSet, kMtlRsNum, out[i].RenderStates.begin());
                 FillMaterial(raw, out[i]);
             }
         }
@@ -153,7 +253,16 @@ bool ParseMaterialBlock(BinaryReader& reader, std::uint32_t mtlSize,
             ok = reader.Read(raw);
             if (ok) {
                 out[i].Opacity = raw.Opacity;
-                out[i].TranspType = raw.TranspType;
+                out[i].RawTranspType = raw.TranspType;
+                const LegacyMaterialStatus normalizeStatus =
+                    NormalizeLegacyTransparencyType(
+                        out[i].RawTranspType, out[i].EffectiveTranspType,
+                        diag.Detail);
+                if (normalizeStatus != LegacyMaterialStatus::OK) {
+                    diag.Status = LgoStatus::MTL_BLOCK_MALFORMED;
+                    return false;
+                }
+                ConvertLegacyRenderStates(raw.RsSet, out[i]);
                 FillMaterial(raw, out[i]);
             }
         }
@@ -163,6 +272,7 @@ bool ParseMaterialBlock(BinaryReader& reader, std::uint32_t mtlSize,
             MtlTexInfoV0 raw{};
             ok = reader.Read(raw);
             if (ok) {
+                ConvertLegacyRenderStates(raw.RsSet, out[i]);
                 FillMaterial(raw, out[i]);
             }
         }
@@ -382,6 +492,204 @@ void ConvertBoxPointSizeToCenterRadius(Box& box) {
 }
 
 } // namespace
+
+LegacyMaterialStatus NormalizeLegacyTransparencyType(
+    std::uint32_t rawTranspType,
+    std::uint32_t& effectiveTranspType,
+    std::string& detail) {
+    if (rawTranspType == 1u) {
+        effectiveTranspType = 1u;
+    }
+    else if (rawTranspType == 2u) {
+        effectiveTranspType = 5u;
+    }
+    else {
+        effectiveTranspType = rawTranspType;
+    }
+    detail.clear();
+    return LegacyMaterialStatus::OK;
+}
+
+LegacyMaterialStatus ResolveLegacyMaterial(
+    const LgoMaterial& material,
+    LegacyMaterialMetadata& output,
+    std::string& detail) {
+    output = {};
+    output.Opacity = material.Opacity;
+    output.RawTranspType = material.RawTranspType;
+    output.EffectiveTranspType = material.EffectiveTranspType;
+    detail.clear();
+
+    std::uint32_t normalizedTransparency = 0;
+    const LegacyMaterialStatus normalizeStatus =
+        NormalizeLegacyTransparencyType(
+            material.RawTranspType, normalizedTransparency, detail);
+    if (normalizeStatus != LegacyMaterialStatus::OK) {
+        return normalizeStatus;
+    }
+    if (normalizedTransparency != material.EffectiveTranspType) {
+        detail = std::format(
+            "raw transp_type {} нормализуется в {}, но записано effective {}",
+            material.RawTranspType, normalizedTransparency,
+            material.EffectiveTranspType);
+        return LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE;
+    }
+
+    if (material.EffectiveTranspType != 0u &&
+        material.EffectiveTranspType != 1u &&
+        material.EffectiveTranspType != 5u) {
+        detail = std::format(
+            "effective transp_type {} не входит в FILTER/ADDITIVE/SUBTRACTIVE",
+            material.EffectiveTranspType);
+        return LegacyMaterialStatus::UNSUPPORTED_TRANSPARENCY_TYPE;
+    }
+
+    CanonicalRenderState alphaTest;
+    CanonicalRenderState alphaRef;
+    CanonicalRenderState alphaFunc;
+    CanonicalRenderState alphaBlend;
+    CanonicalRenderState srcBlend;
+    CanonicalRenderState destBlend;
+
+    std::array<RenderStateAtom, kMtlRsNum> canonicalStates{};
+    std::size_t canonicalStateCount = 0;
+    const LegacyMaterialStatus canonicalStatus = CanonicalizeRenderStates(
+        material.RenderStates, canonicalStates, canonicalStateCount, detail);
+    if (canonicalStatus != LegacyMaterialStatus::OK) {
+        return canonicalStatus;
+    }
+
+    for (std::size_t i = 0; i < canonicalStateCount; ++i) {
+        const RenderStateAtom& atom = canonicalStates[i];
+
+        CanonicalRenderState* destination = nullptr;
+        switch (atom.State) {
+        case kRsAlphaTestEnable:  destination = &alphaTest; break;
+        case kRsAlphaRef:         destination = &alphaRef; break;
+        case kRsAlphaFunc:        destination = &alphaFunc; break;
+        case kRsAlphaBlendEnable: destination = &alphaBlend; break;
+        case kRsSrcBlend:         destination = &srcBlend; break;
+        case kRsDestBlend:        destination = &destBlend; break;
+        default: break;
+        }
+        if (destination == nullptr) {
+            continue;
+        }
+
+        const LegacyMaterialStatus status =
+            RecordCanonicalState(*destination, atom, detail);
+        if (status != LegacyMaterialStatus::OK) {
+            return status;
+        }
+    }
+
+    output.AlphaTestEnabled = alphaTest.Present && alphaTest.Value != 0u;
+    output.AlphaRef = alphaRef.Present ? alphaRef.Value : 0u;
+    output.AlphaFunc = alphaFunc.Present ? alphaFunc.Value : 0u;
+    output.SrcBlend = srcBlend.Present ? srcBlend.Value : 0u;
+    output.DestBlend = destBlend.Present ? destBlend.Value : 0u;
+
+    if (alphaFunc.Present && alphaFunc.Value != kCompareGreater) {
+        detail = std::format(
+            "ALPHAFUNC={} не поддерживается, требуется GREATER({})",
+            alphaFunc.Value, kCompareGreater);
+        return LegacyMaterialStatus::UNSUPPORTED_ALPHA_TEST;
+    }
+    if (alphaRef.Present && alphaRef.Value > 255u) {
+        detail = std::format("ALPHAREF={} выходит за диапазон 0..255", alphaRef.Value);
+        return LegacyMaterialStatus::UNSUPPORTED_ALPHA_TEST;
+    }
+    if (output.AlphaTestEnabled && !alphaFunc.Present) {
+        detail = "включён ALPHATESTENABLE без явного ALPHAFUNC=GREATER";
+        return LegacyMaterialStatus::UNSUPPORTED_ALPHA_TEST;
+    }
+
+    if (srcBlend.Present != destBlend.Present) {
+        detail = "SRCBLEND и DESTBLEND должны быть заданы парой";
+        return LegacyMaterialStatus::UNSUPPORTED_BLEND_PAIR;
+    }
+    const bool hasBlendPair = srcBlend.Present && destBlend.Present;
+    const bool alphaBlendStateEnabled = alphaBlend.Present && alphaBlend.Value != 0u;
+    if (alphaBlend.Present && !alphaBlendStateEnabled && hasBlendPair) {
+        detail = "ALPHABLENDENABLE=0 противоречит явной blend-паре";
+        return LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE;
+    }
+    if (alphaBlendStateEnabled && !hasBlendPair) {
+        detail = "ALPHABLENDENABLE=1 задан без SRCBLEND/DESTBLEND";
+        return LegacyMaterialStatus::UNSUPPORTED_BLEND_PAIR;
+    }
+
+    const auto rejectBlendPair = [&]() {
+        detail = std::format(
+            "blend-пара {}/{} не соответствует transp_type {}",
+            output.SrcBlend, output.DestBlend,
+            material.EffectiveTranspType);
+        return LegacyMaterialStatus::UNSUPPORTED_BLEND_PAIR;
+    };
+
+    switch (material.EffectiveTranspType) {
+    case 1u:
+        if (!hasBlendPair || output.SrcBlend != 2u || output.DestBlend != 2u) {
+            return rejectBlendPair();
+        }
+        if (output.AlphaTestEnabled) {
+            detail = "alpha test и additive blend включены одновременно";
+            return LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE;
+        }
+        output.Mode = LegacyMaterialMode::Additive;
+        output.AlphaBlendEnabled = true;
+        break;
+
+    case 5u:
+        if (!hasBlendPair || output.SrcBlend != 1u || output.DestBlend != 4u) {
+            return rejectBlendPair();
+        }
+        if (output.AlphaTestEnabled) {
+            detail = "alpha test и subtractive blend включены одновременно";
+            return LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE;
+        }
+        output.Mode = LegacyMaterialMode::Subtractive;
+        output.AlphaBlendEnabled = true;
+        break;
+
+    case 0u: {
+        if (hasBlendPair &&
+            (output.SrcBlend != 5u || output.DestBlend != 6u)) {
+            return rejectBlendPair();
+        }
+
+        const bool opacityBlend = !hasBlendPair && material.Opacity < 1.0f;
+        const bool blendEnabled = hasBlendPair || opacityBlend;
+        if (output.AlphaTestEnabled && blendEnabled) {
+            detail = "alpha test и alpha blend включены одновременно";
+            return LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE;
+        }
+
+        if (hasBlendPair) {
+            output.Mode = LegacyMaterialMode::Alpha;
+            output.AlphaBlendEnabled = true;
+        }
+        else if (opacityBlend) {
+            output.Mode = LegacyMaterialMode::Alpha;
+            output.AlphaBlendEnabled = true;
+        }
+        else if (output.AlphaTestEnabled) {
+            output.Mode = LegacyMaterialMode::Masked;
+        }
+        else {
+            output.Mode = LegacyMaterialMode::Opaque;
+        }
+        break;
+    }
+
+    default:
+        detail = "недостижимый effective transp_type";
+        return LegacyMaterialStatus::UNSUPPORTED_TRANSPARENCY_TYPE;
+    }
+
+    detail.clear();
+    return LegacyMaterialStatus::OK;
+}
 
 // Разбирает helper-блок. Секции идут в фиксированном порядке по битам Type,
 // каждая начинается со своего счётчика. Проверяется точный расход байт.

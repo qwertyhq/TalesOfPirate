@@ -2,6 +2,7 @@
 
 #include "Corsairs/Tools/AssetConverter/LgoTypes.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -41,15 +42,58 @@ struct LgoDiagnostics {
 // сюда парсером.
 struct LgoMaterial {
     float Opacity{1.0f};
-    std::uint32_t TranspType{0};
+    std::uint32_t RawTranspType{0};
+    std::uint32_t EffectiveTranspType{0};
     Material Mtl{};
     // Имя файла текстуры по стадиям, как записано в файле, без нормализации
     // расширения: модели ссылаются на .BMP, тогда как на диске лежат .png.
     std::string Textures[kMaxTextureStageNum];
+    // Полный canonical RsSet. Современная раскладка копируется дословно,
+    // v0/v1 сначала переводятся из RenderStateSet2x8.
+    std::array<RenderStateAtom, kMtlRsNum> RenderStates{};
 
     // Пустая строка — стадия не задана или индекс вне диапазона.
     [[nodiscard]] std::string TextureName(std::size_t stage) const;
 };
+
+enum class LegacyMaterialMode : std::uint8_t {
+    Opaque,
+    Masked,
+    Alpha,
+    Additive,
+    Subtractive,
+};
+
+struct LegacyMaterialMetadata {
+    LegacyMaterialMode Mode{LegacyMaterialMode::Opaque};
+    float Opacity{1.0f};
+    std::uint32_t RawTranspType{0};
+    std::uint32_t EffectiveTranspType{0};
+    bool AlphaTestEnabled{false};
+    std::uint32_t AlphaRef{0};
+    std::uint32_t AlphaFunc{0};
+    bool AlphaBlendEnabled{false};
+    std::uint32_t SrcBlend{0};
+    std::uint32_t DestBlend{0};
+};
+
+enum class LegacyMaterialStatus : std::uint8_t {
+    OK,
+    UNSUPPORTED_TRANSPARENCY_TYPE,
+    UNSUPPORTED_BLEND_PAIR,
+    UNSUPPORTED_ALPHA_TEST,
+    CONTRADICTORY_RENDER_STATE,
+};
+
+[[nodiscard]] LegacyMaterialStatus ResolveLegacyMaterial(
+    const LgoMaterial& material,
+    LegacyMaterialMetadata& output,
+    std::string& detail);
+
+[[nodiscard]] LegacyMaterialStatus NormalizeLegacyTransparencyType(
+    std::uint32_t rawTranspType,
+    std::uint32_t& effectiveTranspType,
+    std::string& detail);
 
 struct LgoMesh {
     MeshInfoHeader Header{};

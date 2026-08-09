@@ -24,6 +24,8 @@ enum class GltfStatus : std::uint32_t {
     OK = 0,
     EMPTY_MESH,
     WRITE_FAILED,
+    INVALID_SKIN_DATA,
+    UNSUPPORTED_MATERIAL_MODE,
 };
 
 // Переводит матрицу трансформации из системы MindPower3D в glTF.

@@ -6,12 +6,15 @@
 #include "Corsairs/Tools/AssetConverter/JsonWriter.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstring>
 #include <format>
 #include <fstream>
 #include <limits>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 namespace Corsairs::Tools::AssetConverter {
@@ -85,7 +88,148 @@ bool WriteFile(const std::filesystem::path& path, const void* data, std::size_t 
     if (bytes > 0) {
         stream.write(static_cast<const char*>(data), static_cast<std::streamsize>(bytes));
     }
+    stream.flush();
     return static_cast<bool>(stream);
+}
+
+std::optional<std::filesystem::path> UniqueSiblingPath(
+    const std::filesystem::path& destination,
+    std::string_view role) {
+    static std::atomic<std::uint64_t> sequence{0};
+    for (std::size_t attempt = 0; attempt < 64; ++attempt) {
+        const std::uint64_t id = sequence.fetch_add(1, std::memory_order_relaxed);
+        const std::filesystem::path candidate = destination.parent_path() /
+            std::format(".{}.{}.{}", destination.filename().string(), role, id);
+        std::error_code error;
+        const bool exists = std::filesystem::exists(candidate, error);
+        if (!error && !exists) {
+            return candidate;
+        }
+    }
+    return std::nullopt;
+}
+
+void RemoveAttemptFile(const std::filesystem::path& path) {
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
+bool InspectReplaceableTarget(const std::filesystem::path& path,
+                              bool& exists,
+                              std::string& detail) {
+    std::error_code error;
+    exists = std::filesystem::exists(path, error);
+    if (error) {
+        detail = std::format(
+            "не удалось проверить destination {}: {}",
+            path.generic_string(), error.message());
+        return false;
+    }
+    if (exists && !std::filesystem::is_regular_file(path, error)) {
+        detail = std::format(
+            "destination {} существует и не является обычным файлом",
+            path.generic_string());
+        return false;
+    }
+    if (error) {
+        detail = std::format(
+            "не удалось проверить тип destination {}: {}",
+            path.generic_string(), error.message());
+        return false;
+    }
+    return true;
+}
+
+bool RenameFile(const std::filesystem::path& source,
+                const std::filesystem::path& destination,
+                std::string_view operation,
+                std::string& detail) {
+    std::error_code error;
+    std::filesystem::rename(source, destination, error);
+    if (!error) {
+        return true;
+    }
+    detail = std::format(
+        "{}: {} -> {}: {}", operation, source.generic_string(),
+        destination.generic_string(), error.message());
+    return false;
+}
+
+void RestorePriorFile(const std::optional<std::filesystem::path>& backup,
+                      const std::filesystem::path& destination,
+                      bool hadPrior,
+                      std::string& detail) {
+    if (!hadPrior || !backup) {
+        return;
+    }
+    std::string restoreDetail;
+    if (!RenameFile(*backup, destination, "не удалось восстановить prior output",
+                    restoreDetail)) {
+        detail += std::format("; rollback: {}", restoreDetail);
+    }
+}
+
+bool PublishGltfPair(const std::filesystem::path& gltfTemp,
+                     const std::filesystem::path& binTemp,
+                     const std::filesystem::path& gltfPath,
+                     const std::filesystem::path& binPath,
+                     std::string& detail) {
+    bool hadGltf = false;
+    bool hadBin = false;
+    if (!InspectReplaceableTarget(gltfPath, hadGltf, detail) ||
+        !InspectReplaceableTarget(binPath, hadBin, detail)) {
+        RemoveAttemptFile(gltfTemp);
+        RemoveAttemptFile(binTemp);
+        return false;
+    }
+
+    const auto gltfBackup = hadGltf ? UniqueSiblingPath(gltfPath, "backup")
+                                    : std::optional<std::filesystem::path>{};
+    const auto binBackup = hadBin ? UniqueSiblingPath(binPath, "backup")
+                                  : std::optional<std::filesystem::path>{};
+    if ((hadGltf && !gltfBackup) || (hadBin && !binBackup)) {
+        detail = "не удалось выделить sibling backup для glTF-пары";
+        RemoveAttemptFile(gltfTemp);
+        RemoveAttemptFile(binTemp);
+        return false;
+    }
+
+    if (hadGltf && !RenameFile(
+            gltfPath, *gltfBackup, "не удалось сохранить prior .gltf", detail)) {
+        RemoveAttemptFile(gltfTemp);
+        RemoveAttemptFile(binTemp);
+        return false;
+    }
+    if (hadBin && !RenameFile(
+            binPath, *binBackup, "не удалось сохранить prior .bin", detail)) {
+        RestorePriorFile(gltfBackup, gltfPath, hadGltf, detail);
+        RemoveAttemptFile(gltfTemp);
+        RemoveAttemptFile(binTemp);
+        return false;
+    }
+
+    if (!RenameFile(binTemp, binPath, "не удалось опубликовать .bin", detail)) {
+        RestorePriorFile(binBackup, binPath, hadBin, detail);
+        RestorePriorFile(gltfBackup, gltfPath, hadGltf, detail);
+        RemoveAttemptFile(gltfTemp);
+        RemoveAttemptFile(binTemp);
+        return false;
+    }
+    if (!RenameFile(gltfTemp, gltfPath, "не удалось опубликовать .gltf", detail)) {
+        RemoveAttemptFile(binPath);
+        RestorePriorFile(binBackup, binPath, hadBin, detail);
+        RestorePriorFile(gltfBackup, gltfPath, hadGltf, detail);
+        RemoveAttemptFile(gltfTemp);
+        return false;
+    }
+
+    if (gltfBackup) {
+        RemoveAttemptFile(*gltfBackup);
+    }
+    if (binBackup) {
+        RemoveAttemptFile(*binBackup);
+    }
+    return true;
 }
 
 // Изображение, попавшее в glTF: URI относительно каталога .gltf.
@@ -263,6 +407,49 @@ void CollectImages(const LgoGeomObj& obj, const GltfTextureOptions& textures,
     }
 }
 
+std::string_view LegacyMaterialModeName(LegacyMaterialMode mode) {
+    switch (mode) {
+    case LegacyMaterialMode::Opaque:      return "opaque";
+    case LegacyMaterialMode::Masked:      return "masked";
+    case LegacyMaterialMode::Alpha:       return "alpha";
+    case LegacyMaterialMode::Additive:    return "additive";
+    case LegacyMaterialMode::Subtractive: return "subtractive";
+    }
+    return "opaque";
+}
+
+void WriteLegacyMaterialExtras(JsonWriter& json,
+                               const LegacyMaterialMetadata& metadata) {
+    json.Key("extras");
+    json.BeginObject();
+    json.Key("corsairsLegacyMaterial");
+    json.BeginObject();
+    json.Key("schemaVersion");
+    json.Value(static_cast<std::int64_t>(1));
+    json.Key("mode");
+    json.Value(LegacyMaterialModeName(metadata.Mode));
+    json.Key("opacity");
+    json.Value(static_cast<double>(metadata.Opacity));
+    json.Key("rawTranspType");
+    json.Value(static_cast<std::int64_t>(metadata.RawTranspType));
+    json.Key("effectiveTranspType");
+    json.Value(static_cast<std::int64_t>(metadata.EffectiveTranspType));
+    json.Key("alphaTestEnabled");
+    json.Value(metadata.AlphaTestEnabled);
+    json.Key("alphaRef");
+    json.Value(static_cast<std::int64_t>(metadata.AlphaRef));
+    json.Key("alphaFunc");
+    json.Value(static_cast<std::int64_t>(metadata.AlphaFunc));
+    json.Key("alphaBlendEnabled");
+    json.Value(metadata.AlphaBlendEnabled);
+    json.Key("srcBlend");
+    json.Value(static_cast<std::int64_t>(metadata.SrcBlend));
+    json.Key("destBlend");
+    json.Value(static_cast<std::int64_t>(metadata.DestBlend));
+    json.EndObject();
+    json.EndObject();
+}
+
 } // namespace
 
 void ConvertMatrixToGltf(const float* in, float* out,
@@ -314,6 +501,20 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         sourceHasSkinData && skinPolicy == GltfSkinPolicy::Preserve) {
         detail = "профиль scene-map пока поддерживает только статические меши";
         return GltfStatus::WRITE_FAILED;
+    }
+
+    std::vector<LegacyMaterialMetadata> resolvedMaterials;
+    if (profile == GltfCoordinateProfile::SceneMap) {
+        resolvedMaterials.resize(obj.Materials.size());
+        for (std::size_t i = 0; i < obj.Materials.size(); ++i) {
+            std::string materialDetail;
+            const LegacyMaterialStatus materialStatus = ResolveLegacyMaterial(
+                obj.Materials[i], resolvedMaterials[i], materialDetail);
+            if (materialStatus != LegacyMaterialStatus::OK) {
+                detail = std::format("материал {}: {}", i, materialDetail);
+                return GltfStatus::UNSUPPORTED_MATERIAL_MODE;
+            }
+        }
     }
 
     // Перевод в систему координат glTF перестановкой Y и Z.
@@ -465,8 +666,17 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     std::filesystem::path binPath = gltfPath;
     binPath.replace_extension(".bin");
 
-    if (!WriteFile(binPath, buffer.data(), buffer.size())) {
-        detail = "не удалось записать .bin";
+    const auto gltfTemp = UniqueSiblingPath(gltfPath, "tmp");
+    const auto binTemp = UniqueSiblingPath(binPath, "tmp");
+    if (!gltfTemp || !binTemp) {
+        detail = "не удалось выделить sibling temp для glTF-пары";
+        return GltfStatus::WRITE_FAILED;
+    }
+
+    if (!WriteFile(*binTemp, buffer.data(), buffer.size())) {
+        RemoveAttemptFile(*gltfTemp);
+        RemoveAttemptFile(*binTemp);
+        detail = "не удалось записать временный .bin";
         return GltfStatus::WRITE_FAILED;
     }
 
@@ -704,9 +914,17 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
 
             json.BeginObject();
             json.Key("name");
-            json.Value(material.TextureName(0).empty()
-                           ? std::format("material_{}", m)
-                           : material.TextureName(0));
+            const std::string textureName = material.TextureName(0);
+            if (profile == GltfCoordinateProfile::SceneMap) {
+                json.Value(textureName.empty()
+                               ? std::format("material_{}", m)
+                               : std::format("{}{}", textureName, m));
+            }
+            else {
+                json.Value(textureName.empty()
+                               ? std::format("material_{}", m)
+                               : textureName);
+            }
 
             json.Key("pbrMetallicRoughness");
             json.BeginObject();
@@ -734,12 +952,36 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
             json.Value(1.0);
             json.EndObject();
 
-            if (material.Opacity < 1.0f) {
+            if (profile == GltfCoordinateProfile::SceneMap) {
+                const LegacyMaterialMetadata& metadata = resolvedMaterials[m];
                 json.Key("alphaMode");
-                json.Value("BLEND");
+                switch (metadata.Mode) {
+                case LegacyMaterialMode::Opaque:
+                    json.Value("OPAQUE");
+                    break;
+                case LegacyMaterialMode::Masked:
+                    json.Value("MASK");
+                    json.Key("alphaCutoff");
+                    json.Value((static_cast<double>(metadata.AlphaRef) + 1.0) / 255.0);
+                    break;
+                case LegacyMaterialMode::Alpha:
+                case LegacyMaterialMode::Additive:
+                case LegacyMaterialMode::Subtractive:
+                    json.Value("BLEND");
+                    break;
+                }
+                json.Key("doubleSided");
+                json.Value(true);
+                WriteLegacyMaterialExtras(json, metadata);
             }
-            json.Key("doubleSided");
-            json.Value(true);
+            else {
+                if (material.Opacity < 1.0f) {
+                    json.Key("alphaMode");
+                    json.Value("BLEND");
+                }
+                json.Key("doubleSided");
+                json.Value(true);
+            }
             json.EndObject();
         }
         json.EndArray();
@@ -1018,8 +1260,13 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     json.EndObject();
 
     const std::string& text = json.Str();
-    if (!WriteFile(gltfPath, text.data(), text.size())) {
-        detail = "не удалось записать .gltf";
+    if (!WriteFile(*gltfTemp, text.data(), text.size())) {
+        RemoveAttemptFile(*gltfTemp);
+        RemoveAttemptFile(*binTemp);
+        detail = "не удалось записать временный .gltf";
+        return GltfStatus::WRITE_FAILED;
+    }
+    if (!PublishGltfPair(*gltfTemp, *binTemp, gltfPath, binPath, detail)) {
         return GltfStatus::WRITE_FAILED;
     }
 

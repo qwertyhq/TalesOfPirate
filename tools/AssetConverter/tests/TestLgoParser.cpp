@@ -1,10 +1,15 @@
 #include "Corsairs/Tools/AssetConverter/BinaryReader.h"
+#include "Corsairs/Tools/AssetConverter/GltfWriter.h"
 #include "Corsairs/Tools/AssetConverter/LgoParser.h"
+#include "Corsairs/Tools/AssetConverter/LmoParser.h"
 
 #include "TestHarness.h"
 
+#include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -16,6 +21,48 @@ std::filesystem::path ModelPath(const char* relative) {
 
 std::filesystem::path SampleLgoPath() {
     return ModelPath("character/0066000000.lgo");
+}
+
+template <typename T>
+void AppendPod(std::vector<std::uint8_t>& bytes, const T& value) {
+    const std::size_t offset = bytes.size();
+    bytes.resize(offset + sizeof(T));
+    std::memcpy(bytes.data() + offset, &value, sizeof(T));
+}
+
+template <typename RawMaterial>
+std::vector<std::uint8_t> MaterialOnlyLgo(std::uint32_t outerVersion,
+                                          std::uint32_t materialVersion,
+                                          const RawMaterial& material) {
+    std::vector<std::uint8_t> bytes;
+    AppendPod(bytes, outerVersion);
+
+    AC::GeomObjHeader header{};
+    header.MatLocal[0] = 1.0f;
+    header.MatLocal[5] = 1.0f;
+    header.MatLocal[10] = 1.0f;
+    header.MatLocal[15] = 1.0f;
+    header.MtlSize = static_cast<std::uint32_t>(sizeof(std::uint32_t) +
+        sizeof(RawMaterial) +
+        (outerVersion == AC::kLegacyVersion ? sizeof(std::uint32_t) : 0u));
+    AppendPod(bytes, header);
+
+    if (outerVersion == AC::kLegacyVersion) {
+        AppendPod(bytes, materialVersion);
+    }
+    constexpr std::uint32_t materialCount = 1;
+    AppendPod(bytes, materialCount);
+    AppendPod(bytes, material);
+    return bytes;
+}
+
+void FillLegacyInvalidStates(AC::RenderStateSet2x8& states) {
+    for (auto& set : states.Rsv) {
+        for (AC::RenderStateValue& value : set) {
+            value.State = 0xFFFFFFFFu;
+            value.Value = 0u;
+        }
+    }
 }
 
 CORSAIRS_TEST(LgoParser_ParsesHeaderOfRealFile) {
@@ -67,6 +114,140 @@ CORSAIRS_TEST(LgoParser_ParsesMaterialBlockAndConsumesExactSize) {
     // и равно "0066000000.BMP". Расширение намеренно НЕ нормализуется —
     // на диске файл называется 0066000000.png.
     REQUIRE_EQ(obj->Materials[0].TextureName(0), std::string{"0066000000.BMP"});
+}
+
+CORSAIRS_TEST(LgoParser_ModernMaterialPreservesRawEffectiveAndFullRenderStates) {
+    AC::MtlTexInfo raw{};
+    raw.Opacity = 0.75f;
+    raw.TranspType = 2u;
+    raw.RsSet[0] = AC::RenderStateAtom{100u, 200u, 300u};
+    raw.RsSet[1] = AC::RenderStateAtom{101u, 201u, 301u};
+    raw.RsSet[2] = AC::RenderStateAtom{102u, 202u, 302u};
+    raw.RsSet[3] = AC::RenderStateAtom{103u, 203u, 303u};
+    raw.RsSet[4] = AC::RenderStateAtom{104u, 204u, 304u};
+    raw.RsSet[5] = AC::RenderStateAtom{105u, 205u, 305u};
+    raw.RsSet[6] = AC::RenderStateAtom{106u, 206u, 306u};
+    raw.RsSet[7] = AC::RenderStateAtom{107u, 207u, 307u};
+
+    const auto bytes = MaterialOnlyLgo(0x1004u, 0x1004u, raw);
+    AC::LgoDiagnostics diag;
+    const auto object = AC::ParseLgo(bytes, diag);
+    REQUIRE(object.has_value());
+    REQUIRE_EQ(object->Materials.size(), 1u);
+
+    const AC::LgoMaterial& material = object->Materials[0];
+    REQUIRE_EQ(material.Opacity, 0.75f);
+    REQUIRE_EQ(material.RawTranspType, 2u);
+    REQUIRE_EQ(material.EffectiveTranspType, 5u);
+    REQUIRE_EQ(material.RenderStates[0].State, 100u);
+    REQUIRE_EQ(material.RenderStates[0].Value0, 200u);
+    REQUIRE_EQ(material.RenderStates[0].Value1, 300u);
+    REQUIRE_EQ(material.RenderStates[1].State, 101u);
+    REQUIRE_EQ(material.RenderStates[1].Value0, 201u);
+    REQUIRE_EQ(material.RenderStates[1].Value1, 301u);
+    REQUIRE_EQ(material.RenderStates[2].State, 102u);
+    REQUIRE_EQ(material.RenderStates[2].Value0, 202u);
+    REQUIRE_EQ(material.RenderStates[2].Value1, 302u);
+    REQUIRE_EQ(material.RenderStates[3].State, 103u);
+    REQUIRE_EQ(material.RenderStates[3].Value0, 203u);
+    REQUIRE_EQ(material.RenderStates[3].Value1, 303u);
+    REQUIRE_EQ(material.RenderStates[4].State, 104u);
+    REQUIRE_EQ(material.RenderStates[4].Value0, 204u);
+    REQUIRE_EQ(material.RenderStates[4].Value1, 304u);
+    REQUIRE_EQ(material.RenderStates[5].State, 105u);
+    REQUIRE_EQ(material.RenderStates[5].Value0, 205u);
+    REQUIRE_EQ(material.RenderStates[5].Value1, 305u);
+    REQUIRE_EQ(material.RenderStates[6].State, 106u);
+    REQUIRE_EQ(material.RenderStates[6].Value0, 206u);
+    REQUIRE_EQ(material.RenderStates[6].Value1, 306u);
+    REQUIRE_EQ(material.RenderStates[7].State, 107u);
+    REQUIRE_EQ(material.RenderStates[7].Value0, 207u);
+    REQUIRE_EQ(material.RenderStates[7].Value1, 307u);
+}
+
+CORSAIRS_TEST(LgoParser_LegacyV1UpgradesAlphaStatesAndKeepsTerminator) {
+    AC::MtlTexInfoV1 raw{};
+    raw.Opacity = 1.0f;
+    raw.TranspType = 1u;
+    FillLegacyInvalidStates(raw.RsSet);
+    raw.RsSet.Rsv[0][0] = AC::RenderStateValue{25u, 8u};
+    raw.RsSet.Rsv[0][1] = AC::RenderStateValue{24u, 17u};
+    raw.RsSet.Rsv[0][2] = AC::RenderStateValue{19u, 2u};
+
+    const auto bytes = MaterialOnlyLgo(AC::kLegacyVersion, 0x0001u, raw);
+    AC::LgoDiagnostics diag;
+    const auto object = AC::ParseLgo(bytes, diag);
+    REQUIRE(object.has_value());
+
+    const AC::LgoMaterial& material = object->Materials[0];
+    REQUIRE_EQ(material.RawTranspType, 1u);
+    REQUIRE_EQ(material.EffectiveTranspType, 1u);
+    REQUIRE_EQ(material.RenderStates[0].State, 25u);
+    REQUIRE_EQ(material.RenderStates[0].Value0, 5u);
+    REQUIRE_EQ(material.RenderStates[0].Value1, 5u);
+    REQUIRE_EQ(material.RenderStates[1].State, 24u);
+    REQUIRE_EQ(material.RenderStates[1].Value0, 129u);
+    REQUIRE_EQ(material.RenderStates[1].Value1, 129u);
+    REQUIRE_EQ(material.RenderStates[2].State, 19u);
+    REQUIRE_EQ(material.RenderStates[2].Value0, 2u);
+    REQUIRE_EQ(material.RenderStates[3].State, 0xFFFFFFFFu);
+    REQUIRE_EQ(material.RenderStates[3].Value0, 0u);
+    REQUIRE_EQ(material.RenderStates[3].Value1, 0u);
+}
+
+CORSAIRS_TEST(LgoParser_LegacyV0UpgradesAlphaStatesAndDefaultsTransparency) {
+    AC::MtlTexInfoV0 raw{};
+    FillLegacyInvalidStates(raw.RsSet);
+    raw.RsSet.Rsv[0][0] = AC::RenderStateValue{25u, 1u};
+    raw.RsSet.Rsv[0][1] = AC::RenderStateValue{24u, 255u};
+
+    const auto bytes = MaterialOnlyLgo(AC::kLegacyVersion, 0x0000u, raw);
+    AC::LgoDiagnostics diag;
+    const auto object = AC::ParseLgo(bytes, diag);
+    REQUIRE(object.has_value());
+
+    const AC::LgoMaterial& material = object->Materials[0];
+    REQUIRE_EQ(material.RawTranspType, 0u);
+    REQUIRE_EQ(material.EffectiveTranspType, 0u);
+    REQUIRE_EQ(material.RenderStates[0].State, 25u);
+    REQUIRE_EQ(material.RenderStates[0].Value0, 5u);
+    REQUIRE_EQ(material.RenderStates[1].State, 24u);
+    REQUIRE_EQ(material.RenderStates[1].Value0, 129u);
+    REQUIRE_EQ(material.RenderStates[2].State, 0xFFFFFFFFu);
+}
+
+CORSAIRS_TEST(LgoParser_RealByBd001RawTypeTwoResolvesSubtractive) {
+    const auto bytes = AC::ReadWholeFile(ModelPath("scene/by-bd001.lmo"));
+    REQUIRE(bytes.has_value());
+
+    AC::LgoDiagnostics diag;
+    const auto model = AC::ParseLmo(*bytes, diag);
+    REQUIRE(model.has_value());
+    REQUIRE_EQ(model->Objects.size(), 4u);
+    REQUIRE(model->Objects[0].Materials.size() > 5u);
+
+    const AC::LgoMaterial& material = model->Objects[0].Materials[5];
+    REQUIRE(model->Objects[0].Mesh.Subsets.size() > 5u);
+    REQUIRE(model->Objects[0].Mesh.Subsets[5].PrimitiveNum > 0u);
+    REQUIRE_EQ(material.TextureName(0), std::string{"010038.bmp"});
+    REQUIRE_EQ(material.RawTranspType, 2u);
+    REQUIRE_EQ(material.EffectiveTranspType, 5u);
+    REQUIRE_EQ(material.RenderStates[0].State, 19u);
+    REQUIRE_EQ(material.RenderStates[0].Value0, 1u);
+    REQUIRE_EQ(material.RenderStates[1].State, 20u);
+    REQUIRE_EQ(material.RenderStates[1].Value0, 4u);
+
+    AC::LegacyMaterialMetadata metadata;
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(
+                   AC::ResolveLegacyMaterial(material, metadata, detail)),
+               static_cast<std::uint32_t>(AC::LegacyMaterialStatus::OK));
+    REQUIRE_EQ(static_cast<std::uint32_t>(metadata.Mode),
+               static_cast<std::uint32_t>(AC::LegacyMaterialMode::Subtractive));
+    REQUIRE_EQ(metadata.RawTranspType, 2u);
+    REQUIRE_EQ(metadata.EffectiveTranspType, 5u);
+    REQUIRE_EQ(metadata.SrcBlend, 1u);
+    REQUIRE_EQ(metadata.DestBlend, 4u);
 }
 
 CORSAIRS_TEST(LgoParser_RejectsTruncatedVersion) {
