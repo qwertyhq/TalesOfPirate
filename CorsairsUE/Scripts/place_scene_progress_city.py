@@ -16,26 +16,71 @@ import json
 import math
 import os
 import re
+import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import unreal                                        # noqa: E402
 from report import Reporter, RefuseIfEditorOpen      # noqa: E402
+from scene_coordinate_basis import (                 # noqa: E402
+    source_camera_to_ue,
+    source_location_to_ue,
+    source_scene_yaw_to_ue,
+)
+from scene_lighting import resolve_reference_lighting  # noqa: E402
 
 
 SCHEMA_VERSION = 2
+CAPTURE_TICK = 120
+CAPTURE_HZ = 30.0
 DEFAULT_SOURCE = "/Game/Maps/Garner"
 OWNED_TARGET = "/Game/Maps/GarnerSceneProgressCity"
-DEFAULT_CONTENT_ROOT = "/Game/SceneParityCity"
+DEFAULT_CONTENT_ROOT = "/Game/SceneParityCityRigidV5"
 DEFAULT_CHARACTER_TYPE = "1"
+DEFAULT_DATABASE = os.path.abspath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..",
+    "databases", "gamedata.sqlite"))
 
 # Каноническая точка parity-кадра: тот же фонтанный квартал, который виден
-# в оригинальном клиенте. Координата Y уже переведена в систему UE.
-CHARACTER_LOCATION = (223325.0, -278475.0, 100.0)
+# в оригинальном клиенте. Source XY переводится единым rigid Q-basis.
+SOURCE_CHARACTER_LOCATION = (223325.0, 278475.0, 100.0)
+SOURCE_CHARACTER_DIRECTION = 90.0
+SOURCE_CAMERA_EYE = (223325.0, 281975.0, 5100.0)
+CHARACTER_LOCATION = source_location_to_ue(*SOURCE_CHARACTER_LOCATION)
+REFERENCE_CAMERA = source_camera_to_ue(
+    eye=SOURCE_CAMERA_EYE, target=SOURCE_CHARACTER_LOCATION)
 CHARACTER_LABEL = "SceneProgressCity_Test195126"
 CAMERA_LABEL = "SceneProgressCity_Camera"
 ACTOR_PREFIX = "SceneProgressCity_Part_"
+
+# Ровно эти части имеют embedded BONE policy=preserveAnimated в production
+# SceneMap batch. Значения: (frameCount, sampleFrame, placements).
+EXPECTED_ANIMATED_PARTS = {
+    (2, "by-bd002_8"): (47, 25, 1),
+    (325, "nml-bd025"): (101, 18, 5),
+    (475, "by-bd032_1"): (101, 18, 1),
+    (476, "by-bd033_1"): (97, 22, 2),
+    (478, "by-bd035_1"): (97, 22, 1),
+    (513, "nml-bd199_0"): (201, 119, 5),
+    (513, "nml-bd199_1"): (201, 119, 5),
+    (513, "nml-bd199_2"): (201, 119, 5),
+    (513, "nml-bd199_3"): (201, 119, 5),
+    (513, "nml-bd199_4"): (201, 119, 5),
+}
+EXPECTED_ANIMATED_UNIQUE_PARTS = 10
+EXPECTED_ANIMATED_PLACEMENTS = 35
+EXPECTED_VISIBLE_REFERENCE_ANCHORS = 1370
+EXPECTED_HIDDEN_HELPERS = 264
+EXPECTED_REFERENCE_PART_PLACEMENTS = 1617
+
+REFERENCE_TERRAIN_LABEL = "ReferenceTerrain_Garner_17_21"
+REFERENCE_TERRAIN_TAG = "CorsairsReferenceTerrain"
+REFERENCE_TERRAIN_MESH = (
+    "/Game/Terrain/Reference/GarnerRigid/SM_Garner_17_21")
+REFERENCE_TERRAIN_INSTANCE = "/Game/Terrain/Reference/Garner/MI_Garner_17_21"
+REFERENCE_TERRAIN_LOCATION = (-268800.0, 217600.0, 0.0)
+REFERENCE_TERRAIN_BOUNDS = (-281600.0, 217600.0, -268800.0, 230400.0)
 
 BASE_COLOR_PARAM = "BaseColorTexture"
 PLACEHOLDERS = {
@@ -57,6 +102,7 @@ def parse_args(argv):
         "--character-map",
         default=os.path.abspath(os.path.join(
             script_dir, "..", "Data", "character_map.json")))
+    parser.add_argument("--database", default=DEFAULT_DATABASE)
     parser.add_argument("--content-root", default=DEFAULT_CONTENT_ROOT)
     parser.add_argument("--source", default=DEFAULT_SOURCE)
     parser.add_argument("--target", default=OWNED_TARGET)
@@ -83,7 +129,8 @@ def validate_args(args):
         raise RuntimeError("исходная и целевая карты совпадают")
     for path, name in ((args.manifest, "manifest"),
                        (args.model_map, "model-map"),
-                       (args.character_map, "character-map")):
+                       (args.character_map, "character-map"),
+                       (args.database, "database")):
         if not os.path.isfile(path):
             raise RuntimeError(f"нет {name}: {path}")
 
@@ -157,6 +204,39 @@ def load_model_map(path):
     return source_root.rstrip("/"), models
 
 
+def filter_visual_references(references, database_path):
+    """Legacy renderer draws scene object type 0; types 1+ are debug helpers."""
+    connection = sqlite3.connect(os.path.abspath(database_path))
+    try:
+        model_types = {
+            int(model_id): int(model_type)
+            for model_id, model_type in connection.execute(
+                'SELECT id, "type" FROM scene_objects')
+        }
+    finally:
+        connection.close()
+
+    missing = sorted({
+        int(record["modelId"]) for record in references
+        if int(record["modelId"]) not in model_types
+    })
+    if missing:
+        raise RuntimeError(
+            f"НЕВЕРНОЕ_КОЛИЧЕСТВО: scene_objects rows missing {missing}")
+
+    visual = [
+        record for record in references
+        if model_types[int(record["modelId"])] == 0
+    ]
+    helpers = [
+        record for record in references
+        if model_types[int(record["modelId"])] != 0
+    ]
+    if len(visual) + len(helpers) != len(references):
+        raise RuntimeError("НЕВЕРНОЕ_КОЛИЧЕСТВО: visual/helper partition")
+    return visual, helpers
+
+
 def remap_asset_path(path, source_root, content_root):
     prefix = source_root + "/"
     if not isinstance(path, str) or not path.startswith(prefix):
@@ -172,6 +252,128 @@ def skeletal_path_for(static_path):
     if marker not in static_path:
         return static_path
     return static_path.replace(marker, "/SkeletalMeshes/", 1)
+
+
+def animation_path_for(skeletal_path):
+    if "/SkeletalMeshes/" not in skeletal_path:
+        raise RuntimeError(
+            f"ОТСУТСТВУЕТ_ANIMATION: не skeletal path {skeletal_path}")
+    return skeletal_path + "_Anim"
+
+
+def load_scene_mesh_asset(static_path, skeletal_path):
+    """Выбирает animated sibling раньше возможного stale StaticMesh."""
+    skeletal = unreal.load_asset(skeletal_path)
+    if isinstance(skeletal, unreal.SkeletalMesh):
+        return skeletal, "skeletal", skeletal_path
+    static = unreal.load_asset(static_path)
+    if isinstance(static, unreal.StaticMesh):
+        return static, "static", static_path
+    return None, None, None
+
+
+def read_animation_contract(mesh, animation, animation_path):
+    mesh_skeleton = mesh.get_editor_property("skeleton")
+    animation_skeleton = animation.get_editor_property("skeleton")
+    if mesh_skeleton is None or animation_skeleton != mesh_skeleton:
+        raise RuntimeError(
+            f"ОТСУТСТВУЕТ_ANIMATION: skeleton mismatch {animation_path}")
+
+    data_model = animation.get_editor_property("data_model_interface")
+    if data_model is None:
+        raise RuntimeError(
+            f"ОТСУТСТВУЕТ_ANIMATION: data model {animation_path}")
+    frame_count = int(data_model.get_number_of_keys())
+    frame_intervals = int(data_model.get_number_of_frames())
+    if frame_count <= 0 or frame_intervals != frame_count - 1:
+        raise RuntimeError(
+            f"ОТСУТСТВУЕТ_ANIMATION: frames {animation_path}: "
+            f"keys={frame_count} intervals={frame_intervals}")
+
+    frame_rate = data_model.get_frame_rate()
+    numerator = int(frame_rate.numerator)
+    denominator = int(frame_rate.denominator)
+    if numerator != int(CAPTURE_HZ) or denominator != 1:
+        raise RuntimeError(
+            f"ОТСУТСТВУЕТ_ANIMATION: frameRate {animation_path}: "
+            f"{numerator}/{denominator}")
+    expected_length = frame_intervals / CAPTURE_HZ
+    if not math.isclose(
+            float(animation.get_play_length()), expected_length,
+            rel_tol=0.0, abs_tol=1.0e-4):
+        raise RuntimeError(
+            f"ОТСУТСТВУЕТ_ANIMATION: duration {animation_path}: "
+            f"{animation.get_play_length()}/{expected_length}")
+
+    sample_frame = (CAPTURE_TICK - 1) % frame_count
+    return {
+        "animation": animation,
+        "animation_path": animation_path,
+        "frame_count": frame_count,
+        "sample_frame": sample_frame,
+        "sample_seconds": sample_frame / CAPTURE_HZ,
+    }
+
+
+def validate_animated_city_census(references, resolved):
+    reference_counts = {}
+    for record in references:
+        model_id = int(record["modelId"])
+        reference_counts[model_id] = reference_counts.get(model_id, 0) + 1
+
+    actual = {}
+    for model_id, parts in resolved.items():
+        for descriptor in parts:
+            if descriptor["kind"] != "skeletal":
+                continue
+            key = (int(model_id), descriptor["stem"])
+            if key in actual:
+                raise RuntimeError(
+                    f"НЕВЕРНОЕ_КОЛИЧЕСТВО animated duplicate {key}")
+            actual[key] = (
+                descriptor["frame_count"],
+                descriptor["sample_frame"],
+                reference_counts.get(int(model_id), 0),
+            )
+            if descriptor["animation_path"] != animation_path_for(
+                    descriptor["path"]):
+                raise RuntimeError(
+                    f"ОТСУТСТВУЕТ_ANIMATION: path mismatch {key}")
+
+    actual_keys = set(actual)
+    expected_keys = set(EXPECTED_ANIMATED_PARTS)
+    if actual_keys != expected_keys:
+        raise RuntimeError(
+            "НЕВЕРНОЕ_КОЛИЧЕСТВО animated parts: "
+            f"missing={sorted(expected_keys - actual_keys)} "
+            f"unexpected={sorted(actual_keys - expected_keys)}")
+    for key, expected in EXPECTED_ANIMATED_PARTS.items():
+        got = actual[key]
+        if got[0] != expected[0]:
+            raise RuntimeError(
+                f"ОТСУТСТВУЕТ_ANIMATION frameCount {key}: "
+                f"{got[0]}/{expected[0]}")
+        if got[1] != expected[1]:
+            raise RuntimeError(
+                f"ОТСУТСТВУЕТ_ANIMATION sampleFrame {key}: "
+                f"{got[1]}/{expected[1]}")
+        if got[2] != expected[2]:
+            raise RuntimeError(
+                f"НЕВЕРНОЕ_КОЛИЧЕСТВО animated placements {key}: "
+                f"{got[2]}/{expected[2]}")
+        if got[1] != (CAPTURE_TICK - 1) % got[0]:
+            raise RuntimeError(
+                f"ОТСУТСТВУЕТ_ANIMATION tick119 sampleFrame {key}: {got[1]}")
+
+    unique_parts = len(actual)
+    placements = sum(value[2] for value in actual.values())
+    if (unique_parts != EXPECTED_ANIMATED_UNIQUE_PARTS
+            or placements != EXPECTED_ANIMATED_PLACEMENTS):
+        raise RuntimeError(
+            f"НЕВЕРНОЕ_КОЛИЧЕСТВО animated: uniqueParts={unique_parts}/"
+            f"{EXPECTED_ANIMATED_UNIQUE_PARTS} placements={placements}/"
+            f"{EXPECTED_ANIMATED_PLACEMENTS}")
+    return {"uniqueParts": unique_parts, "placements": placements}
 
 
 def preflight_meshes(report, references, source_root, models, content_root):
@@ -195,20 +397,9 @@ def preflight_meshes(report, references, source_root, models, content_root):
 
             descriptor = asset_cache.get(static_path)
             if descriptor is None:
-                asset = unreal.load_asset(static_path)
-                kind = "static"
-                actual_path = static_path
-                if not isinstance(asset, unreal.StaticMesh):
-                    asset = unreal.load_asset(skeletal_path)
-                    kind = "skeletal"
-                    actual_path = skeletal_path
-
-                if kind == "static" and not isinstance(asset, unreal.StaticMesh):
-                    missing.append(
-                        f"modelId={model_id}: {static_path} "
-                        f"(и {skeletal_path})")
-                    continue
-                if kind == "skeletal" and not isinstance(asset, unreal.SkeletalMesh):
+                asset, kind, actual_path = load_scene_mesh_asset(
+                    static_path, skeletal_path)
+                if asset is None:
                     missing.append(
                         f"modelId={model_id}: {static_path} "
                         f"(и {skeletal_path})")
@@ -220,6 +411,31 @@ def preflight_meshes(report, references, source_root, models, content_root):
                     "path": actual_path,
                     "stem": actual_path.rsplit("/", 1)[-1],
                 }
+                if kind == "static":
+                    allowed = {
+                        unreal.BlendMode.BLEND_OPAQUE,
+                        unreal.BlendMode.BLEND_MASKED,
+                    }
+                    descriptor["disallow_nanite"] = any(
+                        slot.material_interface is not None
+                        and slot.material_interface.get_blend_mode()
+                        not in allowed
+                        for slot in asset.get_editor_property(
+                            "static_materials"))
+                else:
+                    descriptor["disallow_nanite"] = False
+                    animation_path = animation_path_for(skeletal_path)
+                    animation = unreal.load_asset(animation_path)
+                    if not isinstance(animation, unreal.AnimSequence):
+                        missing.append(
+                            f"modelId={model_id}: {animation_path}")
+                        continue
+                    try:
+                        descriptor.update(read_animation_contract(
+                            asset, animation, animation_path))
+                    except RuntimeError as error:
+                        missing.append(f"modelId={model_id}: {error}")
+                        continue
                 asset_cache[static_path] = descriptor
             parts.append(descriptor)
 
@@ -242,11 +458,34 @@ def preflight_meshes(report, references, source_root, models, content_root):
     static_parts = sum(
         1 for part in unique_parts.values() if part["kind"] == "static")
     skeletal_parts = len(unique_parts) - static_parts
+    animated_census = validate_animated_city_census(references, resolved)
     report.line(
         f"MESH PREFLIGHT: models={len(resolved)} uniqueParts={len(unique_parts)} "
         f"static={static_parts} skeletal={skeletal_parts} "
         f"expectedPlacements={expected_placements}")
+    report.line(
+        f"ANIMATION PREFLIGHT: uniqueParts="
+        f"{animated_census['uniqueParts']}/"
+        f"{EXPECTED_ANIMATED_UNIQUE_PARTS} placements="
+        f"{animated_census['placements']}/"
+        f"{EXPECTED_ANIMATED_PLACEMENTS} captureTick={CAPTURE_TICK} hz=30")
     return resolved, expected_placements
+
+
+def validate_city_scope_counts(
+        references, helper_references, expected_placements):
+    if len(references) != EXPECTED_VISIBLE_REFERENCE_ANCHORS:
+        raise RuntimeError(
+            "НЕВЕРНОЕ_КОЛИЧЕСТВО visible anchors: "
+            f"{len(references)}/{EXPECTED_VISIBLE_REFERENCE_ANCHORS}")
+    if len(helper_references) != EXPECTED_HIDDEN_HELPERS:
+        raise RuntimeError(
+            "НЕВЕРНОЕ_КОЛИЧЕСТВО hidden helpers: "
+            f"{len(helper_references)}/{EXPECTED_HIDDEN_HELPERS}")
+    if expected_placements != EXPECTED_REFERENCE_PART_PLACEMENTS:
+        raise RuntimeError(
+            "НЕВЕРНОЕ_КОЛИЧЕСТВО part placements: "
+            f"{expected_placements}/{EXPECTED_REFERENCE_PART_PLACEMENTS}")
 
 
 def texture_name_for(material_name):
@@ -365,25 +604,193 @@ def bind_scene_textures(report, resolved, content_root):
         "placeholders=0")
 
 
-def recreate_target_level(report, source, target):
-    library = unreal.EditorAssetLibrary
-    levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+MAP_TRANSACTION_TEMP = OWNED_TARGET + "__TxnTemp"
+MAP_TRANSACTION_BACKUP = OWNED_TARGET + "__TxnBackup"
+
+
+def owned_map_transaction_paths(target):
+    if target != OWNED_TARGET:
+        raise RuntimeError(
+            f"отказ map transaction: owned target={OWNED_TARGET}, "
+            f"получено {target}")
+    return MAP_TRANSACTION_TEMP, MAP_TRANSACTION_BACKUP
+
+
+def recover_owned_map_transaction(report, library, target):
+    """Восстанавливает только exact owned temp/backup либо fail-closed."""
+    temp, backup = owned_map_transaction_paths(target)
+    has_target = library.does_asset_exist(target)
+    has_temp = library.does_asset_exist(temp)
+    has_backup = library.does_asset_exist(backup)
+
+    if has_target and has_backup:
+        raise RuntimeError(
+            "неоднозначное map transaction state: canonical и backup "
+            f"существуют одновременно {target}, {backup}; temp={has_temp}")
+
+    if has_backup and not has_target:
+        if not library.rename_asset(backup, target):
+            raise RuntimeError(
+                f"map transaction recovery: не восстановлен {backup} -> {target}")
+        report.line(f"MAP TRANSACTION RECOVERY: backup восстановлен {target}")
+        has_target = True
+        has_backup = False
+
+    if has_temp:
+        if not library.delete_asset(temp):
+            raise RuntimeError(
+                f"map transaction recovery: не удалён stale temp {temp}")
+        report.line(f"MAP TRANSACTION RECOVERY: stale temp удалён {temp}")
+        has_temp = False
+
+    if has_backup:
+        raise RuntimeError(
+            f"неоднозначное map transaction recovery: backup остался {backup}")
+
+
+def abort_owned_map_transaction(
+        report, library, levels, source, target):
+    """Убирает незавершённый exact temp, сохраняя/восстанавливая old target."""
+    temp, backup = owned_map_transaction_paths(target)
+    if not levels.load_level(source):
+        raise RuntimeError(
+            f"map transaction abort: исходная карта не загружена {source}")
+    has_target = library.does_asset_exist(target)
+    has_temp = library.does_asset_exist(temp)
+    has_backup = library.does_asset_exist(backup)
+    if has_target and has_temp and has_backup:
+        raise RuntimeError(
+            "неоднозначное map transaction abort state: одновременно существуют "
+            f"{target}, {temp}, {backup}")
+    if has_backup and not has_target:
+        if not library.rename_asset(backup, target):
+            raise RuntimeError(
+                f"map transaction abort: не восстановлен {backup} -> {target}")
+        report.line(f"MAP TRANSACTION ABORT: old target восстановлен {target}")
+        has_target = True
+        has_backup = False
+    if has_temp:
+        if not library.delete_asset(temp):
+            raise RuntimeError(
+                f"map transaction abort: не удалён temp {temp}")
+        report.line(f"MAP TRANSACTION ABORT: temp удалён {temp}")
+    if has_backup:
+        raise RuntimeError(
+            f"неоднозначное map transaction abort state: backup остался {backup}")
+
+
+def rollback_published_map(
+        report, library, levels, source, target, had_target):
+    """Откатывает уже переименованный temp, пока exact backup ещё существует."""
+    temp, backup = owned_map_transaction_paths(target)
+    if not levels.load_level(source):
+        raise RuntimeError(
+            f"map transaction rollback: исходная карта не загружена {source}")
+    if library.does_asset_exist(target):
+        if library.does_asset_exist(temp):
+            raise RuntimeError(
+                f"map transaction rollback: temp уже существует {temp}")
+        if not library.rename_asset(target, temp):
+            raise RuntimeError(
+                f"map transaction rollback: не убран published target {target}")
+    if had_target:
+        if (not library.does_asset_exist(backup)
+                or not library.rename_asset(backup, target)):
+            raise RuntimeError(
+                f"map transaction rollback: old target не восстановлен {backup}")
+    if library.does_asset_exist(temp):
+        if not library.delete_asset(temp):
+            raise RuntimeError(
+                f"map transaction rollback: не удалён failed publish {temp}")
+    report.line("MAP TRANSACTION ROLLBACK: previous target восстановлен")
+
+
+def publish_owned_map_transaction(
+        report, library, levels, source, target):
+    temp, backup = owned_map_transaction_paths(target)
+    if not library.does_asset_exist(temp):
+        raise RuntimeError(f"map transaction publish: нет temp {temp}")
+    if library.does_asset_exist(backup):
+        raise RuntimeError(f"map transaction publish: stale backup {backup}")
+    if not levels.load_level(source):
+        raise RuntimeError(
+            f"map transaction publish: исходная карта не загружена {source}")
+
+    had_target = library.does_asset_exist(target)
+    if had_target and not library.rename_asset(target, backup):
+        raise RuntimeError(
+            f"map transaction publish: не создан backup {target} -> {backup}")
+
+    if not library.rename_asset(temp, target):
+        if had_target:
+            if not library.rename_asset(backup, target):
+                raise RuntimeError(
+                    f"map transaction publish rollback: не восстановлен {target}")
+        raise RuntimeError(
+            f"map transaction publish rename failed {temp} -> {target}")
+
+    if not levels.load_level(target):
+        rollback_published_map(
+            report, library, levels, source, target, had_target)
+        raise RuntimeError(
+            f"map transaction publish: canonical map не загрузилась {target}")
+
+    if had_target and not library.delete_asset(backup):
+        rollback_published_map(
+            report, library, levels, source, target, had_target)
+        raise RuntimeError(
+            f"map transaction publish: backup не удалён {backup}")
+    if (not library.does_asset_exist(target)
+            or library.does_asset_exist(temp)
+            or library.does_asset_exist(backup)):
+        raise RuntimeError(
+            "map transaction publish: неверное финальное состояние")
+    report.line(
+        f"MAP TRANSACTION PUBLISHED: {temp} -> {target}; backup/temp=0")
+
+
+def run_owned_map_transaction(
+        report, source, target, build, readback, library=None, levels=None):
+    library = library or unreal.EditorAssetLibrary
+    levels = levels or unreal.get_editor_subsystem(
+        unreal.LevelEditorSubsystem)
+    temp, _backup = owned_map_transaction_paths(target)
+    if source in (target, temp, MAP_TRANSACTION_BACKUP):
+        raise RuntimeError(f"map transaction: недопустимый source {source}")
+
+    recover_owned_map_transaction(report, library, target)
     if not library.does_asset_exist(source):
         raise RuntimeError(f"ОТСУТСТВУЕТ_MESH/MAP: исходной карты нет {source}")
-
-    levels.load_level(source)
-    report.line(f"исходная карта загружена: {source}")
-    if library.does_asset_exist(target):
-        if not library.delete_asset(target):
-            raise RuntimeError(f"НЕВЕРНОЕ_КОЛИЧЕСТВО: не удалён {target}")
-        report.line(f"предыдущий owned target удалён: {target}")
-
-    duplicate = library.duplicate_asset(source, target)
-    if duplicate is None or not library.does_asset_exist(target):
+    if not levels.load_level(source):
         raise RuntimeError(
-            f"НЕВЕРНОЕ_КОЛИЧЕСТВО: не дублирована карта {source} -> {target}")
-    levels.load_level(target)
-    report.line(f"рабочая карта загружена: {target}")
+            f"ОТСУТСТВУЕТ_MESH/MAP: исходная карта не загружена {source}")
+    report.line(f"исходная карта загружена: {source}")
+
+    try:
+        duplicate = library.duplicate_asset(source, temp)
+        if duplicate is None or not library.does_asset_exist(temp):
+            raise RuntimeError(
+                f"НЕВЕРНОЕ_КОЛИЧЕСТВО: не дублирована карта {source} -> {temp}")
+        if not levels.load_level(temp):
+            raise RuntimeError(
+                f"НЕВЕРНОЕ_КОЛИЧЕСТВО: temp карта не загружена {temp}")
+        report.line(f"рабочая temp карта загружена: {temp}")
+
+        build(levels)
+        if not levels.save_current_level():
+            raise RuntimeError(f"map transaction: temp карта не сохранена {temp}")
+        if not library.does_asset_exist(temp):
+            raise RuntimeError(f"map transaction: после save нет temp {temp}")
+        if not levels.load_level(temp):
+            raise RuntimeError(f"map transaction: temp readback не загрузился {temp}")
+        readback()
+        report.line(f"MAP TRANSACTION READBACK: {temp}")
+        publish_owned_map_transaction(
+            report, library, levels, source, target)
+    except Exception:
+        abort_owned_map_transaction(
+            report, library, levels, source, target)
+        raise
     return levels
 
 
@@ -440,19 +847,99 @@ def remove_legacy_scene_actors(report):
             f"{len(leftovers)} {leftovers[:5]}")
 
 
-def unwind_degrees(value):
-    result = math.fmod(value, 360.0)
-    if result > 180.0:
-        result -= 360.0
-    elif result < -180.0:
-        result += 360.0
-    return result
+def actor_bounds_xy(actor):
+    origin, extent = actor.get_actor_bounds(False)
+    return (
+        float(origin.x - extent.x), float(origin.y - extent.y),
+        float(origin.x + extent.x), float(origin.y + extent.y),
+    )
+
+
+def bounds_overlap(left, right):
+    return (left[2] > right[0] and left[0] < right[2]
+            and left[3] > right[1] and left[1] < right[3])
+
+
+def place_reference_terrain(report, levels):
+    mesh = unreal.load_asset(REFERENCE_TERRAIN_MESH)
+    instance = unreal.load_asset(REFERENCE_TERRAIN_INSTANCE)
+    if not isinstance(mesh, unreal.StaticMesh):
+        raise RuntimeError(
+            f"ОТСУТСТВУЕТ_MESH: {REFERENCE_TERRAIN_MESH}")
+    if not isinstance(instance, unreal.MaterialInstanceConstant):
+        raise RuntimeError(
+            f"ОТСУТСТВУЕТ_MATERIAL: {REFERENCE_TERRAIN_INSTANCE}")
+
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    matches = [
+        actor for actor in actors.get_all_level_actors()
+        if actor.get_actor_label() == REFERENCE_TERRAIN_LABEL
+        or REFERENCE_TERRAIN_TAG in {str(tag) for tag in actor.tags}
+    ]
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"НЕВЕРНОЕ_КОЛИЧЕСТВО: reference terrain actors={len(matches)}")
+    if matches:
+        reference = matches[0]
+    else:
+        reference = actors.spawn_actor_from_class(
+            unreal.StaticMeshActor,
+            unreal.Vector(*REFERENCE_TERRAIN_LOCATION),
+            unreal.Rotator(roll=0.0, pitch=0.0, yaw=0.0))
+        if reference is None:
+            raise RuntimeError("НЕВЕРНОЕ_КОЛИЧЕСТВО: reference terrain actor=0")
+        if not reference.rename(
+                REFERENCE_TERRAIN_LABEL, levels.get_current_level()):
+            raise RuntimeError("reference terrain actor не переименован")
+
+    reference.set_actor_label(REFERENCE_TERRAIN_LABEL, mark_dirty=True)
+    reference.set_editor_property(
+        "tags", [unreal.Name(REFERENCE_TERRAIN_TAG)])
+    reference.set_actor_location(
+        unreal.Vector(*REFERENCE_TERRAIN_LOCATION), False, False)
+    reference.set_actor_rotation(
+        unreal.Rotator(roll=0.0, pitch=0.0, yaw=0.0), False)
+    reference.set_actor_scale3d(unreal.Vector(1.0, 1.0, 1.0))
+    reference.static_mesh_component.set_static_mesh(mesh)
+    reference.static_mesh_component.set_material(0, instance)
+
+    removed = []
+    for actor in list(actors.get_all_level_actors()):
+        if actor == reference or not actor.get_actor_label().startswith("Terrain_"):
+            continue
+        if not bounds_overlap(actor_bounds_xy(actor), REFERENCE_TERRAIN_BOUNDS):
+            continue
+        label = actor.get_actor_label()
+        if not actors.destroy_actor(actor):
+            raise RuntimeError(f"не удалён overlapping terrain actor {label}")
+        removed.append(label)
+
+    remaining_overlaps = [
+        actor.get_actor_label()
+        for actor in actors.get_all_level_actors()
+        if actor != reference
+        and actor.get_actor_label().startswith("Terrain_")
+        and bounds_overlap(actor_bounds_xy(actor), REFERENCE_TERRAIN_BOUNDS)
+    ]
+    if remaining_overlaps:
+        raise RuntimeError(
+            "НЕВЕРНОЕ_КОЛИЧЕСТВО: остались overlapping Terrain actors "
+            f"{remaining_overlaps}")
+    reference_bounds = actor_bounds_xy(reference)
+    if any(abs(actual - expected) > 1.0 for actual, expected in zip(
+            reference_bounds, REFERENCE_TERRAIN_BOUNDS)):
+        raise RuntimeError(
+            f"НЕВЕРНЫЕ_ГРАНИЦЫ reference terrain: {reference_bounds}/"
+            f"{REFERENCE_TERRAIN_BOUNDS}")
+    report.line(
+        f"REFERENCE TERRAIN: actor=1 removedLegacyOverlaps={len(removed)} "
+        f"remainingLegacyOverlaps=0 labels={sorted(removed)}")
 
 
 def anchor_transform(record):
-    location = unreal.Vector(
-        float(record["x"]), -float(record["y"]), float(record["zCm"]))
-    yaw = unwind_degrees(180.0 - float(record["sourceYawDegrees"]))
+    location = unreal.Vector(*source_location_to_ue(
+        record["x"], record["y"], record["zCm"]))
+    yaw = source_scene_yaw_to_ue(record["sourceYawDegrees"])
     rotation = unreal.Rotator(roll=0.0, pitch=0.0, yaw=yaw)
     return location, rotation
 
@@ -464,17 +951,69 @@ def actor_label(record, part_index, stem):
         f"P{part_index}_{stem}")
 
 
+def verify_skeletal_capture_pose(component, descriptor):
+    expected_position = descriptor["sample_frame"] / CAPTURE_HZ
+    animation_data = component.get_editor_property("animation_data")
+    expected_state = {
+        "anim_to_play": descriptor["animation"],
+        "saved_looping": False,
+        "saved_playing": False,
+        "saved_position": expected_position,
+        "saved_play_rate": 1.0,
+    }
+    for name, expected in expected_state.items():
+        actual = animation_data.get_editor_property(name)
+        if isinstance(expected, float):
+            matches = math.isclose(
+                float(actual), expected, rel_tol=0.0, abs_tol=1.0e-5)
+        else:
+            matches = actual == expected
+        if not matches:
+            raise RuntimeError(
+                f"ОТСУТСТВУЕТ_ANIMATION serialized {name}: "
+                f"{actual!r}/{expected!r}")
+    if component.get_editor_property("pause_anims") is not True:
+        raise RuntimeError("ОТСУТСТВУЕТ_ANIMATION: pause_anims=False")
+    if component.is_playing():
+        raise RuntimeError("ОТСУТСТВУЕТ_ANIMATION: component всё ещё playing")
+    if not math.isclose(
+            float(component.get_position()), expected_position,
+            rel_tol=0.0, abs_tol=1.0e-5):
+        raise RuntimeError(
+            f"ОТСУТСТВУЕТ_ANIMATION position: "
+            f"{component.get_position()}/{expected_position}")
+    return expected_position
+
+
+def freeze_skeletal_capture_pose(component, descriptor):
+    expected_sample = (CAPTURE_TICK - 1) % descriptor["frame_count"]
+    if descriptor["sample_frame"] != expected_sample:
+        raise RuntimeError(
+            f"ОТСУТСТВУЕТ_ANIMATION sampleFrame: "
+            f"{descriptor['sample_frame']}/{expected_sample}")
+    position = descriptor["sample_frame"] / CAPTURE_HZ
+    component.modify()
+    component.override_animation_data(
+        descriptor["animation"], False, False, position, 1.0)
+    component.set_editor_property("pause_anims", True)
+    return verify_skeletal_capture_pose(component, descriptor)
+
+
 def spawn_part(actors, descriptor, location, rotation, label):
     if descriptor["kind"] == "static":
         actor = actors.spawn_actor_from_class(
             unreal.StaticMeshActor, location, rotation)
         if actor is not None:
+            actor.static_mesh_component.set_editor_property(
+                "disallow_nanite", descriptor["disallow_nanite"])
             actor.static_mesh_component.set_static_mesh(descriptor["asset"])
     else:
         actor = actors.spawn_actor_from_class(
             unreal.SkeletalMeshActor, location, rotation)
         if actor is not None:
             actor.skeletal_mesh_component.set_skeletal_mesh(descriptor["asset"])
+            freeze_skeletal_capture_pose(
+                actor.skeletal_mesh_component, descriptor)
 
     if actor is None:
         return None
@@ -483,13 +1022,57 @@ def spawn_part(actors, descriptor, location, rotation, label):
     return actor
 
 
-def place_reference_city(report, references, resolved, expected_placements):
+def source_key_tuple(record):
+    key = record["sourceKey"]
+    return (key["sectionIndex"], key["slotIndex"], key["byteOffset"])
+
+
+def resolve_city_lighting(references, database_path):
+    manifest = {
+        "schemaVersion": SCHEMA_VERSION,
+        "stats": {"referenceObjectCount": len(references)},
+        "records": references,
+    }
+    lighting = resolve_reference_lighting(manifest, database_path)
+    if len(lighting) != len(references):
+        raise RuntimeError(
+            f"НЕВЕРНОЕ_КОЛИЧЕСТВО lighting: {len(lighting)}/"
+            f"{len(references)}")
+    for index, (record, resolved_light) in enumerate(zip(references, lighting)):
+        if (source_key_tuple(record) != tuple(resolved_light["sourceKey"])
+                or record["modelId"] != resolved_light["modelId"]):
+            raise RuntimeError(
+                f"НЕВЕРНОЕ_КОЛИЧЕСТВО lighting order: index={index}")
+    return lighting
+
+
+def apply_component_lighting(actor, descriptor, payload):
+    if len(payload) != 33 or not all(math.isfinite(value) for value in payload):
+        raise RuntimeError(
+            f"НЕВЕРНОЕ_КОЛИЧЕСТВО lighting payload: {len(payload)}/33 finite")
+    component = (
+        actor.static_mesh_component
+        if descriptor["kind"] == "static"
+        else actor.skeletal_mesh_component
+    )
+    component.modify()
+    component.set_default_custom_primitive_data_float_array(
+        0, [float(value) for value in payload])
+    component.set_cast_shadow(False)
+    component.set_affect_dynamic_indirect_lighting(False)
+    component.set_affect_distance_field_lighting(False)
+
+
+def place_reference_city(
+        report, references, resolved, expected_placements, lighting):
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     placed_static = 0
     placed_skeletal = 0
+    nanite_disallowed = 0
     complete_anchors = 0
 
-    for record in references:
+    mode_counts = {}
+    for record, resolved_light in zip(references, lighting):
         location, rotation = anchor_transform(record)
         parts = resolved[record["modelId"]]
         placed_for_anchor = 0
@@ -499,23 +1082,37 @@ def place_reference_city(report, references, resolved, expected_placements):
                 actor_label(record, part_index, descriptor["stem"]))
             if actor is None:
                 continue
+            apply_component_lighting(
+                actor, descriptor, resolved_light["payload"])
             placed_for_anchor += 1
             if descriptor["kind"] == "static":
                 placed_static += 1
+                nanite_disallowed += int(descriptor["disallow_nanite"])
             else:
                 placed_skeletal += 1
         if placed_for_anchor == len(parts):
             complete_anchors += 1
+        mode = resolved_light["mode"]
+        mode_counts[mode] = mode_counts.get(mode, 0) + 1
 
     placed = placed_static + placed_skeletal
     report.line(
         f"CITY PLACEMENT: anchors={complete_anchors}/{len(references)} "
         f"parts={placed}/{expected_placements} static={placed_static} "
-        f"skeletal={placed_skeletal}")
+        f"skeletal={placed_skeletal} frozenAtTick119={placed_skeletal} "
+        f"disallowNanite={nanite_disallowed}")
+    report.line(
+        f"LEGACY LIGHTING: anchors={len(references)} payloadFloats=33 modes="
+        + ",".join(
+            f"{mode}:{mode_counts[mode]}" for mode in sorted(mode_counts)))
     if complete_anchors != len(references) or placed != expected_placements:
         raise RuntimeError(
             f"НЕВЕРНОЕ_КОЛИЧЕСТВО: anchors={complete_anchors}/"
             f"{len(references)}, parts={placed}/{expected_placements}")
+    if placed_skeletal != EXPECTED_ANIMATED_PLACEMENTS:
+        raise RuntimeError(
+            f"НЕВЕРНОЕ_КОЛИЧЕСТВО animated placements: "
+            f"{placed_skeletal}/{EXPECTED_ANIMATED_PLACEMENTS}")
 
 
 def resolve_character_appearance(path, character_type):
@@ -567,7 +1164,8 @@ def spawn_character(report, parts, animation):
     actor = actors.spawn_actor_from_class(
         character_class,
         unreal.Vector(*CHARACTER_LOCATION),
-        unreal.Rotator(roll=0.0, pitch=0.0, yaw=0.0))
+        unreal.Rotator(
+            roll=0.0, pitch=0.0, yaw=SOURCE_CHARACTER_DIRECTION))
     if actor is None:
         raise RuntimeError("НЕВЕРНОЕ_КОЛИЧЕСТВО: character actor=0")
 
@@ -587,35 +1185,39 @@ def spawn_character(report, parts, animation):
     report.line("CHARACTER: type1 parts=5/5 animation=1/1")
 
 
-def look_at_rotation(origin, target):
-    dx = target.x - origin.x
-    dy = target.y - origin.y
-    dz = target.z - origin.z
-    return unreal.Rotator(
-        roll=0.0,
-        pitch=math.degrees(math.atan2(dz, math.hypot(dx, dy))),
-        yaw=math.degrees(math.atan2(dy, dx)))
-
-
 def place_camera(report):
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     # Оригинал: 35 м по плоскости, 50 м по высоте, vertical FOV 32 degrees.
     # Для viewport 16:9 это horizontal FOV 54.0222067 degrees.
-    # Original eye=(2233.25,2749.75,51.0) m; source +Y maps to UE -Y.
-    location = unreal.Vector(223325.0, -274975.0, 5100.0)
-    target = unreal.Vector(*CHARACTER_LOCATION)
-    rotation = look_at_rotation(location, target)
+    # Q=(-sourceY, sourceX) сохраняет handedness: camera смотрит вдоль UE +X.
+    location = unreal.Vector(*REFERENCE_CAMERA["eye"])
+    rotation = unreal.Rotator(
+        roll=0.0,
+        pitch=REFERENCE_CAMERA["pitch"],
+        yaw=REFERENCE_CAMERA["yaw"])
     camera = actors.spawn_actor_from_class(
         unreal.CameraActor, location, rotation)
     if camera is None:
         raise RuntimeError("НЕВЕРНОЕ_КОЛИЧЕСТВО: camera actor=0")
     camera.set_actor_label(CAMERA_LABEL)
-    camera.get_editor_property("camera_component").set_editor_property(
-        "field_of_view", 54.0222067)
+    component = camera.get_editor_property("camera_component")
+    component.set_editor_property("field_of_view", 54.0222067)
+    component.set_editor_property("post_process_blend_weight", 1.0)
+    settings = component.get_editor_property("post_process_settings")
+    settings.set_editor_property("override_auto_exposure_method", True)
+    settings.set_editor_property(
+        "auto_exposure_method", unreal.AutoExposureMethod.AEM_MANUAL)
+    settings.set_editor_property(
+        "override_auto_exposure_apply_physical_camera_exposure", True)
+    settings.set_editor_property(
+        "auto_exposure_apply_physical_camera_exposure", False)
+    settings.set_editor_property("override_auto_exposure_bias", True)
+    settings.set_editor_property("auto_exposure_bias", 0.0)
+    component.set_editor_property("post_process_settings", settings)
     unreal.EditorLevelLibrary.set_level_viewport_camera_info(location, rotation)
     report.line(
-        "CAMERA: parity target=(223325,-278475,100) "
-        "eye=(223325,-274975,5100) HFOV=54.0222067")
+        "CAMERA: parity target=(-278475,223325,100) "
+        "eye=(-281975,223325,5100) yaw=0 HFOV=54.0222067")
 
 
 def verify_saved_actor_count(report, expected_placements):
@@ -636,27 +1238,50 @@ def main(report, args):
         raise RuntimeError("редактор уже открыт")
     validate_args(args)
 
-    references, stats = load_reference_records(os.path.abspath(args.manifest))
+    source_references, stats = load_reference_records(
+        os.path.abspath(args.manifest))
+    references, helper_references = filter_visual_references(
+        source_references, os.path.abspath(args.database))
+    report.line(
+        f"VISUAL FILTER: sourceAnchors={len(source_references)} "
+        f"visibleType0={len(references)} hiddenHelpers={len(helper_references)}")
+    lighting = resolve_city_lighting(
+        references, os.path.abspath(args.database))
     source_root, models = load_model_map(os.path.abspath(args.model_map))
     resolved, expected_placements = preflight_meshes(
         report, references, source_root, models, args.content_root)
+    validate_city_scope_counts(
+        references, helper_references, expected_placements)
     bind_scene_textures(report, resolved, args.content_root)
     parts, animation = resolve_character_appearance(
         os.path.abspath(args.character_map), args.character_type)
 
-    levels = recreate_target_level(report, args.source, args.target)
-    remove_legacy_scene_actors(report)
-    place_reference_city(report, references, resolved, expected_placements)
-    spawn_character(report, parts, animation)
-    place_camera(report)
-    verify_saved_actor_count(report, expected_placements)
+    def build_temp_level(levels):
+        remove_legacy_scene_actors(report)
+        place_reference_terrain(report, levels)
+        place_reference_city(
+            report, references, resolved, expected_placements, lighting)
+        spawn_character(report, parts, animation)
+        place_camera(report)
+        verify_saved_actor_count(report, expected_placements)
+        validate_city_scope_counts(
+            references, helper_references, expected_placements)
 
-    levels.save_current_level()
+    def readback_temp_level():
+        verify_saved_actor_count(report, expected_placements)
+        validate_city_scope_counts(
+            references, helper_references, expected_placements)
+
+    run_owned_map_transaction(
+        report, args.source, args.target,
+        build_temp_level, readback_temp_level)
     if not unreal.EditorAssetLibrary.does_asset_exist(args.target):
         raise RuntimeError(f"НЕВЕРНОЕ_КОЛИЧЕСТВО: карта не сохранена {args.target}")
     report.line(
-        f"УСПЕХ: {args.target}; referenceAnchors="
-        f"{stats['referenceObjectCount']}; partActors={expected_placements}")
+        f"УСПЕХ: {args.target}; sourceReferenceAnchors="
+        f"{stats['referenceObjectCount']}; visualAnchors={len(references)}; "
+        f"hiddenHelpers={len(helper_references)}; "
+        f"partActors={expected_placements}")
 
 
 report = Reporter("place_scene_progress_city")

@@ -17,6 +17,13 @@ class MaterialUsageRulesTests(unittest.TestCase):
             {"instanced_static_meshes", "disallow_nanite"},
             required_usages("hism", True, "translucent"))
 
+    def test_additive_and_modulate_meshes_disallow_nanite(self):
+        for blend_mode in ("additive", "modulate"):
+            with self.subTest(blend_mode=blend_mode):
+                self.assertEqual(
+                    {"disallow_nanite"},
+                    required_usages("mesh", True, blend_mode))
+
     def test_opaque_non_nanite_hism_needs_instancing_only(self):
         self.assertEqual(
             {"instanced_static_meshes"},
