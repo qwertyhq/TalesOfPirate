@@ -47,7 +47,9 @@ EXPECTED_MODE_COUNTS = {
     "subtractive": 3,
 }
 
-_SOURCE_NAME = re.compile(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+# Имена материалов в полном корпусе сцены содержат больше одного сегмента
+# ('ocean_h.01.bmp0'); Interchange заменяет каждую точку подчёркиванием.
+_SOURCE_NAME = re.compile(r"[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+")
 _EXPECTED_ALPHA_MODE = {
     "opaque": "OPAQUE",
     "masked": "MASK",
