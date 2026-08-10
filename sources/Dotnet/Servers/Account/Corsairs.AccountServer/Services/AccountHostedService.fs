@@ -275,19 +275,35 @@ type AccountHostedService(
                 while not ct.IsCancellationRequested do
                     let! event = system.ReadEventAsync()
 
-                    match event with
-                    | CommandReceived(ch, packet) ->
-                        try
-                            this.OnProcessData(ch, packet)
-                        finally
-                            packet.Dispose()
-                    | Connected ch ->
-                        logger.LogInformation("GroupServer подключён: {Endpoint}", ch.RemoteEndPoint)
-                    | Disconnected ch ->
-                        // Очистка: если GroupServer отключился, удаляем его из реестра
-                        registry.RemoveByChannel(ch.Id)
-                        logger.LogInformation("GroupServer отключён: Ch#{Id}", ch.Id)
-                    | PingReceived _ -> ()
+                    // Канал события — нужен, чтобы закрыть именно его при сбое обработки.
+                    let channel =
+                        match event with
+                        | CommandReceived(ch, _)
+                        | Connected ch
+                        | Disconnected ch
+                        | PingReceived ch -> ch
+
+                    // Ошибка одного канала не должна ронять главный цикл: раньше
+                    // ObjectDisposedException на адресе оборванного соединения убивал
+                    // сервер целиком — процесс жил, но перестал отвечать.
+                    try
+                        match event with
+                        | CommandReceived(ch, packet) ->
+                            try
+                                this.OnProcessData(ch, packet)
+                            finally
+                                packet.Dispose()
+                        | Connected ch ->
+                            logger.LogInformation("GroupServer подключён: {Endpoint}", ch.RemoteEndPoint)
+                        | Disconnected ch ->
+                            // Очистка: если GroupServer отключился, удаляем его из реестра
+                            registry.RemoveByChannel(ch.Id)
+                            logger.LogInformation("GroupServer отключён: Ch#{Id}", ch.Id)
+                        | PingReceived _ -> ()
+                    with ex ->
+                        logger.LogError(ex, "Ошибка обработки события канала Ch#{Id}, канал закрыт", channel.Id)
+                        registry.RemoveByChannel(channel.Id)
+                        channel.Close()
             with
             | :? OperationCanceledException -> ()
             | :? ChannelClosedException -> ()
