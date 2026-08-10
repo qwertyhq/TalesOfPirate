@@ -133,6 +133,41 @@ class SceneCoordinateConsumerContractTests(unittest.TestCase):
         self.assertNotIn("if not removed:", source)
         self.assertIn("remaining_overlaps", source)
 
+    def test_terrain_verifier_expects_the_same_page_as_the_placement(self):
+        """Проверка земли обязана ждать ту же страницу, что и расстановка.
+
+        Числа в проверке пережили переход с зеркала на поворот незамеченными:
+        она подтверждала зеркальную карту, пока расстановка уже ставила
+        повёрнутую. Поэтому оба конца сверяются здесь, а сами ожидания
+        выводятся поворотом, а не вписываются числами.
+        """
+        verifier = script_source("verify_scene_progress_terrain.py")
+        placement = script_source("place_scene_progress_city.py")
+
+        self.assertIn("source_location_to_ue", called_functions(verifier))
+        self.assertEqual(
+            "/Game/Terrain/Reference/GarnerRigid/SM_Garner_17_21",
+            literal_assignment(verifier, "REFERENCE_MESH"),
+        )
+        self.assertEqual(
+            literal_assignment(placement, "REFERENCE_TERRAIN_MESH"),
+            literal_assignment(verifier, "REFERENCE_MESH"),
+        )
+
+        origin = literal_assignment(verifier, "SOURCE_PAGE_ORIGIN")
+        size = literal_assignment(verifier, "SOURCE_PAGE_SIZE_CM")
+        near = source_location_to_ue(origin[0], origin[1], 0.0)
+        far = source_location_to_ue(origin[0] + size, origin[1] + size, 0.0)
+        self.assertEqual(
+            literal_assignment(placement, "REFERENCE_TERRAIN_LOCATION"),
+            near,
+        )
+        self.assertEqual(
+            literal_assignment(placement, "REFERENCE_TERRAIN_BOUNDS"),
+            (min(near[0], far[0]), min(near[1], far[1]),
+             max(near[0], far[0]), max(near[1], far[1])),
+        )
+
     def test_camera_consumers_derive_the_same_q_transform(self):
         for name in (
             "capture_scene_progress_city.py",

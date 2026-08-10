@@ -8,16 +8,33 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import unreal                                        # noqa: E402
 from report import Reporter, RefuseIfEditorOpen      # noqa: E402
+from scene_coordinate_basis import source_location_to_ue  # noqa: E402
 
 
 MAP_PACKAGE = "/Game/Maps/GarnerSceneProgressCity"
 REFERENCE_LABEL = "ReferenceTerrain_Garner_17_21"
 REFERENCE_TAG = "CorsairsReferenceTerrain"
 HIDDEN_OVERLAP_TAG = "CorsairsReferenceTerrainHiddenOverlap"
-REFERENCE_MESH = "/Game/Terrain/Reference/Garner/SM_Garner_17_21"
+REFERENCE_MESH = "/Game/Terrain/Reference/GarnerRigid/SM_Garner_17_21"
 REFERENCE_INSTANCE = "/Game/Terrain/Reference/Garner/MI_Garner_17_21"
-REFERENCE_LOCATION = (217600.0, -268800.0, 0.0)
-REFERENCE_BOUNDS = (217600.0, -281600.0, 230400.0, -268800.0)
+
+# Страница 17,21 занимает в исходных координатах квадрат 128 м от угла
+# (217600, 268800). Ожидаемые значения выводятся тем же поворотом, что и
+# расстановка: константы, записанные числами, пережили переход с зеркала на
+# поворот незамеченными и проверка полгода подтверждала зеркальную карту.
+SOURCE_PAGE_ORIGIN = (217600.0, 268800.0)
+SOURCE_PAGE_SIZE_CM = 12800.0
+REFERENCE_LOCATION = source_location_to_ue(
+    SOURCE_PAGE_ORIGIN[0], SOURCE_PAGE_ORIGIN[1], 0.0)
+_FAR_CORNER = source_location_to_ue(
+    SOURCE_PAGE_ORIGIN[0] + SOURCE_PAGE_SIZE_CM,
+    SOURCE_PAGE_ORIGIN[1] + SOURCE_PAGE_SIZE_CM, 0.0)
+REFERENCE_BOUNDS = (
+    min(REFERENCE_LOCATION[0], _FAR_CORNER[0]),
+    min(REFERENCE_LOCATION[1], _FAR_CORNER[1]),
+    max(REFERENCE_LOCATION[0], _FAR_CORNER[0]),
+    max(REFERENCE_LOCATION[1], _FAR_CORNER[1]),
+)
 
 
 def asset_package_path(asset):
