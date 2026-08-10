@@ -98,8 +98,8 @@ bool UCorsairsSceneManifestLibrary::LoadSceneManifest(const FString& FilePath,
 	return true;
 }
 
-FVector UCorsairsSceneManifestLibrary::GetObjectLocation(const FCorsairsPlacedObject& Object,
-														 float UnitsPerTile)
+FVector UCorsairsSceneManifestLibrary::MapPointToWorld(int32 MapX, int32 MapY,
+													   float HeightCm, float UnitsPerTile)
 {
 	// 100 исходных единиц = один тайл. Оси переносятся один в один: карта
 	// MindPower3D и мир Unreal обе левосторонние с высотой по Z, и ничего
@@ -118,14 +118,30 @@ FVector UCorsairsSceneManifestLibrary::GetObjectLocation(const FCorsairsPlacedOb
 	// и заметить его можно лишь сверкой с оригиналом по взаимному положению
 	// кварталов: сама по себе зеркальная карта выглядит совершенно обычно.
 	const float Scale = UnitsPerTile / 100.0f;
-	return FVector(static_cast<float>(Object.X) * Scale,
-				   static_cast<float>(Object.Y) * Scale,
-				   static_cast<float>(Object.HeightOff) * Scale);
+	return FVector(static_cast<float>(MapX) * Scale,
+				   static_cast<float>(MapY) * Scale,
+				   HeightCm * Scale);
 }
 
-FRotator UCorsairsSceneManifestLibrary::GetObjectRotation(const FCorsairsPlacedObject& Object)
+FIntPoint UCorsairsSceneManifestLibrary::WorldPointToMap(const FVector& WorldLocation,
+														 float UnitsPerTile)
 {
-	// Yaw в файле — целые градусы. Оригинал переводит его в радианы напрямую
+	// Обратная к MapPointToWorld: то же соответствие осей, обратный масштаб.
+	const float Scale = UnitsPerTile / 100.0f;
+	return FIntPoint(FMath::RoundToInt(WorldLocation.X / Scale),
+					 FMath::RoundToInt(WorldLocation.Y / Scale));
+}
+
+FVector UCorsairsSceneManifestLibrary::GetObjectLocation(const FCorsairsPlacedObject& Object,
+														 float UnitsPerTile)
+{
+	return MapPointToWorld(Object.X, Object.Y,
+						   static_cast<float>(Object.HeightOff), UnitsPerTile);
+}
+
+FRotator UCorsairsSceneManifestLibrary::MapYawToWorld(int32 Yaw)
+{
+	// Yaw везде — целые градусы. Оригинал переводит его в радианы напрямую
 	// (`Angle2Radian(_nYaw)` в SceneObj.h, а сама формула — умножение на π/180
 	// в MPMath.h), никакого делителя там нет. Редактор карт подтверждает это
 	// независимо: поворот выделенного объекта идёт шагом в пять единиц, а
@@ -139,5 +155,10 @@ FRotator UCorsairsSceneManifestLibrary::GetObjectRotation(const FCorsairsPlacedO
 	// модели начнут приезжать с другим направлением «вперёд». Искать такую
 	// правку по колсайтам — верный способ получить наполовину повёрнутый мир.
 	constexpr float YawCorrection = 0.0f;
-	return FRotator(0.0f, static_cast<float>(Object.Yaw) + YawCorrection, 0.0f);
+	return FRotator(0.0f, static_cast<float>(Yaw) + YawCorrection, 0.0f);
+}
+
+FRotator UCorsairsSceneManifestLibrary::GetObjectRotation(const FCorsairsPlacedObject& Object)
+{
+	return MapYawToWorld(Object.Yaw);
 }

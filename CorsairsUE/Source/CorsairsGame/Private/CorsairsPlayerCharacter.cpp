@@ -9,6 +9,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "SceneManifest.h"
 #include "TerrainHeights.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCorsairsCharacter, Log, All);
@@ -35,8 +36,11 @@ namespace
 	 *  без этого мир вышел бы зеркальным. */
 	FIntPoint ToMapCoordinates(const FVector& Location)
 	{
-		return FIntPoint(FMath::RoundToInt(Location.X),
-						 FMath::RoundToInt(-Location.Y));
+		// Перевод живёт в CorsairsImport вместе с прямым: пара обязана
+		// меняться разом. Своя копия здесь уже отставала от прямой формулы,
+		// и серверу уходило зеркальное положение — он отвергал бы движение
+		// молча, ничего не отвечая.
+		return UCorsairsSceneManifestLibrary::WorldPointToMap(Location);
 	}
 
 	/** Длина кронштейна камеры. Обзор в оригинале — с заметного отдаления,

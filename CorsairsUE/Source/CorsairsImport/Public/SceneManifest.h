@@ -73,21 +73,45 @@ public:
 								  FCorsairsSceneManifest& OutManifest,
 								  FString& OutError);
 
-	// Мировая позиция объекта в сантиметрах UE.
+	// Точка карты в координатах мира, в сантиметрах.
 	//
-	// Исходные координаты карты — целые, 100 единиц на тайл. `UnitsPerTile`
-	// задаёт, сколько сантиметров UE занимает один тайл; при 100 масштаб
-	// получается один к одному.
+	// Единственное место, где выполняется этот перевод. Им пользуются и
+	// расстановка сцены, и появление сетевых сущностей: раньше формула жила
+	// в обеих по отдельности, разъехалась, и персонажи вставали в зеркальном
+	// углу мира относительно домов.
 	//
 	// Оси переносятся один в один. Обе системы левосторонние с высотой по Z,
 	// а две перестановки осей на пути модели — в конвертере и в импортёре —
 	// гасят друг друга.
+	//
+	// Исходные координаты карты — целые, 100 единиц на тайл. `UnitsPerTile`
+	// задаёт, сколько сантиметров UE занимает один тайл; при 100 масштаб
+	// получается один к одному.
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	static FVector MapPointToWorld(int32 MapX, int32 MapY, float HeightCm,
+								   float UnitsPerTile = 100.0f);
+
+	// Точка мира обратно в координаты карты — то, что уходит на сервер.
+	//
+	// Обратная к MapPointToWorld и обязана меняться вместе с ней. Стоит им
+	// разойтись, и персонаж будет стоять в одном месте, а серверу сообщать
+	// другое: движение начнёт отвергаться проверкой проходимости, причём
+	// молча — сервер просто не ответит.
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	static FIntPoint WorldPointToMap(const FVector& WorldLocation,
+									 float UnitsPerTile = 100.0f);
+
+	// Угол карты в поворот мира. В протоколе и в файлах карты он хранится
+	// одинаково — целыми градусами.
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	static FRotator MapYawToWorld(int32 Yaw);
+
+	// Мировая позиция объекта сцены. Обёртка над MapPointToWorld.
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	static FVector GetObjectLocation(const FCorsairsPlacedObject& Object,
 									 float UnitsPerTile = 100.0f);
 
-	// Поворот объекта. В файле Yaw хранится в целых градусах; знак при
-	// переносе меняется на противоположный — позиция инвертирует ось Y.
+	// Поворот объекта сцены. Обёртка над MapYawToWorld.
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	static FRotator GetObjectRotation(const FCorsairsPlacedObject& Object);
 };

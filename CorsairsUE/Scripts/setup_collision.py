@@ -28,13 +28,27 @@ TARGET_PATHS = ["/Game/Terrain", "/Game/All"]
 
 def apply_to_path(report, root):
     registry = unreal.AssetRegistryHelpers.get_asset_registry()
-    assets = registry.get_assets_by_path(unreal.Name(root), recursive=True)
 
+    # Реестр ассетов в headless-режиме пуст, пока его не попросят обойти
+    # каталог. Без этого get_assets_by_path возвращает ничего — и обход
+    # заканчивается отчётом «изменено 0», неотличимым от «всё уже сделано».
+    registry.scan_paths_synchronous([root], force_rescan=True)
+    assets = registry.get_assets_by_path(unreal.Name(root), recursive=True)
+    if not assets:
+        report.error(f"{root}: реестр не отдал ни одного ассета")
+        return 0
+
+    # Считается каждый исход отдельно. Прежде «не меш» и «уже настроено» оба
+    # молча пропускались, и по отчёту нельзя было понять, есть у застройки
+    # столкновения или скрипт до неё не добрался.
+    meshes = 0
     changed = 0
+    already = 0
     skipped = 0
     for asset in assets:
         if str(asset.asset_class_path.asset_name) != "StaticMesh":
             continue
+        meshes += 1
 
         mesh = unreal.load_asset(f"{asset.package_name}.{asset.asset_name}")
         if not isinstance(mesh, unreal.StaticMesh):
@@ -48,6 +62,7 @@ def apply_to_path(report, root):
 
         current = body.get_editor_property("collision_trace_flag")
         if current == unreal.CollisionTraceFlag.CTF_USE_COMPLEX_AS_SIMPLE:
+            already += 1
             continue
 
         body.set_editor_property("collision_trace_flag",
@@ -55,7 +70,9 @@ def apply_to_path(report, root):
         unreal.EditorAssetLibrary.save_loaded_asset(mesh, only_if_is_dirty=False)
         changed += 1
 
-    report.line(f"{root}: изменено {changed}, пропущено {skipped}")
+    report.line(f"{root}: ассетов {len(assets)}, из них мешей {meshes}; "
+                f"настроено сейчас {changed}, уже было {already}, "
+                f"без формы {skipped}")
     return changed
 
 
@@ -69,7 +86,8 @@ def main(report):
 
     report.line(f"ВСЕГО изменено мешей: {total}")
     if total == 0:
-        report.warn("ни один меш не изменён — возможно, режим уже выставлен")
+        report.line("ни один меш не изменён — режим уже выставлен у всех "
+                    "найденных. Если ассетов найдено ноль, выше стоит ошибка.")
 
 
 report = Reporter("setup_collision")

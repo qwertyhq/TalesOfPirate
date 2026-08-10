@@ -4,6 +4,7 @@
 
 #include "CorsairsLoginHud.h"
 #include "CorsairsPlayerCharacter.h"
+#include "SceneManifest.h"
 
 #include "Dom/JsonObject.h"
 #include "GameFramework/PlayerController.h"
@@ -215,13 +216,13 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 				}
 			}
 
-			// Персонажа ставим туда, где его держит сервер. Ось Y
-			// инвертируется, как при размещении объектов; высота берётся
-			// с запасом над рельефом, дальше персонаж падает на землю сам.
+			// Персонажа ставим туда, где его держит сервер. Перевод — общий
+			// для всей карты; высота берётся с запасом над рельефом, дальше
+			// персонаж опускается на землю сам.
 			const FIntPoint Spawn = Session->GetSpawnPosition();
-			FVector Location(static_cast<double>(Spawn.X),
-							 -static_cast<double>(Spawn.Y),
-							 Character->GetActorLocation().Z + SpawnHeightMargin);
+			FVector Location = UCorsairsSceneManifestLibrary::MapPointToWorld(
+				Spawn.X, Spawn.Y,
+				Character->GetActorLocation().Z + SpawnHeightMargin);
 
 			// Высота берётся из карты высот — той же, из которой построена
 			// видимая земля. Трассировка тут не годится: рельеф пришёл из
@@ -284,11 +285,11 @@ void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 		return;
 	}
 
-	// Координаты и поворот переводятся так же, как для объектов сцены: ось Y
-	// инвертируется, угол приходит в десятых долях градуса.
-	FVector Location(static_cast<double>(Actor.Position.X),
-					 -static_cast<double>(Actor.Position.Y),
-					 SpawnHeightMargin);
+	// Координаты переводятся тем же способом, что и у объектов сцены, и через
+	// ту же функцию: держать вторую копию формулы уже пробовали — она отстала
+	// от первой, и персонажи вставали в зеркальном углу мира.
+	FVector Location = UCorsairsSceneManifestLibrary::MapPointToWorld(
+		Actor.Position.X, Actor.Position.Y, SpawnHeightMargin);
 
 	// Высота — из карты высот, той же, из которой построена видимая земля.
 	// Трассировка оставляла каждого на своей высоте: кого на крыше, кого в
@@ -301,7 +302,7 @@ void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 	{
 		DropToGround(World, Location);
 	}
-	const FRotator Rotation(0.0, static_cast<double>(Actor.Angle) / 10.0, 0.0);
+	const FRotator Rotation = UCorsairsSceneManifestLibrary::MapYawToWorld(Actor.Angle);
 
 	ACorsairsPlayerCharacter* Spawned = World->SpawnActor<ACorsairsPlayerCharacter>(
 		ACorsairsPlayerCharacter::StaticClass(), Location, Rotation);

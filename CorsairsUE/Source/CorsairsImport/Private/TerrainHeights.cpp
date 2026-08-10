@@ -59,10 +59,11 @@ double UCorsairsTerrainHeights::HeightAt(double WorldX, double WorldY) const
 		return 0.0;
 	}
 
-	// Ось Y инвертирована при размещении мира, поэтому здесь она
-	// разворачивается обратно.
+	// Оси мира совпадают с осями карты (см. MapPointToWorld в SceneManifest),
+	// поэтому клетка берётся напрямую. Прежде здесь разворачивалась ось Y —
+	// парно к отрицанию, которое стояло при размещении мира.
 	const int32 Col = FMath::Clamp(FMath::FloorToInt(WorldX / UnitsPerCell), 0, Side - 1);
-	const int32 Row = FMath::Clamp(FMath::FloorToInt(-WorldY / UnitsPerCell), 0, Side - 1);
+	const int32 Row = FMath::Clamp(FMath::FloorToInt(WorldY / UnitsPerCell), 0, Side - 1);
 
 	const uint16 Stored = Cells[Row * Side + Col];
 	const int32 Original = static_cast<int32>(Stored) / HeightScale - HeightBias;
