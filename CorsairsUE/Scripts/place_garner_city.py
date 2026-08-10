@@ -24,6 +24,7 @@ import math
 import os
 import pathlib
 import posixpath
+import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -66,6 +67,15 @@ CONTENT_DIR = os.path.abspath(os.path.join(
 # Счётчик дыр: двух моделей нет даже в scene_objects — у них нет ни «имени»,
 # ни geometry. Каждую дыру считаем явно, а не молча пропускаем.
 MISSING_MODEL_IDS = (91, 92)
+
+# Сервисные маркеры: в scene_objects поле type — это SCENEOBJ_TYPE оригинала
+# (Scene.h:55): 1 — место сидения/прислонения, 2 — маркер проходимости,
+# 3 — точечный свет, 6 — источник звука. Их меши (yyyy0**.lmo) — цветные
+# квады для редактора карт; оригинальный клиент раскладывает такие объекты
+# по служебным спискам и как геометрию не рисует. Без фильтра площадь
+# зарастает красными «Sit» и зелёными «Passable» плашками — 815 штук на
+# garner. Список берётся из базы при загрузке, не зашивается.
+SERVICE_MODEL_TYPES = (1, 2, 3, 4, 6)
 EXPECTED_SOURCE_RECORDS = 50017
 EXPECTED_SCENE_MODELS = 46991
 EXPECTED_MISSING_PLACEMENTS = 11
@@ -106,7 +116,20 @@ def validate_args(args):
             raise RuntimeError(f"нет {name}: {path}")
 
 
-def load_scene_records(path):
+def load_service_model_ids(database_path):
+    """Модели сервисных маркеров из scene_objects (SCENEOBJ_TYPE != 0)."""
+    db = sqlite3.connect(database_path)
+    try:
+        placeholders = ",".join("?" * len(SERVICE_MODEL_TYPES))
+        rows = db.execute(
+            f"SELECT id FROM scene_objects WHERE type IN ({placeholders})",
+            SERVICE_MODEL_TYPES).fetchall()
+    finally:
+        db.close()
+    return {int(row[0]) for row in rows}
+
+
+def load_scene_records(path, service_ids=frozenset()):
     with open(path, "r", encoding="utf-8") as handle:
         manifest = json.load(handle)
     if manifest.get("schemaVersion") != SCHEMA_VERSION:
@@ -133,7 +156,20 @@ def load_scene_records(path):
         if int(r["modelId"]) in MISSING_MODEL_IDS:
             missing_report.setdefault(int(r["modelId"]), 0)
             missing_report[int(r["modelId"])] += 1
-    return visual, missing_report
+
+    # Сервисные маркеры выкидываются со счётом, как и дыры: оригинал их не
+    # рисует (см. SERVICE_MODEL_TYPES выше).
+    service_report = {}
+    if service_ids:
+        kept = []
+        for r in visual:
+            model_id = int(r["modelId"])
+            if model_id in service_ids:
+                service_report[model_id] = service_report.get(model_id, 0) + 1
+            else:
+                kept.append(r)
+        visual = kept
+    return visual, missing_report, service_report
 
 
 def load_model_map(path, content_root):
@@ -600,11 +636,17 @@ def main(report, args):
         raise RuntimeError("редактор уже открыт")
     validate_args(args)
 
-    records, missing_report = load_scene_records(os.path.abspath(args.manifest))
+    service_ids = load_service_model_ids(args.database)
+    records, missing_report, service_report = load_scene_records(
+        os.path.abspath(args.manifest), service_ids)
     report.line(
         f"VISUAL FILTER: sceneModels={EXPECTED_SCENE_MODELS} "
         f"visual={len(records)} holes={sum(missing_report.values())} "
         f"byModel={ {k: v for k, v in sorted(missing_report.items())} }")
+    report.line(
+        f"SERVICE MARKERS: отложено={sum(service_report.values())} "
+        f"видов={len(service_report)} "
+        f"byModel={ {k: v for k, v in sorted(service_report.items())} }")
     lighting = compute_lighting(records, args.database)
     report.line(
         f"LIGHTING: payloads={len(lighting)}/{len(records)} "
