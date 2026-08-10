@@ -123,6 +123,9 @@ class CaptureAfterSettle:
                 self.finish()
 
 
+# Класс завершает синхронный проход, а кадр снимается по графику тиков:
+# Python должен пережить конец скрипта, иначе редактор выходит сразу.
+unreal.EditorPythonScripting.set_keep_python_script_alive(True)
 try:
     unwrap = CaptureAfterSettle(command_parameter("GarnerCityShot"))
 except Exception as exc:
