@@ -111,7 +111,13 @@ class SceneCoordinateConsumerContractTests(unittest.TestCase):
             90.0,
             literal_assignment(source, "SOURCE_CHARACTER_DIRECTION"),
         )
-        self.assertIn("yaw=SOURCE_CHARACTER_DIRECTION", source)
+        # Манекен кадра — обычный SkeletalMeshActor, а не игровой персонаж с
+        # его -90 на компоненте меша: тот же сдвиг сложен в поворот актора
+        # ровно так же, как у NPC.
+        self.assertIn(
+            "yaw=standalone_character_yaw_to_ue(SOURCE_CHARACTER_DIRECTION)",
+            source)
+        self.assertNotIn("set_body_mesh", source)
         self.assertEqual(
             "/Game/Terrain/Reference/GarnerRigid/SM_Garner_17_21",
             literal_assignment(source, "REFERENCE_TERRAIN_MESH"),

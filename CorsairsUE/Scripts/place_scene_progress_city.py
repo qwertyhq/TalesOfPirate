@@ -15,6 +15,8 @@ import argparse
 import json
 import math
 import os
+import pathlib
+import posixpath
 import re
 import sqlite3
 import sys
@@ -27,8 +29,15 @@ from scene_coordinate_basis import (                 # noqa: E402
     source_camera_to_ue,
     source_location_to_ue,
     source_scene_yaw_to_ue,
+    standalone_character_yaw_to_ue,
 )
 from scene_lighting import resolve_reference_lighting  # noqa: E402
+# Разбор half-meter raster живёт в расстановке NPC; вторая копия чтения r16
+# разошлась бы с первой при первом же изменении формата.
+from place_scene_progress_npcs import (              # noqa: E402
+    height_grid_width,
+    sample_height_cm,
+)
 
 
 SCHEMA_VERSION = 2
@@ -41,6 +50,8 @@ DEFAULT_CHARACTER_TYPE = "1"
 DEFAULT_DATABASE = os.path.abspath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..",
     "databases", "gamedata.sqlite"))
+CONTENT_DIR = os.path.abspath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "Content"))
 
 # Каноническая точка parity-кадра: тот же фонтанный квартал, который виден
 # в оригинальном клиенте. Source XY переводится единым rigid Q-basis.
@@ -52,6 +63,11 @@ REFERENCE_CAMERA = source_camera_to_ue(
     eye=SOURCE_CAMERA_EYE, target=SOURCE_CHARACTER_LOCATION)
 CHARACTER_LABEL = "SceneProgressCity_Test195126"
 CAMERA_LABEL = "SceneProgressCity_Camera"
+# Тот же рост, что у NPC: сборка нормируется по объединённому объёму частей.
+CHARACTER_HEIGHT_CM = 176.0
+DEFAULT_HEIGHT_MAP = os.path.abspath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..",
+    "Data", "Heights", "garner.height.r16"))
 ACTOR_PREFIX = "SceneProgressCity_Part_"
 
 # Ровно эти части имеют embedded BONE policy=preserveAnimated в production
@@ -616,6 +632,46 @@ def owned_map_transaction_paths(target):
     return MAP_TRANSACTION_TEMP, MAP_TRANSACTION_BACKUP
 
 
+def owned_map_package_file(asset_path):
+    if not asset_path.startswith("/Game/"):
+        raise RuntimeError(f"путь карты вне /Game: {asset_path}")
+    relative = asset_path.removeprefix("/Game/")
+    return pathlib.Path(CONTENT_DIR).joinpath(*relative.split("/")).with_suffix(
+        ".umap")
+
+
+def delete_owned_map(library, asset_path):
+    """Удаляет служебную карту транзакции и проверяет, что её не стало.
+
+    В коммандлете `-run=pythonscript` и `delete_asset`, и
+    `delete_loaded_asset` для `.umap` возвращают успех, ничего не удаляя:
+    пакет остаётся и на диске, и в реестре (проверено 2026-08-10, ни одной
+    записи в логе). Первая же попытка публикации после этого утыкается в
+    «одновременно существуют canonical и backup», и карту приходится чистить
+    руками.
+
+    Поэтому результат вызова проверяется, а при молчаливом отказе пакет
+    убирается с диска и реестр пересканируется — без пересканирования
+    `does_asset_exist` продолжает видеть уже удалённый файл. Удалять так
+    разрешено только два собственных пути транзакции: canonical карта под эту
+    ветку не попадает никогда.
+    """
+    if asset_path not in (MAP_TRANSACTION_TEMP, MAP_TRANSACTION_BACKUP):
+        raise RuntimeError(
+            f"отказ удаления не служебной карты транзакции: {asset_path}")
+    library.delete_asset(asset_path)
+    if not library.does_asset_exist(asset_path):
+        return True
+
+    package = owned_map_package_file(asset_path)
+    if package.is_file():
+        package.unlink()
+    registry = unreal.AssetRegistryHelpers.get_asset_registry()
+    registry.scan_paths_synchronous(
+        [posixpath.dirname(asset_path)], force_rescan=True)
+    return not library.does_asset_exist(asset_path)
+
+
 def recover_owned_map_transaction(report, library, target):
     """Восстанавливает только exact owned temp/backup либо fail-closed."""
     temp, backup = owned_map_transaction_paths(target)
@@ -637,7 +693,7 @@ def recover_owned_map_transaction(report, library, target):
         has_backup = False
 
     if has_temp:
-        if not library.delete_asset(temp):
+        if not delete_owned_map(library, temp):
             raise RuntimeError(
                 f"map transaction recovery: не удалён stale temp {temp}")
         report.line(f"MAP TRANSACTION RECOVERY: stale temp удалён {temp}")
@@ -670,7 +726,7 @@ def abort_owned_map_transaction(
         has_target = True
         has_backup = False
     if has_temp:
-        if not library.delete_asset(temp):
+        if not delete_owned_map(library, temp):
             raise RuntimeError(
                 f"map transaction abort: не удалён temp {temp}")
         report.line(f"MAP TRANSACTION ABORT: temp удалён {temp}")
@@ -699,7 +755,7 @@ def rollback_published_map(
             raise RuntimeError(
                 f"map transaction rollback: old target не восстановлен {backup}")
     if library.does_asset_exist(temp):
-        if not library.delete_asset(temp):
+        if not delete_owned_map(library, temp):
             raise RuntimeError(
                 f"map transaction rollback: не удалён failed publish {temp}")
     report.line("MAP TRANSACTION ROLLBACK: previous target восстановлен")
@@ -735,7 +791,7 @@ def publish_owned_map_transaction(
         raise RuntimeError(
             f"map transaction publish: canonical map не загрузилась {target}")
 
-    if had_target and not library.delete_asset(backup):
+    if had_target and not delete_owned_map(library, backup):
         rollback_published_map(
             report, library, levels, source, target, had_target)
         raise RuntimeError(
@@ -1146,43 +1202,121 @@ def resolve_character_appearance(path, character_type):
     return parts, animation
 
 
-def require_callable(actor, name):
-    method = getattr(actor, name, None)
-    if not callable(method):
+def character_ground_height_cm(source_x, source_y):
+    path = pathlib.Path(DEFAULT_HEIGHT_MAP)
+    if not path.is_file():
+        raise RuntimeError(f"ОТСУТСТВУЕТ_MESH/HEIGHT: {path}")
+    width = height_grid_width(path)
+    with path.open("rb") as handle:
+        return sample_height_cm(handle, width, int(source_x), int(source_y))
+
+
+def load_character_meshes(parts, animation):
+    meshes = []
+    for path in parts:
+        mesh = unreal.load_asset(path)
+        if not isinstance(mesh, unreal.SkeletalMesh):
+            raise RuntimeError(f"ОТСУТСТВУЕТ_MESH: {path}")
+        meshes.append(mesh)
+    sequence = unreal.load_asset(animation)
+    if not isinstance(sequence, unreal.AnimSequence):
+        raise RuntimeError(f"ОТСУТСТВУЕТ_MESH: animation {animation}")
+    return meshes, sequence
+
+
+def combined_character_extent(meshes):
+    """Низ и высота всей сборки в единицах ассета.
+
+    Границы одной части роста не показывают: основная часть сборки — голова,
+    её низ висит на высоте плеч. Поэтому объём считается по всем пяти частям
+    сразу, как это делала прежняя сборка в C++.
+    """
+    lowest = None
+    highest = None
+    for mesh in meshes:
+        bounds = mesh.get_bounds()
+        bottom = float(bounds.origin.z) - float(bounds.box_extent.z)
+        top = float(bounds.origin.z) + float(bounds.box_extent.z)
+        lowest = bottom if lowest is None else min(lowest, bottom)
+        highest = top if highest is None else max(highest, top)
+    height = (highest or 0.0) - (lowest or 0.0)
+    if not math.isfinite(height) or height <= 0.0:
         raise RuntimeError(
-            f"ОТСУТСТВУЕТ_MESH/API: {actor.get_class().get_name()}.{name}")
-    return method
+            f"НЕВЕРНОЕ_КОЛИЧЕСТВО: высота сборки персонажа {height}")
+    return lowest, height
 
 
 def spawn_character(report, parts, animation):
-    character_class = unreal.load_class(
-        None, "/Script/CorsairsGame.CorsairsPlayerCharacter")
-    if character_class is None:
-        raise RuntimeError("ОТСУТСТВУЕТ_MESH: CorsairsPlayerCharacter class")
+    """Ставит screenshot-манекен пятью SkeletalMeshActor в одной точке.
+
+    Игровой ``ACorsairsPlayerCharacter`` собирает облик через
+    ``ApplyAppearance`` и каталог экипировки, и ни один из этих путей в Python
+    не выведен. Добавить части компонентами тоже нельзя: ни
+    ``add_component_by_class``, ни ``add_instance_component`` редакторный
+    Python UE 5.8 не отдаёт. Поэтому каждая часть — отдельный актор в общем
+    transform; скелет у всех частей один, поза одна и та же, и сборка
+    выглядит единым телом.
+
+    Поза заморожена на нулевом кадре — так же, как анимированные постройки
+    квартала замораживаются на 119-м: кадр парности должен быть повторим.
+    """
+    meshes, sequence = load_character_meshes(parts, animation)
+    lowest, height = combined_character_extent(meshes)
+    scale = CHARACTER_HEIGHT_CM / height
+
+    # Подошвы на землю: низ объединённого объёма ставится на поверхность.
+    # Высота берётся из того же half-meter raster, что и у NPC, — исходная
+    # константа парности описывает точку наведения камеры, а не землю.
+    ground_z = character_ground_height_cm(
+        SOURCE_CHARACTER_LOCATION[0], SOURCE_CHARACTER_LOCATION[1])
+    location = source_location_to_ue(
+        SOURCE_CHARACTER_LOCATION[0], SOURCE_CHARACTER_LOCATION[1],
+        ground_z - lowest * scale)
+    rotation = unreal.Rotator(
+        roll=0.0,
+        pitch=0.0,
+        yaw=standalone_character_yaw_to_ue(SOURCE_CHARACTER_DIRECTION))
 
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
-    actor = actors.spawn_actor_from_class(
-        character_class,
-        unreal.Vector(*CHARACTER_LOCATION),
-        unreal.Rotator(
-            roll=0.0, pitch=0.0, yaw=SOURCE_CHARACTER_DIRECTION))
-    if actor is None:
-        raise RuntimeError("НЕВЕРНОЕ_КОЛИЧЕСТВО: character actor=0")
+    for index, mesh in enumerate(meshes):
+        actor = actors.spawn_actor_from_class(
+            unreal.SkeletalMeshActor, unreal.Vector(*location), rotation)
+        if actor is None:
+            raise RuntimeError(
+                f"НЕВЕРНОЕ_КОЛИЧЕСТВО: character part actor={index}")
+        actor.set_actor_scale3d(unreal.Vector(scale, scale, scale))
+        component = actor.skeletal_mesh_component
+        component.set_skeletal_mesh(mesh)
+        component.set_editor_property(
+            "visibility_based_anim_tick_option",
+            unreal.VisibilityBasedAnimTickOption
+            .ALWAYS_TICK_POSE_AND_REFRESH_BONES)
+        component.override_animation_data(sequence, False, False, 0.0, 1.0)
+        actor.set_actor_label(f"{CHARACTER_LABEL}_Part{index}", mark_dirty=True)
 
-    set_body_mesh = require_callable(actor, "set_body_mesh")
-    add_body_part = require_callable(actor, "add_body_part")
-    finish_body = require_callable(actor, "finish_body")
-    set_body_animation = require_callable(actor, "set_body_animation")
-    if not set_body_mesh(parts[0]):
-        raise RuntimeError(f"ОТСУТСТВУЕТ_MESH: {parts[0]}")
-    for part in parts[1:]:
-        if not add_body_part(part):
-            raise RuntimeError(f"ОТСУТСТВУЕТ_MESH: {part}")
-    finish_body()
-    if not set_body_animation(animation):
-        raise RuntimeError(f"ОТСУТСТВУЕТ_MESH: animation {animation}")
-    actor.set_actor_label(CHARACTER_LABEL)
-    report.line("CHARACTER: type1 parts=5/5 animation=1/1")
+    report.line(
+        f"CHARACTER: type1 parts={len(meshes)}/5 animation=1/1 "
+        f"scale={scale:.3f} groundZ={ground_z:.0f}")
+
+
+def character_part_actors(actors):
+    return [actor for actor in actors.get_all_level_actors()
+            if actor.get_actor_label().startswith(f"{CHARACTER_LABEL}_Part")]
+
+
+def verify_saved_character(report):
+    """Читает манекен с диска: пять акторов, ни одного лишнего.
+
+    Части — отдельные акторы, и потерять их так же легко, как и что угодно
+    другое в расстановке: молчаливая пропажа четырёх выглядела бы как удачный
+    прогон.
+    """
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    parts = character_part_actors(actors)
+    if len(parts) != 5:
+        raise RuntimeError(
+            f"НЕВЕРНОЕ_КОЛИЧЕСТВО: частей персонажа после save {len(parts)}/5")
+    report.line(f"CHARACTER READBACK: parts={len(parts)}/5")
 
 
 def place_camera(report):
@@ -1271,6 +1405,7 @@ def main(report, args):
         verify_saved_actor_count(report, expected_placements)
         validate_city_scope_counts(
             references, helper_references, expected_placements)
+        verify_saved_character(report)
 
     run_owned_map_transaction(
         report, args.source, args.target,

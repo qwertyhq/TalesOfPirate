@@ -24,8 +24,14 @@ from report import RefuseIfEditorOpen, Reporter  # noqa: E402
 SOURCE_LEVEL = "/Game/Maps/GarnerSceneProgressCity"
 TARGET_LEVEL = "/Game/Maps/GarnerSceneProgressPlay"
 BAKED_CHARACTER_LABEL = "SceneProgressCity_Test195126"
+# Манекен собран из пяти частей, каждая — отдельный актор: редакторный Python
+# не умеет добавлять компоненты к актору уровня (см. spawn_character).
+BAKED_CHARACTER_PARTS = 5
 PLAYER_START_CLASS = "/Script/Engine.PlayerStart"
-CHARACTER_CLASS = "/Script/CorsairsGame.CorsairsPlayerCharacter"
+# Screenshot-манекен ставится обычным SkeletalMeshActor: игровой
+# ACorsairsPlayerCharacter собирает облик через ApplyAppearance, а этот путь в
+# Python не выведен (см. spawn_character в place_scene_progress_city.py).
+CHARACTER_CLASS = "/Script/Engine.SkeletalMeshActor"
 GAME_MODE_CLASS = "/Script/CorsairsGame.CorsairsGameMode"
 
 TRANSACTION_TEMP_SUFFIX = "__TxnTemp"
@@ -101,33 +107,36 @@ def _actors_with_label(actor_subsystem, label):
     return [
         actor
         for actor in actor_subsystem.get_all_level_actors()
-        if actor.get_actor_label() == label
+        if actor.get_actor_label().startswith(label)
     ]
 
 
 def remove_baked_character(report, unreal, actor_subsystem):
     matches = _actors_with_label(actor_subsystem, BAKED_CHARACTER_LABEL)
-    if len(matches) > 1:
+    if matches and len(matches) != BAKED_CHARACTER_PARTS:
         raise RuntimeError(
             f"НЕВЕРНОЕ_КОЛИЧЕСТВО: label {BAKED_CHARACTER_LABEL} найден "
-            f"{len(matches)} раз(а)"
+            f"{len(matches)} раз(а), ожидалось {BAKED_CHARACTER_PARTS}"
         )
     if not matches:
         report.line("BAKED CHARACTER: уже удалён")
         return
 
-    actor = matches[0]
-    class_path = _actor_class_path(actor)
-    if class_path != CHARACTER_CLASS:
-        raise RuntimeError(
-            f"отказ удаления чужого actor: {BAKED_CHARACTER_LABEL} имеет "
-            f"класс {class_path}, ожидался {CHARACTER_CLASS}"
-        )
-    if not actor_subsystem.destroy_actor(actor):
-        raise RuntimeError(f"не удалён baked actor {BAKED_CHARACTER_LABEL}")
+    for actor in matches:
+        class_path = _actor_class_path(actor)
+        if class_path != CHARACTER_CLASS:
+            raise RuntimeError(
+                f"отказ удаления чужого actor: {actor.get_actor_label()} имеет "
+                f"класс {class_path}, ожидался {CHARACTER_CLASS}"
+            )
+        if not actor_subsystem.destroy_actor(actor):
+            raise RuntimeError(
+                f"не удалён baked actor {actor.get_actor_label()}")
     if _actors_with_label(actor_subsystem, BAKED_CHARACTER_LABEL):
         raise RuntimeError(f"baked actor остался после удаления {BAKED_CHARACTER_LABEL}")
-    report.line("BAKED CHARACTER: удалён ровно один screenshot pawn")
+    report.line(
+        f"BAKED CHARACTER: удалён screenshot pawn целиком, "
+        f"частей={len(matches)}")
 
 
 def _game_mode_path(world_settings):
