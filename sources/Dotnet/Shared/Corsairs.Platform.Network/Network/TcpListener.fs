@@ -33,8 +33,24 @@ type TcpListener(logger: ILogger<TcpListener>) =
                 try
                     while not ct.IsCancellationRequested do
                         let! clientSocket = listener.AcceptAsync(ct)
-                        clientSocket.NoDelay <- true
-                        _onAccept.Trigger(clientSocket)
+
+                        // Сбой на одном принятом соединении не должен останавливать приём.
+                        // Клиент может оборвать связь (RST) сразу после accept — тогда
+                        // NoDelay и подписчики бросают SocketException/ObjectDisposedException,
+                        // и цикл молча умирал: порт слушается ядром, но сервер не отвечает.
+                        try
+                            clientSocket.NoDelay <- true
+                            _onAccept.Trigger(clientSocket)
+                        with ex ->
+                            logger.LogWarning(
+                                "Соединение отброшено сразу после accept на {Endpoint}: {Error}",
+                                ep,
+                                ex.Message)
+
+                            try
+                                clientSocket.Close()
+                            with _ ->
+                                ()
                 with
                 | :? OperationCanceledException -> ()
                 | :? SocketException as ex ->

@@ -93,7 +93,15 @@ type IoHandlerImpl(loggerFactory: ILoggerFactory, rangedPool: RangedPool) as thi
                 task {
                     while not _disposed do
                         let! struct (ch, op) = _channel.Reader.ReadAsync()
-                        this.OnCompleteOperation(ch, op)
+
+                        // Насос IOCP — единственный на процесс: исключение из обработчика
+                        // одного канала (например, из подписчика OnCloseSocket) останавливало
+                        // ввод-вывод всего сервера. Гасим ошибку в пределах канала.
+                        try
+                            this.OnCompleteOperation(ch, op)
+                        with ex ->
+                            logger.LogError(ex, "Сбой обработки операции канала {Channel}, канал закрыт", ch)
+                            ch.Close()
                 })
         )
         |> ignore
