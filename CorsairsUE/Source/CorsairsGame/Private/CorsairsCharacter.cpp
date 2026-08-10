@@ -295,6 +295,24 @@ void ACorsairsCharacter::ApplySharedScale()
 
 	const double CombinedHeight =
 		CombinedBounds.IsValid ? CombinedBounds.GetSize().Z : 0.0;
-	const double Factor = CharacterHeight / FMath::Max(CombinedHeight, 1.0);
+
+	// Делитель ограничен снизу осмысленным ростом, а не единицей. Прежний
+	// кламп к 1.0 превращал частичную сборку в катастрофу: когда части тела
+	// не загрузились и мерить нечего, рост сборки равнялся нулю, делитель —
+	// единице, и персонаж раздувался в CharacterHeight раз — глыба в сотни
+	// метров растянутых текселей во весь экран. Сборка ниже полуметра — это
+	// не карлик, это отказ загрузки частей; масштабировать её бессмысленно,
+	// и молчать о ней нельзя.
+	constexpr double MinPlausibleHeight = 50.0;
+	if (CombinedHeight < MinPlausibleHeight)
+	{
+		UE_LOG(LogCorsairsCharacter, Error,
+			   TEXT("сборка ростом %.1f см — части не загрузились, масштаб не применён"),
+			   CombinedHeight);
+		GetMesh()->SetRelativeScale3D(FVector(1.0));
+		return;
+	}
+
+	const double Factor = CharacterHeight / CombinedHeight;
 	GetMesh()->SetRelativeScale3D(FVector(Factor));
 }

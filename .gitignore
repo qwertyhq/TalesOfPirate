@@ -37,3 +37,4 @@ CorsairsUE/Scripts/reports/
 
 # Мусор Finder
 .DS_Store
+__pycache__/
