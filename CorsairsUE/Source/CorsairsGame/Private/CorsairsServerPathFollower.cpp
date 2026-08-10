@@ -112,5 +112,5 @@ void FCorsairsServerPathFollower::UpdateFacing(const FVector2d& Target)
 	}
 
 	_facingYaw = FRotator::NormalizeAxis(FMath::RadiansToDegrees(
-		FMath::Atan2(-Delta.Y, Delta.X)));
+		FMath::Atan2(Delta.X, -Delta.Y)));
 }

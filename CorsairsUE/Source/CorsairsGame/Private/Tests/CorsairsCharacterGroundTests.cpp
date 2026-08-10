@@ -167,11 +167,11 @@ bool FCorsairsCharacterGroundSamplingTest::RunTest(const FString&)
 	TestEqual(
 		TEXT("negative-height actor center"),
 		Ground.ActorCenter(FIntPoint(50, 0), 88.0),
-		FVector(50.0, 0.0, 63.0));
+		FVector(0.0, 50.0, 63.0));
 	TestEqual(
-		TEXT("source Y is mirrored in actor center"),
+		TEXT("source XY is rotated into the rigid UE basis"),
 		Ground.ActorCenter(FIntPoint(0, 50), 88.0),
-		FVector(0.0, -50.0, 113.0));
+		FVector(-50.0, 0.0, 113.0));
 
 	const TArray<FIntPoint> OutOfRange = {
 		FIntPoint(-1, 0),
@@ -880,18 +880,18 @@ bool FCorsairsCharacterGroundPreservesFlyingTest::RunTest(const FString&)
 	TestTrue(
 		TEXT("attached sampler reloads at the same address"),
 		Ground.LoadFromBytes(1, 1, ReloadedBytes, Error));
-	Pawn->SetActorLocation(FVector(49.6, -49.6, 1000.0));
+	Pawn->SetActorLocation(FVector(-49.6, 49.6, 1000.0));
 	TestWorld.TickTestWorld(1.0f / 60.0f);
 	TestEqual(
-		TEXT("tick keeps fractional X after rounding sample coordinate"),
+		TEXT("tick keeps rigid-basis fractional X after sampling"),
 		Pawn->GetActorLocation().X,
-		49.6);
-	TestEqual(
-		TEXT("tick keeps mirrored fractional Y after sampling"),
-		Pawn->GetActorLocation().Y,
 		-49.6);
 	TestEqual(
-		TEXT("tick rounds X and inverted Y into bottom-right quadrant"),
+		TEXT("tick keeps rigid-basis fractional Y after sampling"),
+		Pawn->GetActorLocation().Y,
+		49.6);
+	TestEqual(
+		TEXT("tick applies inverse rigid basis before ground sampling"),
 		Pawn->GetActorLocation().Z,
 		108.0);
 

@@ -11,7 +11,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FCorsairsServerPathFollowerTest::RunTest(const FString&)
 {
-	// Mutation: потерять порядок сегментов, не инвертировать map-Y для yaw,
+	// Mutation: потерять порядок сегментов, не повернуть source delta на +90°,
 	// округлить остаток пути либо продолжить путь после terminal/rejection.
 	FCorsairsServerPathFollower Follower;
 	const TArray<FIntPoint> Waypoints = {
@@ -23,20 +23,20 @@ bool FCorsairsServerPathFollowerTest::RunTest(const FString&)
 	TestTrue(TEXT("accepted path starts active"), Follower.IsActive());
 	TestEqual(TEXT("accepted path starts at first waypoint"),
 		Follower.GetPosition(), FIntPoint(0, 0));
-	TestTrue(TEXT("+map-X faces UE yaw zero"),
-		FMath::IsNearlyEqual(Follower.GetFacingYaw(), 0.0));
+	TestTrue(TEXT("+source-X faces +UE-Y"),
+		FMath::IsNearlyEqual(Follower.GetFacingYaw(), 90.0));
 
 	Follower.Advance(200.0);
 	TestEqual(TEXT("first advance stays on first segment"),
 		Follower.GetPosition(), FIntPoint(200, 0));
-	TestTrue(TEXT("first segment keeps +map-X facing"),
-		FMath::IsNearlyEqual(Follower.GetFacingYaw(), 0.0));
+	TestTrue(TEXT("first segment keeps rigid-basis +source-X facing"),
+		FMath::IsNearlyEqual(Follower.GetFacingYaw(), 90.0));
 
 	Follower.Advance(200.0);
 	TestEqual(TEXT("second advance crosses into second segment"),
 		Follower.GetPosition(), FIntPoint(300, 100));
-	TestTrue(TEXT("+map-Y faces negative UE yaw after map-Y inversion"),
-		FMath::IsNearlyEqual(Follower.GetFacingYaw(), -90.0));
+	TestTrue(TEXT("+source-Y faces -UE-X"),
+		FMath::IsNearlyEqual(Follower.GetFacingYaw(), 180.0));
 
 	Follower.Advance(300.0);
 	TestEqual(TEXT("third advance reaches exact endpoint"),
@@ -71,7 +71,7 @@ bool FCorsairsServerPathFollowerTest::RunTest(const FString&)
 	TestTrue(TEXT("fractional corner turns toward map-Y"),
 		FMath::IsNearlyEqual(
 			FractionalCornerFollower.GetFacingYaw(),
-			-90.0));
+			180.0));
 	// С сохранёнными 0.2 cm следующий advance 0.4 даёт Y=0.6 -> 1;
 	// при потере остатка Y=0.4 -> 0.
 	FractionalCornerFollower.Advance(0.4);

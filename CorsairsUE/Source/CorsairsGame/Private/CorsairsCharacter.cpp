@@ -123,8 +123,8 @@ void ACorsairsCharacter::ApplyServerPathPosition(
 	const bool bApplyFacing)
 {
 	FVector Location = GetActorLocation();
-	Location.X = SourcePosition.X;
-	Location.Y = -SourcePosition.Y;
+	Location.X = -SourcePosition.Y;
+	Location.Y = SourcePosition.X;
 	if (CharacterGround != nullptr && CharacterGround->IsLoaded())
 	{
 		Location = CharacterGround->ActorCenter(

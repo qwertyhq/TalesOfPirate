@@ -4,7 +4,7 @@ namespace Corsairs::Game::Camera
 {
 FCameraProfile LegacyDefaultProfile()
 {
-	return {3500.0, 5000.0, 32.0, 100.0, 90.0};
+	return {3500.0, 5000.0, 32.0, 100.0, 0.0};
 }
 
 FCameraRig DeriveRig(

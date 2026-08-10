@@ -445,8 +445,9 @@ void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 		return;
 	}
 
-	// Координаты и поворот переводятся так же, как для объектов сцены: ось Y
-	// инвертируется, угол приходит в десятых долях градуса.
+	// ActorCenter переводит source-position через rigid Q=(-y,x).
+	// Source-angle приходит в десятых долях градуса и сохраняется:
+	// mesh у ACorsairsCharacter уже имеет нужный relative yaw -90°.
 	const FRotator Rotation(0.0, static_cast<double>(Actor.Angle) / 10.0, 0.0);
 	ACorsairsCharacter* Spawned =
 		SpawnRemoteCharacter(Actor.Position, Rotation);

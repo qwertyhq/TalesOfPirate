@@ -17,7 +17,8 @@ bool FCorsairsCameraProfileTest::RunTest(const FString&)
 	TestEqual(TEXT("vertical"), Profile.VerticalOffsetCm, 5000.0);
 	TestEqual(TEXT("vertical FOV"), Profile.VerticalFovDegrees, 32.0);
 	TestEqual(TEXT("target height"), Profile.TargetHeightCm, 100.0);
-	TestEqual(TEXT("initial yaw"), Profile.InitialYawDegrees, 90.0);
+	TestEqual(TEXT("initial yaw follows rigid map basis"),
+		Profile.InitialYawDegrees, 0.0);
 	TestTrue(TEXT("arm"),
 		FMath::IsNearlyEqual(Rig.ArmLengthCm, 6103.2778, 0.001));
 	TestTrue(TEXT("pitch"),

@@ -22,15 +22,14 @@ namespace
 	 *  а редкая — рассинхронизировала бы положение. Полсекунды и метр
 	 *  соответствуют шагу, с которым двигался оригинальный клиент. */
 	constexpr float ReportInterval = 0.5f;
-	/** Сколько единиц координат карты приходится на сантиметр UE.
+	/** Переводит rigid UE basis обратно в source-координаты.
 	 *
 	 *  Клетка занимает 100 единиц карты и 100 сантиметров UE, поэтому
-	 *  масштаб единичный. Ось Y инвертируется, как в размещении объектов:
-	 *  без этого мир вышел бы зеркальным. */
+	 *  масштаб единичный. Q(source)=(-y,x), Q⁻¹(UE)=(Y,-X). */
 	FIntPoint ToMapCoordinates(const FVector& Location)
 	{
-		return FIntPoint(FMath::RoundToInt(Location.X),
-						 FMath::RoundToInt(-Location.Y));
+		return FIntPoint(FMath::RoundToInt(Location.Y),
+						 FMath::RoundToInt(-Location.X));
 	}
 
 }
@@ -197,9 +196,7 @@ void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 		}
 
 		FVector Location = GetActorLocation();
-		const FIntPoint SourcePosition(
-			FMath::RoundToInt(Location.X),
-			FMath::RoundToInt(-Location.Y));
+		const FIntPoint SourcePosition = ToMapCoordinates(Location);
 		const double Wanted = CharacterGround->ActorCenter(
 			SourcePosition,
 			GetCapsuleComponent()->GetScaledCapsuleHalfHeight()).Z;
@@ -485,8 +482,8 @@ void ACorsairsPlayerCharacter::HandleMovementChanged(
 	}
 
 	FVector AuthoritativeLocation = GetActorLocation();
-	AuthoritativeLocation.X = Event.Endpoint.X;
-	AuthoritativeLocation.Y = -Event.Endpoint.Y;
+	AuthoritativeLocation.X = -Event.Endpoint.Y;
+	AuthoritativeLocation.Y = Event.Endpoint.X;
 	SetActorLocation(
 		AuthoritativeLocation,
 		false,

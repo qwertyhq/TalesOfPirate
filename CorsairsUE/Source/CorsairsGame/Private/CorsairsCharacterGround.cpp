@@ -232,8 +232,8 @@ FVector FCorsairsCharacterGround::ActorCenter(
 {
 	const FCorsairsCharacterCell Cell = Sample(SourcePosition);
 	return FVector(
-		static_cast<double>(SourcePosition.X),
 		-static_cast<double>(SourcePosition.Y),
+		static_cast<double>(SourcePosition.X),
 		Cell.HeightCm + ScaledCapsuleHalfHeight);
 }
 

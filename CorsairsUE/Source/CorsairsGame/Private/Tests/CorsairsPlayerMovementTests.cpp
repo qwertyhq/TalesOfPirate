@@ -199,7 +199,7 @@ bool CreatePossessedPawn(
 	Controller->Possess(Pawn);
 	Pawn->GetCharacterMovement()->GravityScale = 0.0f;
 	Pawn->GetCharacterMovement()->SetMovementMode(MOVE_Flying);
-	Pawn->SetActorLocation(FVector(Spawn.X, -Spawn.Y, 321.0));
+	Pawn->SetActorLocation(FVector(-Spawn.Y, Spawn.X, 321.0));
 
 	Session = NewObject<UCorsairsSession>(World);
 	Session->SetInWorldForTests(LocalWorldId, Spawn);
@@ -234,7 +234,7 @@ bool FCorsairsPlayerFirstSegmentFromSpawnTest::RunTest(const FString&)
 			return true;
 		});
 	const FIntPoint Current(223525, 278575);
-	Pawn->SetActorLocation(FVector(Current.X, -Current.Y, 321.0));
+	Pawn->SetActorLocation(FVector(-Current.Y, Current.X, 321.0));
 	Pawn->Tick(0.51f);
 
 	TestEqual(TEXT("first timer report sends one path"), SentPaths.Num(), 1);
@@ -318,7 +318,7 @@ bool FCorsairsPlayerHeldInputNoPacketFloodTest::RunTest(const FString&)
 	Pawn->ConsumeMovementInputVector();
 	Pawn->ApplyMovementAxisForProbe(TEXT("MoveRight"), 0.0f);
 	Pawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
-	Pawn->SetActorLocation(FVector(Spawn.X + 200, -Spawn.Y, 321.0));
+	Pawn->SetActorLocation(FVector(-Spawn.Y, Spawn.X + 200, 321.0));
 	Pawn->Tick(0.51f);
 	TestEqual(
 		TEXT("neutral and re-press sends exactly one MOVE"),
@@ -368,7 +368,7 @@ bool FCorsairsPlayerAuthorityTransitionRaceTest::RunTest(const FString&)
 			return true;
 		});
 	SkillPawn->SetActorLocation(
-		FVector(Spawn.X + 200, -Spawn.Y, 321.0));
+		FVector(-Spawn.Y, Spawn.X + 200, 321.0));
 	SkillPawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
 	SkillPawn->GetCharacterMovement()->Velocity =
 		FVector(300.0, 125.0, 0.0);
@@ -415,7 +415,7 @@ bool FCorsairsPlayerAuthorityTransitionRaceTest::RunTest(const FString&)
 			return true;
 		});
 	SpeedPawn->SetActorLocation(
-		FVector(Spawn.X + 200, -Spawn.Y, 321.0));
+		FVector(-Spawn.Y, Spawn.X + 200, 321.0));
 	SpeedPawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
 	SpeedPawn->GetCharacterMovement()->Velocity =
 		FVector(300.0, 125.0, 0.0);
@@ -474,7 +474,7 @@ bool FCorsairsPlayerSessionAuthorityRollbackTest::RunTest(const FString&)
 			++SkillTransportAttempts;
 			return false;
 		});
-	Pawn->SetActorLocation(FVector(Spawn.X + 200, -Spawn.Y, 321.0));
+	Pawn->SetActorLocation(FVector(-Spawn.Y, Spawn.X + 200, 321.0));
 	Pawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
 	Pawn->GetCharacterMovement()->Velocity = FVector(300.0, 125.0, 0.0);
 	const FVector BeforeSkill = Pawn->GetActorLocation();
@@ -546,7 +546,7 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 		TEXT("reattach leaves exactly one authority receiver"),
 		CountAuthorityBindings(Session, Pawn),
 		1);
-	Pawn->SetActorLocation(FVector(224000.0, -279000.0, 321.0));
+	Pawn->SetActorLocation(FVector(-279000.0, 224000.0, 321.0));
 	Pawn->GetCharacterMovement()->Velocity = FVector(120.0, 80.0, 0.0);
 	Pawn->AddMovementInput(FVector::ForwardVector, 1.0f);
 	const FIntPoint Terminal(223725, 278875);
@@ -558,7 +558,7 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 	TestEqual(
 		TEXT("terminal teleports exact authoritative XY and keeps current Z"),
 		Pawn->GetActorLocation(),
-		FVector(Terminal.X, -Terminal.Y, 321.0));
+		FVector(-Terminal.Y, Terminal.X, 321.0));
 	TestTrue(
 		TEXT("terminal zeros character velocity"),
 		Pawn->GetCharacterMovement()->Velocity.IsNearlyZero());
@@ -609,7 +609,7 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 	TestEqual(
 		TEXT("one replacement broadcast reaches one handler"),
 		Pawn->GetActorLocation(),
-		FVector(223900.0, -278900.0, 321.0));
+		FVector(-278900.0, 223900.0, 321.0));
 
 	World->DestroyActor(Pawn);
 	TestFalse(

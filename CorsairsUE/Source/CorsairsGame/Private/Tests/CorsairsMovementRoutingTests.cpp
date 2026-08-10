@@ -85,8 +85,8 @@ namespace
 		const FIntPoint SourcePosition)
 	{
 		const FVector Expected(
-			static_cast<double>(SourcePosition.X),
 			-static_cast<double>(SourcePosition.Y),
+			static_cast<double>(SourcePosition.X),
 			0.0);
 		for (TActorIterator<ACorsairsCharacter> It(World); It; ++It)
 		{
@@ -226,7 +226,7 @@ bool FCorsairsGameModeDynamicLifecycleTest::RunTest(const FString&)
 	Fixture.TestWorld.TickTestWorld(0.1f);
 	TestEqual(TEXT("one real multicast advances mapped remote once"),
 		Remote->GetActorLocation(),
-		FVector(20.0, 0.0, BeforeMove.Z));
+		FVector(0.0, 20.0, BeforeMove.Z));
 
 	UCorsairsSession* SavedSession = Fixture.Session;
 	TestTrue(TEXT("GameMode accepts explicit destroy"), Fixture.GameMode->Destroy());
@@ -299,7 +299,7 @@ bool FCorsairsLocalDeliveredOnceTest::RunTest(const FString&)
 	Fixture.TestWorld.TickTestWorld(0.1f);
 	TestEqual(TEXT("one local server path transition advances by event speed"),
 		Fixture.Local->GetActorLocation(),
-		FVector(20.0, 0.0, Start.Z));
+		FVector(0.0, 20.0, Start.Z));
 	TestEqual(TEXT("local server path reaches inherited follower exactly once"),
 		Fixture.Local->GetServerPathAcceptCountForTests(), 1);
 	TestTrue(TEXT("skill lock stays active while follower moves"),
@@ -326,7 +326,7 @@ bool FCorsairsRemoteByWorldIdTest::RunTest(const FString&)
 	const FCorsairsWorldActor First = {
 		101, TEXT("FirstRemote"), FIntPoint(10, 10), 0, 1};
 	const FCorsairsWorldActor Second = {
-		202, TEXT("SecondRemote"), FIntPoint(20, 20), 0, 1};
+		202, TEXT("SecondRemote"), FIntPoint(20, 20), 1230, 1};
 	Fixture.GameMode->HandleActorSeenForTests(First);
 	Fixture.GameMode->HandleActorSeenForTests(Second);
 	ACorsairsCharacter* FirstRemote = FindRemoteAt(
@@ -341,7 +341,9 @@ bool FCorsairsRemoteByWorldIdTest::RunTest(const FString&)
 
 	const FVector FirstBefore = FirstRemote->GetActorLocation();
 	TestEqual(TEXT("second remote starts at its distinct first ground height"),
-		SecondRemote->GetActorLocation(), FVector(20.0, -20.0, 98.0));
+		SecondRemote->GetActorLocation(), FVector(-20.0, 20.0, 98.0));
+	TestTrue(TEXT("remote actor preserves source angle semantics"),
+		FMath::IsNearlyEqual(SecondRemote->GetActorRotation().Yaw, 123.0));
 	TestEqual(TEXT("second remote starts with capsule bottom at 10 cm"),
 		SecondRemote->GetActorLocation().Z -
 			SecondRemote->GetCapsuleComponent()->GetScaledCapsuleHalfHeight(),
@@ -357,13 +359,13 @@ bool FCorsairsRemoteByWorldIdTest::RunTest(const FString&)
 		FirstRemote->GetActorLocation(), FirstBefore);
 	TestEqual(TEXT("addressed remote follows waypoint at 20 cm ground height"),
 		SecondRemote->GetActorLocation(),
-		FVector(70.0, -20.0, 108.0));
+		FVector(-20.0, 70.0, 108.0));
 	TestEqual(TEXT("accepted waypoint preserves 20 cm capsule bottom"),
 		SecondRemote->GetActorLocation().Z -
 			SecondRemote->GetCapsuleComponent()->GetScaledCapsuleHalfHeight(),
 		20.0);
-	TestTrue(TEXT("remote path applies map-Y inverted facing"),
-		FMath::IsNearlyEqual(SecondRemote->GetActorRotation().Yaw, 0.0));
+	TestTrue(TEXT("remote path applies rigid-basis facing"),
+		FMath::IsNearlyEqual(SecondRemote->GetActorRotation().Yaw, 90.0));
 
 	const FIntPoint RejectedEndpoint(30, 70);
 	Fixture.Session->OnMovementChanged.Broadcast(MakeTerminal(
@@ -372,7 +374,7 @@ bool FCorsairsRemoteByWorldIdTest::RunTest(const FString&)
 		RejectedEndpoint));
 	TestEqual(TEXT("remote rejection reconciles into 30 cm ground cell"),
 		SecondRemote->GetActorLocation(),
-		FVector(30.0, -70.0, 118.0));
+		FVector(-70.0, 30.0, 118.0));
 	TestEqual(TEXT("rejected endpoint preserves 30 cm capsule bottom"),
 		SecondRemote->GetActorLocation().Z -
 			SecondRemote->GetCapsuleComponent()->GetScaledCapsuleHalfHeight(),
@@ -380,7 +382,7 @@ bool FCorsairsRemoteByWorldIdTest::RunTest(const FString&)
 	Fixture.TestWorld.TickTestWorld(0.5f);
 	TestEqual(TEXT("rejected remote no longer replays old path"),
 		SecondRemote->GetActorLocation(),
-		FVector(30.0, -70.0, 118.0));
+		FVector(-70.0, 30.0, 118.0));
 
 	const FVector BeforeZeroSpeed = SecondRemote->GetActorLocation();
 	Fixture.Session->OnMovementChanged.Broadcast(MakeAcceptedPath(
@@ -393,6 +395,51 @@ bool FCorsairsRemoteByWorldIdTest::RunTest(const FString&)
 	TestEqual(TEXT("zero speed never starts remote playback"),
 		SecondRemote->GetActorLocation(), BeforeZeroSpeed);
 	Fixture.ForwardErrors(this);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsUngroundedCharacterRigidBasisTest,
+	"Corsairs.Movement.Routing.UngroundedCharacterRigidBasis",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsUngroundedCharacterRigidBasisTest::RunTest(const FString&)
+{
+	// Mutation: в fallback-ветке без CharacterGround вернуть
+	// старое отражение F=(x,-y) вместо rigid Q=(-y,x).
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("ungrounded character world created"), World))
+	{
+		return false;
+	}
+
+	ACorsairsCharacter* Character = World->SpawnActor<ACorsairsCharacter>(
+		ACorsairsCharacter::StaticClass(),
+		FVector(999.0, 999.0, 321.0),
+		FRotator::ZeroRotator,
+		AlwaysSpawnParameters());
+	if (!TestNotNull(TEXT("ungrounded character spawned"), Character))
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	Character->HandleServerMovementChanged(MakeAcceptedPath(
+		303,
+		false,
+		true,
+		ServerSpeedCmPerSecond,
+		{FIntPoint(10, 20), FIntPoint(60, 20)}));
+	TestEqual(TEXT("ungrounded path start uses rigid basis and keeps Z"),
+		Character->GetActorLocation(), FVector(-20.0, 10.0, 321.0));
+
+	Character->Tick(0.1f);
+	TestEqual(TEXT("ungrounded path advance uses rigid basis and keeps Z"),
+		Character->GetActorLocation(), FVector(-20.0, 30.0, 321.0));
+	TestTrue(TEXT("ungrounded path applies rigid-basis facing"),
+		FMath::IsNearlyEqual(Character->GetActorRotation().Yaw, 90.0));
+
+	World->DestroyWorld(false);
 	return true;
 }
 
