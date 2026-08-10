@@ -26,6 +26,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import unreal                                        # noqa: E402
 from report import Reporter, RefuseIfEditorOpen      # noqa: E402
+from scene_placement import (                         # noqa: E402
+    effect_summary, load_heights, object_location, split_effects)
 
 TERRAIN_ROOT = "/Game/Terrain"
 LEVEL_ROOT = "/Game/Maps"
@@ -77,20 +79,25 @@ def add_hism_component(actor):
         component, unreal.HierarchicalInstancedStaticMeshComponent) else None
 
 
-def place_objects(report, manifest, models):
+def place_objects(report, manifest, models, heights=None):
     """Ставит объекты карты инстансами. Возвращает (инстансов, центр)."""
     library = unreal.CorsairsSceneManifestLibrary
     actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 
+    scene_objects, effects = split_effects(list(manifest.objects))
+    if effects:
+        count, kinds, top = effect_summary(effects)
+        report.line(f"  эффектов отложено={count} видов={kinds}; частые id: {top}")
+
     groups = {}
     unresolved = 0
-    for obj in manifest.objects:
+    for obj in scene_objects:
         assets = models.get(str(obj.model_id))
         if not assets:
             unresolved += 1
             continue
         transform = unreal.Transform(
-            library.get_object_location(obj, 100.0),
+            object_location(library, obj, heights),
             library.get_object_rotation(obj),
             unreal.Vector(1.0, 1.0, 1.0))
         for asset in assets:
@@ -208,7 +215,7 @@ def level_name(map_name):
     return map_name[:1].upper() + map_name[1:]
 
 
-def build_map(report, manifest_path, map_name, models, game_mode):
+def build_map(report, manifest_path, map_name, models, game_mode, script_dir):
     manifest, error = load_manifest(manifest_path)
     if manifest is None:
         report.warn(f"{map_name}: манифест не прочитан — {error}")
@@ -218,7 +225,15 @@ def build_map(report, manifest_path, map_name, models, game_mode):
     subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
     subsystem.new_level(level_path)
 
-    placed, centre, unresolved = place_objects(report, manifest, models)
+    # Без карты высот постройки встают на голое смещение и город идёт
+    # ступеньками. Отсутствие файла не останавливает сборку, но должно быть
+    # видно в отчёте: иначе кривая карта выглядит как удачная.
+    heights, heights_path = load_heights(script_dir, map_name)
+    if not heights.side:
+        report.warn(f"{map_name}: карты высот нет ({heights_path}) — "
+                    "постройки встанут на голое смещение")
+
+    placed, centre, unresolved = place_objects(report, manifest, models, heights)
     tiles = place_terrain(map_name)
     add_lighting_and_start(centre)
 
@@ -260,7 +275,7 @@ def main(report):
         map_name = re.sub(r"\.objects\.json$", "", os.path.basename(path))
         if only and map_name not in only:
             continue
-        if build_map(report, path, map_name, models, game_mode):
+        if build_map(report, path, map_name, models, game_mode, script_dir):
             built += 1
 
     report.line(f"УРОВНЕЙ СОБРАНО: {built}")

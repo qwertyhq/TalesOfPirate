@@ -79,13 +79,15 @@ public:
 	// задаёт, сколько сантиметров UE занимает один тайл; при 100 масштаб
 	// получается один к одному.
 	//
-	// Ось Y инвертируется: MindPower3D левосторонняя, UE тоже левосторонняя,
-	// но с другим направлением Y — без инверсии карта окажется зеркальной.
+	// Оси переносятся один в один. Обе системы левосторонние с высотой по Z,
+	// а две перестановки осей на пути модели — в конвертере и в импортёре —
+	// гасят друг друга.
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	static FVector GetObjectLocation(const FCorsairsPlacedObject& Object,
 									 float UnitsPerTile = 100.0f);
 
-	// Поворот объекта. В файле Yaw хранится в десятых долях градуса.
+	// Поворот объекта. В файле Yaw хранится в целых градусах; знак при
+	// переносе меняется на противоположный — позиция инвертирует ось Y.
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	static FRotator GetObjectRotation(const FCorsairsPlacedObject& Object);
 };

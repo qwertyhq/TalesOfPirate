@@ -74,12 +74,19 @@ TerrainMeshStats WriteTerrainMesh(const MapTerrain& terrain,
                     const std::size_t mapRow = (startRow + row) * options.Step;
 
                     Vector3 position;
+                    // Координаты кладутся в исходных осях, как есть. Поворот
+                    // плоскости карты делает общая запись glTF вместе с
+                    // импортёром: перестановка Y и Z, а затем возврат рукости
+                    // дают в сумме (x, y) -> (-y, x). Ровно тот же поворот
+                    // получают позиции объектов (GetObjectLocation в модуле
+                    // CorsairsImport), поэтому город и земля сходятся.
+                    //
+                    // Прежде здесь стоял минус у оси строк. Он подменял
+                    // поворот отражением: земля вставала в тот же угол мира,
+                    // что и город, но обе половины оказывались зеркальными
+                    // относительно оригинала.
                     position.X = static_cast<float>(mapCol) * kUnitsPerTile;
-                    // Ось строк инвертируется — ровно как в размещении
-                    // объектов (GetObjectLocation в модуле CorsairsImport).
-                    // Без этого рельеф уехал бы в противоположный по Y угол
-                    // мира, и город повис бы отдельно от своей земли.
-                    position.Y = -static_cast<float>(mapRow) * kUnitsPerTile;
+                    position.Y = static_cast<float>(mapRow) * kUnitsPerTile;
                     position.Z = static_cast<float>(HeightAt(terrain, mapCol, mapRow)) *
                                  kHeightUnit;
                     object.Mesh.Positions.push_back(position);
@@ -107,18 +114,23 @@ TerrainMeshStats WriteTerrainMesh(const MapTerrain& terrain,
                         static_cast<std::uint32_t>((row + 1) * cols + col);
                     const std::uint32_t bottomRight = bottomLeft + 1;
 
-                    // Порядок обхода учитывает инверсию оси строк. Считать
-                    // его надо по векторному произведению: при Y = -row обход
-                    // topLeft → topRight → bottomLeft даёт нормаль вниз, и
-                    // земля пропадает при взгляде сверху, оставаясь видимой
-                    // снизу. Правильный обход — против часовой в плоскости XY.
+                    // Обход считается по векторному произведению в исходных
+                    // осях: рёбра topLeft → topRight и topLeft → bottomLeft
+                    // идут по +X и +Y, их произведение смотрит по +Z, то есть
+                    // вверх — как и положено земле.
+                    //
+                    // Прежний порядок был обратным: его подобрали под минус у
+                    // оси строк, который отражал плоскость и переворачивал
+                    // нормали. Минуса больше нет, и обход возвращается к
+                    // прямому — иначе земля пропадёт при взгляде сверху и
+                    // останется видимой только снизу.
                     object.Mesh.Indices.push_back(topLeft);
-                    object.Mesh.Indices.push_back(bottomLeft);
                     object.Mesh.Indices.push_back(topRight);
+                    object.Mesh.Indices.push_back(bottomLeft);
 
                     object.Mesh.Indices.push_back(topRight);
-                    object.Mesh.Indices.push_back(bottomLeft);
                     object.Mesh.Indices.push_back(bottomRight);
+                    object.Mesh.Indices.push_back(bottomLeft);
                 }
             }
 

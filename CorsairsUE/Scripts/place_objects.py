@@ -28,6 +28,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import unreal                                   # noqa: E402
 from report import Reporter, RefuseIfEditorOpen  # noqa: E402
+from scene_placement import (                    # noqa: E402
+    effect_summary, load_heights, object_location, split_effects)
 
 
 def load_manifest(path):
@@ -71,7 +73,7 @@ def load_model_map(script_dir):
     return data.get("models", {}), ""
 
 
-def group_by_mesh(objects, models):
+def group_by_mesh(objects, models, heights=None):
     """Раскладывает объекты по ассетам мешей.
 
     Возвращает (группы, не_разрешено), где группы — словарь
@@ -87,7 +89,7 @@ def group_by_mesh(objects, models):
             unresolved[obj.model_id] = unresolved.get(obj.model_id, 0) + 1
             continue
 
-        location = library.get_object_location(obj, 100.0)
+        location = object_location(library, obj, heights)
         rotation = library.get_object_rotation(obj)
         transform = unreal.Transform(location, rotation, unreal.Vector(1.0, 1.0, 1.0))
 
@@ -153,6 +155,8 @@ def spawn_instanced(asset_path, transforms):
             if actor is None:
                 continue
             actor.skeletal_mesh_component.set_skeletal_mesh(mesh)
+            # Метка нужна, чтобы следующий прогон убрал этих актёров.
+            actor.set_actor_label(f"Obj_{os.path.basename(asset_path)}")
             placed += 1
         return placed, "скелетные актёры"
 
@@ -188,6 +192,7 @@ def spawn_instanced(asset_path, transforms):
         if single is None:
             continue
         single.static_mesh_component.set_static_mesh(mesh)
+        single.set_actor_label(f"Obj_{os.path.basename(asset_path)}")
         placed += 1
     return placed, "актёры"
 
@@ -217,10 +222,35 @@ def main(report):
 
     objects = list(manifest.objects)
     total_in_manifest = len(objects)
+
+    objects, effects = split_effects(objects)
+
     if limit > 0:
         objects = objects[:limit]
 
-    groups, unresolved = group_by_mesh(objects, models)
+    # Прежняя расстановка убирается: скрипт ставит объекты заново, и без
+    # очистки каждый прогон удваивает город. Узнаются наши актёры по метке
+    # `Inst_` и по скелетным, поставленным этим же скриптом.
+    actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    removed = 0
+    for actor in actor_subsystem.get_all_level_actors():
+        label = actor.get_actor_label()
+        if label.startswith("Inst_") or label.startswith("Obj_"):
+            actor_subsystem.destroy_actor(actor)
+            removed += 1
+    if removed:
+        report.line(f"убрано прежних объектов: {removed}")
+
+    # Карта высот берётся по имени манифеста: garner.objects.json -> garner.
+    map_name = os.path.basename(manifest_path).split(".")[0]
+    heights, heights_path = load_heights(script_dir, map_name)
+    if heights.side:
+        report.line(f"карта высот {map_name}: сетка {heights.side}x{heights.side}")
+    else:
+        report.warn(f"карты высот нет: {heights_path} — "
+                    "постройки встанут на голое смещение и пойдут ступеньками")
+
+    groups, unresolved = group_by_mesh(objects, models, heights)
 
     subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
     subsystem.new_level(level_path)
@@ -243,6 +273,14 @@ def main(report):
                 f"уровень={level_path}")
     report.line(f"ОБЪЕКТОВ обработано={len(objects)} "
                 f"в_манифесте={total_in_manifest}")
+
+    # Число отложенных эффектов печатается всегда, даже когда оно ожидаемо:
+    # это единственный признак того, что часть карты сознательно не поставлена,
+    # а не потерялась по дороге.
+    if effects:
+        count, kinds, top = effect_summary(effects)
+        report.line(f"ЭФФЕКТОВ отложено={count} видов={kinds}; "
+                    f"частые id: {top}")
 
     # Пропуски печатаются всегда: молчаливое сокращение выглядит как полный
     # охват, хотя часть мира на уровень не попала.
