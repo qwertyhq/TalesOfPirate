@@ -12,6 +12,7 @@ source-координатах, наведение на фонтан (223325, 278
 что и эталонный квартал.
 """
 
+import math
 import os
 import sys
 from pathlib import Path
@@ -25,8 +26,21 @@ from scene_capture_validation import validate_scene_progress_png
 from scene_coordinate_basis import source_camera_to_ue
 
 
-SOURCE_CAMERA_EYE = (223325.0, 281975.0, 5100.0)
-SOURCE_CAMERA_TARGET = (223325.0, 278475.0, 100.0)
+def _env_vec(name, default):
+    """Опциональный оверрайд камеры: `x,y,z` в source-координатах."""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    parts = [float(item) for item in raw.split(",")]
+    if len(parts) != 3 or not all(math.isfinite(v) for v in parts):
+        raise RuntimeError(f"{name}: нужно три числа, получено {raw!r}")
+    return tuple(parts)
+
+
+SOURCE_CAMERA_EYE = _env_vec(
+    "KIMI_CAM_EYE", (223325.0, 281975.0, 5100.0))
+SOURCE_CAMERA_TARGET = _env_vec(
+    "KIMI_CAM_TARGET", (223325.0, 278475.0, 100.0))
 CAMERA_BASIS = source_camera_to_ue(
     eye=SOURCE_CAMERA_EYE, target=SOURCE_CAMERA_TARGET)
 CAMERA_LOCATION = unreal.Vector(*CAMERA_BASIS["eye"])
