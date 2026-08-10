@@ -1312,7 +1312,8 @@ CORSAIRS_TEST(TerrainPageMeshWriter_CleansInjectedPostBinWriteFailure) {
     options.TestOnlyWriteGltf =
         [&](const AC::LgoGeomObj& object,
             const std::filesystem::path& gltfPath,
-            std::string& callbackDetail) {
+            std::string& callbackDetail,
+            const AC::GltfAssetMetadata&) {
             ++callbackCalls;
             callbackSawMesh = !object.Mesh.Positions.empty() &&
                 !object.Mesh.Indices.empty();

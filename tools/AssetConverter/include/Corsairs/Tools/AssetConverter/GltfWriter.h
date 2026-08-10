@@ -20,6 +20,16 @@ enum class GltfSkinPolicy : std::uint8_t {
     StaticReferencePose,
 };
 
+enum class GltfTerrainCoordinateProfile : std::uint8_t {
+    None,
+    RigidQ,
+};
+
+struct GltfAssetMetadata {
+    GltfTerrainCoordinateProfile TerrainCoordinateProfile{
+        GltfTerrainCoordinateProfile::None};
+};
+
 enum class GltfStatus : std::uint32_t {
     OK = 0,
     EMPTY_MESH,
@@ -30,8 +40,9 @@ enum class GltfStatus : std::uint32_t {
 
 // Переводит матрицу трансформации из системы MindPower3D в glTF.
 //
-// Generic выполняет замену базиса P*M*P, где P переставляет Y и Z. SceneMap
-// после неё применяет зеркало G=diag(1,1,-1,1): G*(P*M*P)*G.
+// Оба профиля выполняют одну замену базиса P*M*P, где P переставляет Y и Z.
+// SceneMap отличается semantic metadata, но не локальной системой координат:
+// общий rigid-Q сцены применяется downstream к actor transform.
 //
 // Транспонирование НЕ выполняется, и это не упущение. DirectX использует
 // строки-векторы (p' = p*M) и хранит матрицу по строкам; glTF использует
@@ -58,6 +69,10 @@ struct GltfTextureOptions {
     // Куда копировать текстуры. Пустой путь — не копировать, ссылаться на
     // исходное расположение относительным путём.
     std::filesystem::path CopyTo;
+    // Логический каталог итогового glTF. При model-level staging физический
+    // путь временно вложен глубже, но URI обязан быть корректен после publish.
+    // Пустой путь сохраняет прежнее поведение и байты Generic output.
+    std::filesystem::path UriBase;
 };
 
 // Пишет gltfPath и парный .bin рядом (то же имя, расширение .bin).
@@ -82,6 +97,7 @@ struct GltfTextureOptions {
                                    GltfCoordinateProfile profile =
                                        GltfCoordinateProfile::Generic,
                                    GltfSkinPolicy skinPolicy =
-                                       GltfSkinPolicy::Preserve);
+                                       GltfSkinPolicy::Preserve,
+                                   const GltfAssetMetadata& assetMetadata = {});
 
 } // namespace Corsairs::Tools::AssetConverter

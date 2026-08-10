@@ -297,6 +297,262 @@ void BindPoseOf(const LabAnimation& skeleton, std::uint32_t bone,
     rotation[3] = 1.0f;
 }
 
+struct SceneBoneAnimation {
+    std::vector<float> Times;
+    std::vector<std::vector<float>> Translations;
+    std::vector<std::vector<float>> Rotations;
+    std::vector<std::vector<float>> Scales;
+    std::uint32_t RootBone{0};
+};
+
+bool IsFiniteRange(const float* values, std::size_t count) {
+    for (std::size_t i = 0; i < count; ++i) {
+        if (!std::isfinite(values[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool NormalizeQuaternion(float* quaternion) {
+    const float lengthSquared =
+        quaternion[0] * quaternion[0] +
+        quaternion[1] * quaternion[1] +
+        quaternion[2] * quaternion[2] +
+        quaternion[3] * quaternion[3];
+    if (!std::isfinite(lengthSquared) || lengthSquared <= 0.0f) {
+        return false;
+    }
+    const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+    for (std::size_t component = 0; component < 4; ++component) {
+        quaternion[component] *= inverseLength;
+    }
+    return IsFiniteRange(quaternion, 4u);
+}
+
+bool ValidateSceneMapAnimatedSkin(const LgoMesh& mesh,
+                                  const LabAnimation& skeleton,
+                                  std::string& detail) {
+    const std::uint32_t boneNum = skeleton.Header.BoneNum;
+    const std::uint32_t frameNum = skeleton.Header.FrameNum;
+    if (boneNum == 0 || boneNum > 256u || frameNum == 0 ||
+        skeleton.Bones.size() != boneNum ||
+        skeleton.Tracks.size() != boneNum ||
+        skeleton.InverseBindMatrices.size() !=
+            static_cast<std::size_t>(boneNum) * 16u ||
+        skeleton.Dummies.size() != skeleton.Header.DummyNum) {
+        detail = std::format(
+            "BONE DTO несогласован: header bones={}/frames={}/dummies={}, "
+            "arrays bones={}/tracks={}/ibm={}/dummies={}",
+            boneNum, frameNum, skeleton.Header.DummyNum,
+            skeleton.Bones.size(), skeleton.Tracks.size(),
+            skeleton.InverseBindMatrices.size(), skeleton.Dummies.size());
+        return false;
+    }
+    if (!IsFiniteRange(skeleton.InverseBindMatrices.data(),
+                       skeleton.InverseBindMatrices.size())) {
+        detail = "BONE inverse bind matrices содержат нечисловые значения";
+        return false;
+    }
+
+    std::size_t rootCount = 0;
+    // Полная range-validation обязана предшествовать обходу: forward-parent
+    // может указывать на кость, чей собственный ParentId повреждён.
+    for (std::uint32_t bone = 0; bone < boneNum; ++bone) {
+        const BoneBaseInfo& info = skeleton.Bones[bone];
+        if (info.Id != bone ||
+            (info.ParentId != kNoParent && info.ParentId >= boneNum)) {
+            detail = std::format("BONE hierarchy повреждена на кости {}", bone);
+            return false;
+        }
+        if (info.ParentId == kNoParent) {
+            ++rootCount;
+        }
+    }
+
+    for (std::uint32_t bone = 0; bone < boneNum; ++bone) {
+        std::uint32_t cursor = bone;
+        bool reachesRoot = false;
+        for (std::uint32_t step = 0; step <= boneNum; ++step) {
+            if (cursor >= boneNum) {
+                detail = std::format(
+                    "BONE hierarchy вышла на индекс {} от кости {}",
+                    cursor, bone);
+                return false;
+            }
+            const std::uint32_t parent = skeleton.Bones[cursor].ParentId;
+            if (parent == kNoParent) {
+                reachesRoot = true;
+                break;
+            }
+            cursor = parent;
+        }
+        if (!reachesRoot) {
+            detail = std::format("BONE hierarchy содержит цикл от кости {}", bone);
+            return false;
+        }
+    }
+
+    for (std::uint32_t bone = 0; bone < boneNum; ++bone) {
+        const LabBoneTrack& track = skeleton.Tracks[bone];
+        const bool hasQuat = track.Positions.size() == frameNum &&
+                             track.Rotations.size() == frameNum &&
+                             track.Matrices.empty();
+        const bool hasMatrix = track.Positions.empty() &&
+                               track.Rotations.empty() &&
+                               track.Matrices.size() ==
+                                   static_cast<std::size_t>(frameNum) * 16u;
+        if (!hasQuat && !hasMatrix) {
+            detail = std::format("BONE track {} не содержит ровно {} кадров",
+                                 bone, frameNum);
+            return false;
+        }
+        if (hasQuat) {
+            for (std::uint32_t frame = 0; frame < frameNum; ++frame) {
+                const Vector3& position = track.Positions[frame];
+                const Quaternion& rotation = track.Rotations[frame];
+                if (!std::isfinite(position.X) || !std::isfinite(position.Y) ||
+                    !std::isfinite(position.Z) || !std::isfinite(rotation.X) ||
+                    !std::isfinite(rotation.Y) || !std::isfinite(rotation.Z) ||
+                    !std::isfinite(rotation.W)) {
+                    detail = std::format(
+                        "BONE QUAT track {} frame {} нечисловой", bone, frame);
+                    return false;
+                }
+            }
+        }
+        else if (!IsFiniteRange(track.Matrices.data(), track.Matrices.size())) {
+            detail = std::format("BONE matrix track {} нечисловой", bone);
+            return false;
+        }
+    }
+    if (rootCount != 1u) {
+        detail = std::format("SceneMap BONE требует один root, найдено {}", rootCount);
+        return false;
+    }
+
+    for (std::size_t dummy = 0; dummy < skeleton.Dummies.size(); ++dummy) {
+        const BoneDummyInfo& info = skeleton.Dummies[dummy];
+        if (info.ParentBoneId >= boneNum || !IsFiniteRange(info.Mat, 16u)) {
+            detail = std::format("BONE dummy {} повреждён", dummy);
+            return false;
+        }
+    }
+
+    if (mesh.Blends.size() != mesh.Positions.size() ||
+        mesh.BoneIndices.empty()) {
+        detail = std::format(
+            "skin arrays несогласованы: blends={}, positions={}, boneIndices={}",
+            mesh.Blends.size(), mesh.Positions.size(), mesh.BoneIndices.size());
+        return false;
+    }
+    for (std::size_t local = 0; local < mesh.BoneIndices.size(); ++local) {
+        if (mesh.BoneIndices[local] >= boneNum) {
+            detail = std::format("BoneIndices[{}]={} вне {} BONE bones",
+                                 local, mesh.BoneIndices[local], boneNum);
+            return false;
+        }
+    }
+    for (std::size_t vertex = 0; vertex < mesh.Blends.size(); ++vertex) {
+        float weightSum = 0.0f;
+        for (std::size_t influence = 0; influence < 4; ++influence) {
+            const BlendInfo& blend = mesh.Blends[vertex];
+            if (blend.Index[influence] >= mesh.BoneIndices.size() ||
+                !std::isfinite(blend.Weight[influence]) ||
+                blend.Weight[influence] < 0.0f) {
+                detail = std::format(
+                    "blend vertex {} influence {} повреждён", vertex, influence);
+                return false;
+            }
+            weightSum += blend.Weight[influence];
+        }
+        if (!std::isfinite(weightSum) || weightSum <= 0.0f) {
+            detail = std::format("blend vertex {} имеет сумму весов {}",
+                                 vertex, weightSum);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool BuildSceneBoneAnimation(const LabAnimation& skeleton,
+                             SceneBoneAnimation& output,
+                             std::string& detail) {
+    const std::uint32_t boneNum = skeleton.Header.BoneNum;
+    const std::uint32_t frameNum = skeleton.Header.FrameNum;
+    output = {};
+    output.Times.resize(frameNum);
+    output.Translations.resize(boneNum);
+    output.Rotations.resize(boneNum);
+    output.Scales.resize(boneNum);
+
+    for (std::uint32_t frame = 0; frame < frameNum; ++frame) {
+        output.Times[frame] = static_cast<float>(frame) / kAnimFramesPerSecond;
+    }
+
+    for (std::uint32_t bone = 0; bone < boneNum; ++bone) {
+        if (skeleton.Bones[bone].ParentId == kNoParent) {
+            output.RootBone = bone;
+        }
+        output.Translations[bone].resize(static_cast<std::size_t>(frameNum) * 3u);
+        output.Rotations[bone].resize(static_cast<std::size_t>(frameNum) * 4u);
+        output.Scales[bone].resize(static_cast<std::size_t>(frameNum) * 3u);
+        const LabBoneTrack& track = skeleton.Tracks[bone];
+        const bool hasQuat = !track.Positions.empty();
+
+        for (std::uint32_t frame = 0; frame < frameNum; ++frame) {
+            float* translation = output.Translations[bone].data() +
+                static_cast<std::size_t>(frame) * 3u;
+            float* rotation = output.Rotations[bone].data() +
+                static_cast<std::size_t>(frame) * 4u;
+            float* scale = output.Scales[bone].data() +
+                static_cast<std::size_t>(frame) * 3u;
+
+            if (hasQuat) {
+                const Vector3& position = track.Positions[frame];
+                translation[0] = position.X;
+                translation[1] = position.Z;
+                translation[2] = position.Y;
+                ConvertQuaternionToGltf(track.Rotations[frame], rotation);
+                scale[0] = 1.0f;
+                scale[1] = 1.0f;
+                scale[2] = 1.0f;
+            }
+            else {
+                float converted[16]{};
+                ConvertMatrixToGltf(
+                    track.Matrices.data() + static_cast<std::size_t>(frame) * 16u,
+                    converted, GltfCoordinateProfile::Generic);
+                const Trs trs = DecomposeGltfMatrix(converted);
+                std::copy_n(trs.Translation, 3u, translation);
+                std::copy_n(trs.Rotation, 4u, rotation);
+                std::copy_n(trs.Scale, 3u, scale);
+            }
+            if (!IsFiniteRange(translation, 3u) ||
+                !IsFiniteRange(rotation, 4u) ||
+                !IsFiniteRange(scale, 3u) ||
+                !NormalizeQuaternion(rotation)) {
+                detail = std::format(
+                    "BONE track {} frame {} дал нечисловой TRS", bone, frame);
+                return false;
+            }
+            if (frame > 0u) {
+                const float* previous = rotation - 4;
+                const float dot = previous[0] * rotation[0] +
+                                  previous[1] * rotation[1] +
+                                  previous[2] * rotation[2] +
+                                  previous[3] * rotation[3];
+                if (dot < 0.0f) {
+                    for (std::size_t component = 0; component < 4; ++component) {
+                        rotation[component] = -rotation[component];
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
 // Расширение сравнивается без учёта регистра: в исходных данных встречается
 // и .dds, и .DDS.
 bool IsDdsFile(const std::filesystem::path& path) {
@@ -450,6 +706,69 @@ void WriteLegacyMaterialExtras(JsonWriter& json,
     json.EndObject();
 }
 
+void WriteLegacyCaptureExtras(JsonWriter& json,
+                              const LegacyCaptureBakeMetadata& metadata) {
+    if (!metadata.Applied) {
+        return;
+    }
+    json.Key("extras");
+    json.BeginObject();
+    json.Key("corsairsLegacyCapture");
+    json.BeginObject();
+    json.Key("schemaVersion");
+    json.Value(static_cast<std::int64_t>(1));
+    json.Key("captureTick");
+    json.Value(static_cast<std::int64_t>(metadata.CaptureTick));
+    json.Key("matrix");
+    if (metadata.MatrixFrameCount > 0) {
+        json.BeginObject();
+        json.Key("frameCount");
+        json.Value(static_cast<std::int64_t>(metadata.MatrixFrameCount));
+        json.Key("sampleFrame");
+        json.Value(static_cast<std::int64_t>(metadata.MatrixSampleFrame));
+        json.EndObject();
+    }
+    else {
+        json.Null();
+    }
+    json.Key("texUv");
+    json.BeginArray();
+    for (const LegacyTexUvSample& sample : metadata.TexUvSamples) {
+        json.BeginObject();
+        json.Key("subset");
+        json.Value(static_cast<std::int64_t>(sample.Subset));
+        json.Key("stage");
+        json.Value(static_cast<std::int64_t>(sample.Stage));
+        json.Key("frameCount");
+        json.Value(static_cast<std::int64_t>(sample.FrameCount));
+        json.Key("sampleFrame");
+        json.Value(static_cast<std::int64_t>(sample.SampleFrame));
+        json.EndObject();
+    }
+    json.EndArray();
+    if (metadata.BoneDataSize > 0 &&
+        (metadata.BoneStaticReferencePose || metadata.BonePreserveAnimated)) {
+        json.Key("bone");
+        json.BeginObject();
+        json.Key("dataSize");
+        json.Value(static_cast<std::int64_t>(metadata.BoneDataSize));
+        json.Key("policy");
+        if (metadata.BoneStaticReferencePose) {
+            json.Value("staticReferencePose");
+        }
+        else {
+            json.Value("preserveAnimated");
+            json.Key("frameCount");
+            json.Value(static_cast<std::int64_t>(metadata.BoneFrameCount));
+            json.Key("sampleFrame");
+            json.Value(static_cast<std::int64_t>(metadata.BoneSampleFrame));
+        }
+        json.EndObject();
+    }
+    json.EndObject();
+    json.EndObject();
+}
+
 } // namespace
 
 void ConvertMatrixToGltf(const float* in, float* out,
@@ -466,28 +785,24 @@ void ConvertMatrixToGltf(const float* in, float* out,
             out[row * 4 + col] = in[swapAxis(row) * 4 + swapAxis(col)];
         }
     }
-
-    if (profile == GltfCoordinateProfile::SceneMap) {
-        constexpr float axisSign[4]{1.0f, 1.0f, -1.0f, 1.0f};
-        for (int row = 0; row < 4; ++row) {
-            for (int col = 0; col < 4; ++col) {
-                float& value = out[row * 4 + col];
-                value *= axisSign[row] * axisSign[col];
-                if (value == 0.0f) {
-                    value = 0.0f;
-                }
-            }
-        }
-    }
+    static_cast<void>(profile);
 }
 
 GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPath,
                      std::string& detail, const GltfTextureOptions& textures,
                      const LabAnimation* skeleton,
                      GltfCoordinateProfile profile,
-                     GltfSkinPolicy skinPolicy) {
+                     GltfSkinPolicy skinPolicy,
+                     const GltfAssetMetadata& assetMetadata) {
     const LgoMesh& mesh = obj.Mesh;
 
+    if (assetMetadata.TerrainCoordinateProfile !=
+            GltfTerrainCoordinateProfile::None &&
+        assetMetadata.TerrainCoordinateProfile !=
+            GltfTerrainCoordinateProfile::RigidQ) {
+        detail = "неизвестный glTF terrain coordinate profile";
+        return GltfStatus::WRITE_FAILED;
+    }
     if (mesh.Positions.empty() || mesh.Indices.empty() || mesh.Subsets.empty()) {
         detail = "меш не содержит вершин, индексов или подсетов";
         return GltfStatus::EMPTY_MESH;
@@ -497,10 +812,23 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         !mesh.Blends.empty() || !mesh.BoneIndices.empty();
     const bool hasSkin = skinPolicy == GltfSkinPolicy::Preserve &&
                          !mesh.Blends.empty() && !mesh.BoneIndices.empty();
+    std::optional<SceneBoneAnimation> sceneAnimation;
     if (profile == GltfCoordinateProfile::SceneMap &&
         sourceHasSkinData && skinPolicy == GltfSkinPolicy::Preserve) {
-        detail = "профиль scene-map пока поддерживает только статические меши";
-        return GltfStatus::WRITE_FAILED;
+        if (!hasSkin || skeleton == nullptr) {
+            detail = "SceneMap animated skin требует полные mesh skin arrays и BONE DTO";
+            // Сохраняем прежний observable status для SceneMap skin без
+            // skeleton; детально повреждённый BONE использует INVALID_SKIN_DATA.
+            return GltfStatus::WRITE_FAILED;
+        }
+        if (!ValidateSceneMapAnimatedSkin(mesh, *skeleton, detail)) {
+            return GltfStatus::INVALID_SKIN_DATA;
+        }
+        SceneBoneAnimation builtAnimation;
+        if (!BuildSceneBoneAnimation(*skeleton, builtAnimation, detail)) {
+            return GltfStatus::INVALID_SKIN_DATA;
+        }
+        sceneAnimation = std::move(builtAnimation);
     }
 
     std::vector<LegacyMaterialMetadata> resolvedMaterials;
@@ -532,17 +860,11 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     std::vector<Vector3> positions = mesh.Positions;
     for (Vector3& p : positions) {
         std::swap(p.Y, p.Z);
-        if (profile == GltfCoordinateProfile::SceneMap) {
-            p.Z = p.Z == 0.0f ? 0.0f : -p.Z;
-        }
     }
 
     std::vector<Vector3> normals = mesh.Normals;
     for (Vector3& n : normals) {
         std::swap(n.Y, n.Z);
-        if (profile == GltfCoordinateProfile::SceneMap) {
-            n.Z = n.Z == 0.0f ? 0.0f : -n.Z;
-        }
     }
 
     // Исходные данные местами содержат NaN и бесконечности — в нормалях у
@@ -555,12 +877,10 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
 
     // Смена порядка обхода треугольника — парная операция к смене рукости.
     std::vector<std::uint32_t> indices = mesh.Indices;
-    if (profile == GltfCoordinateProfile::Generic) {
-        for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
-            const std::uint32_t tmp = indices[i + 1];
-            indices[i + 1] = indices[i + 2];
-            indices[i + 2] = tmp;
-        }
+    for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
+        const std::uint32_t tmp = indices[i + 1];
+        indices[i + 1] = indices[i + 2];
+        indices[i + 2] = tmp;
     }
 
     std::vector<std::uint8_t> buffer;
@@ -583,6 +903,32 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         uvView = AppendToBuffer(buffer, texcoords.data(),
                                 texcoords.size() * sizeof(Vector2),
                                 kTargetArrayBuffer);
+    }
+
+    // D3DCOLOR в source хранится как 0xAARRGGBB. В little-endian памяти это
+    // BGRA, поэтому сырой uint32_t нельзя публиковать как glTF COLOR_0:
+    // Interchange прочитает красный и синий наоборот. SceneMap получает
+    // канонические RGBA-байты; Generic намеренно остаётся byte-identical.
+    const bool hasVertexColors =
+        profile == GltfCoordinateProfile::SceneMap &&
+        !mesh.VertexColors.empty();
+    if (hasVertexColors && mesh.VertexColors.size() != positions.size()) {
+        detail = std::format("цветов вершин {}, позиций {}",
+                             mesh.VertexColors.size(), positions.size());
+        return GltfStatus::WRITE_FAILED;
+    }
+    BufferView colorView{0, 0, kTargetArrayBuffer};
+    std::vector<std::uint8_t> vertexColors;
+    if (hasVertexColors) {
+        vertexColors.reserve(mesh.VertexColors.size() * 4u);
+        for (const std::uint32_t argb : mesh.VertexColors) {
+            vertexColors.push_back(static_cast<std::uint8_t>((argb >> 16u) & 0xffu));
+            vertexColors.push_back(static_cast<std::uint8_t>((argb >> 8u) & 0xffu));
+            vertexColors.push_back(static_cast<std::uint8_t>(argb & 0xffu));
+            vertexColors.push_back(static_cast<std::uint8_t>((argb >> 24u) & 0xffu));
+        }
+        colorView = AppendToBuffer(buffer, vertexColors.data(), vertexColors.size(),
+                                   kTargetArrayBuffer);
     }
 
     // Скиннинг. BlendInfo::Index индексирует BoneIndices (локальный индекс ->
@@ -651,7 +997,8 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         for (std::uint32_t b = 0; b < skeletonBoneNum; ++b) {
             ConvertMatrixToGltf(skeleton->InverseBindMatrices.data() +
                                     static_cast<std::size_t>(b) * 16,
-                                inverseBind.data() + static_cast<std::size_t>(b) * 16);
+                                inverseBind.data() + static_cast<std::size_t>(b) * 16,
+                                profile);
         }
         // Цель не указывается: матрицы не идут в вершинный конвейер, и
         // спецификация запрещает помечать такой блок как ARRAY_BUFFER.
@@ -662,6 +1009,30 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     const BufferView indexView = AppendToBuffer(
         buffer, indices.data(), indices.size() * sizeof(std::uint32_t),
         kTargetElementArrayBuffer);
+
+    BufferView animationTimeView{0, 0, 0};
+    std::vector<BufferView> animationTranslationViews;
+    std::vector<BufferView> animationRotationViews;
+    std::vector<BufferView> animationScaleViews;
+    if (sceneAnimation.has_value()) {
+        animationTimeView = AppendToBuffer(
+            buffer, sceneAnimation->Times.data(),
+            sceneAnimation->Times.size() * sizeof(float), 0);
+        animationTranslationViews.reserve(skeletonBoneNum);
+        animationRotationViews.reserve(skeletonBoneNum);
+        animationScaleViews.reserve(skeletonBoneNum);
+        for (std::uint32_t bone = 0; bone < skeletonBoneNum; ++bone) {
+            animationTranslationViews.push_back(AppendToBuffer(
+                buffer, sceneAnimation->Translations[bone].data(),
+                sceneAnimation->Translations[bone].size() * sizeof(float), 0));
+            animationRotationViews.push_back(AppendToBuffer(
+                buffer, sceneAnimation->Rotations[bone].data(),
+                sceneAnimation->Rotations[bone].size() * sizeof(float), 0));
+            animationScaleViews.push_back(AppendToBuffer(
+                buffer, sceneAnimation->Scales[bone].data(),
+                sceneAnimation->Scales[bone].size() * sizeof(float), 0));
+        }
+    }
 
     std::filesystem::path binPath = gltfPath;
     binPath.replace_extension(".bin");
@@ -697,6 +1068,12 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         views.push_back(uvView);
     }
 
+    std::int64_t colorViewIndex = -1;
+    if (hasVertexColors) {
+        colorViewIndex = static_cast<std::int64_t>(views.size());
+        views.push_back(colorView);
+    }
+
     std::int64_t jointsViewIndex = -1;
     std::int64_t weightsViewIndex = -1;
     if (hasSkin) {
@@ -715,9 +1092,35 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     const std::int64_t indexViewIndex = static_cast<std::int64_t>(views.size());
     views.push_back(indexView);
 
+    std::int64_t animationTimeViewIndex = -1;
+    std::vector<std::int64_t> animationTranslationViewIndices;
+    std::vector<std::int64_t> animationRotationViewIndices;
+    std::vector<std::int64_t> animationScaleViewIndices;
+    if (sceneAnimation.has_value()) {
+        animationTimeViewIndex = static_cast<std::int64_t>(views.size());
+        views.push_back(animationTimeView);
+        animationTranslationViewIndices.resize(skeletonBoneNum);
+        animationRotationViewIndices.resize(skeletonBoneNum);
+        animationScaleViewIndices.resize(skeletonBoneNum);
+        for (std::uint32_t bone = 0; bone < skeletonBoneNum; ++bone) {
+            animationTranslationViewIndices[bone] =
+                static_cast<std::int64_t>(views.size());
+            views.push_back(animationTranslationViews[bone]);
+            animationRotationViewIndices[bone] =
+                static_cast<std::int64_t>(views.size());
+            views.push_back(animationRotationViews[bone]);
+            animationScaleViewIndices[bone] =
+                static_cast<std::int64_t>(views.size());
+            views.push_back(animationScaleViews[bone]);
+        }
+    }
+
     std::vector<GltfImage> images;
     std::vector<std::int64_t> materialToImage;
-    CollectImages(obj, textures, gltfPath.parent_path(), images, materialToImage);
+    const std::filesystem::path uriBase = textures.UriBase.empty()
+        ? gltfPath.parent_path()
+        : textures.UriBase;
+    CollectImages(obj, textures, uriBase, images, materialToImage);
 
     JsonWriter json;
     json.BeginObject();
@@ -728,6 +1131,14 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     json.Value("2.0");
     json.Key("generator");
     json.Value("Corsairs AssetConverter");
+    if (assetMetadata.TerrainCoordinateProfile ==
+        GltfTerrainCoordinateProfile::RigidQ) {
+        json.Key("extras");
+        json.BeginObject();
+        json.Key("corsairsTerrainCoordinateProfile");
+        json.Value("RigidQ");
+        json.EndObject();
+    }
     json.EndObject();
 
     json.Key("buffers");
@@ -750,13 +1161,19 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         json.Value(static_cast<std::int64_t>(view.ByteOffset));
         json.Key("byteLength");
         json.Value(static_cast<std::int64_t>(view.ByteLength));
-        json.Key("target");
-        json.Value(view.Target);
+        // target допустим только для ARRAY_BUFFER/ELEMENT_ARRAY_BUFFER.
+        // Generic сохраняет прежние literal bytes; SceneMap для IBM и
+        // animation views корректно опускает отсутствующий target.
+        if (view.Target != 0 || profile == GltfCoordinateProfile::Generic) {
+            json.Key("target");
+            json.Value(view.Target);
+        }
         json.EndObject();
     }
     json.EndArray();
 
-    // Аккессоры в том же порядке: POSITION, [NORMAL], [TEXCOORD_0], индексы.
+    // Аккессоры в том же порядке: POSITION, [NORMAL], [TEXCOORD_0],
+    // [COLOR_0], skin и индексы.
     json.Key("accessors");
     json.BeginArray();
 
@@ -802,10 +1219,28 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         json.EndObject();
     }
 
+    std::int64_t colorAccessor = -1;
+    if (hasVertexColors) {
+        colorAccessor = 1 + (hasNormals ? 1 : 0) + (hasUv ? 1 : 0);
+        json.BeginObject();
+        json.Key("bufferView");
+        json.Value(colorViewIndex);
+        json.Key("componentType");
+        json.Value(kComponentTypeUnsignedByte);
+        json.Key("count");
+        json.Value(static_cast<std::int64_t>(mesh.VertexColors.size()));
+        json.Key("type");
+        json.Value("VEC4");
+        json.Key("normalized");
+        json.Value(true);
+        json.EndObject();
+    }
+
     std::int64_t jointsAccessor = -1;
     std::int64_t weightsAccessor = -1;
     if (hasSkin) {
-        jointsAccessor = 1 + (hasNormals ? 1 : 0) + (hasUv ? 1 : 0);
+        jointsAccessor = 1 + (hasNormals ? 1 : 0) + (hasUv ? 1 : 0) +
+                         (hasVertexColors ? 1 : 0);
         weightsAccessor = jointsAccessor + 1;
 
         json.BeginObject();
@@ -833,7 +1268,8 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
 
     std::int64_t inverseBindAccessor = -1;
     if (hasSkeleton) {
-        inverseBindAccessor = 1 + (hasNormals ? 1 : 0) + (hasUv ? 1 : 0) + 2;
+        inverseBindAccessor = 1 + (hasNormals ? 1 : 0) + (hasUv ? 1 : 0) +
+                              (hasVertexColors ? 1 : 0) + 2;
 
         json.BeginObject();
         json.Key("bufferView");
@@ -851,7 +1287,12 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     // отличаясь byteOffset и count.
     const std::int64_t firstSubsetAccessor =
         1 + (hasNormals ? 1 : 0) + (hasUv ? 1 : 0) + (hasSkin ? 2 : 0) +
-        (hasSkeleton ? 1 : 0);
+        (hasVertexColors ? 1 : 0) + (hasSkeleton ? 1 : 0);
+
+    std::int64_t animationTimeAccessor = -1;
+    std::vector<std::int64_t> animationTranslationAccessors;
+    std::vector<std::int64_t> animationRotationAccessors;
+    std::vector<std::int64_t> animationScaleAccessors;
 
     for (const SubsetInfo& subset : mesh.Subsets) {
         json.BeginObject();
@@ -867,6 +1308,71 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         json.Key("type");
         json.Value("SCALAR");
         json.EndObject();
+    }
+
+    if (sceneAnimation.has_value()) {
+        animationTimeAccessor = firstSubsetAccessor +
+            static_cast<std::int64_t>(mesh.Subsets.size());
+        json.BeginObject();
+        json.Key("bufferView");
+        json.Value(animationTimeViewIndex);
+        json.Key("componentType");
+        json.Value(kComponentTypeFloat);
+        json.Key("count");
+        json.Value(static_cast<std::int64_t>(sceneAnimation->Times.size()));
+        json.Key("type");
+        json.Value("SCALAR");
+        json.Key("min");
+        json.BeginArray();
+        json.Value(static_cast<double>(sceneAnimation->Times.front()));
+        json.EndArray();
+        json.Key("max");
+        json.BeginArray();
+        json.Value(static_cast<double>(sceneAnimation->Times.back()));
+        json.EndArray();
+        json.EndObject();
+
+        animationTranslationAccessors.resize(skeletonBoneNum);
+        animationRotationAccessors.resize(skeletonBoneNum);
+        animationScaleAccessors.resize(skeletonBoneNum);
+        std::int64_t nextAccessor = animationTimeAccessor + 1;
+        for (std::uint32_t bone = 0; bone < skeletonBoneNum; ++bone) {
+            animationTranslationAccessors[bone] = nextAccessor++;
+            json.BeginObject();
+            json.Key("bufferView");
+            json.Value(animationTranslationViewIndices[bone]);
+            json.Key("componentType");
+            json.Value(kComponentTypeFloat);
+            json.Key("count");
+            json.Value(static_cast<std::int64_t>(skeleton->Header.FrameNum));
+            json.Key("type");
+            json.Value("VEC3");
+            json.EndObject();
+
+            animationRotationAccessors[bone] = nextAccessor++;
+            json.BeginObject();
+            json.Key("bufferView");
+            json.Value(animationRotationViewIndices[bone]);
+            json.Key("componentType");
+            json.Value(kComponentTypeFloat);
+            json.Key("count");
+            json.Value(static_cast<std::int64_t>(skeleton->Header.FrameNum));
+            json.Key("type");
+            json.Value("VEC4");
+            json.EndObject();
+
+            animationScaleAccessors[bone] = nextAccessor++;
+            json.BeginObject();
+            json.Key("bufferView");
+            json.Value(animationScaleViewIndices[bone]);
+            json.Key("componentType");
+            json.Value(kComponentTypeFloat);
+            json.Key("count");
+            json.Value(static_cast<std::int64_t>(skeleton->Header.FrameNum));
+            json.Key("type");
+            json.Value("VEC3");
+            json.EndObject();
+        }
     }
     json.EndArray();
 
@@ -1006,6 +1512,10 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
             json.Key("TEXCOORD_0");
             json.Value(uvAccessor);
         }
+        if (hasVertexColors) {
+            json.Key("COLOR_0");
+            json.Value(colorAccessor);
+        }
         if (hasSkin) {
             json.Key("JOINTS_0");
             json.Value(jointsAccessor);
@@ -1045,6 +1555,14 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
         for (std::size_t i = 0; i < 1 + obj.Helper.Dummies.size(); ++i) {
             json.Value(static_cast<std::int64_t>(i + 1));
         }
+        if (hasSkeleton) {
+            const std::size_t firstBoneNode = 2u + obj.Helper.Dummies.size();
+            for (std::uint32_t bone = 0; bone < skeletonBoneNum; ++bone) {
+                if (skeleton->Bones[bone].ParentId == kNoParent) {
+                    json.Value(static_cast<std::int64_t>(firstBoneNode + bone));
+                }
+            }
+        }
         json.EndArray();
         json.Key("matrix");
         json.BeginArray();
@@ -1052,6 +1570,7 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
             json.Value(static_cast<double>(value));
         }
         json.EndArray();
+        WriteLegacyCaptureExtras(json, obj.CaptureBake);
         json.EndObject();
     }
 
@@ -1123,7 +1642,9 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     // пользуется; имя несёт глобальный номер, по которому связь можно
     // восстановить позже.
     if (hasSkeleton) {
-        const std::size_t firstBoneNode = 1 + obj.Helper.Dummies.size();
+        const std::size_t firstBoneNode =
+            (profile == GltfCoordinateProfile::SceneMap ? 2u : 1u) +
+            obj.Helper.Dummies.size();
 
         for (std::uint32_t b = 0; b < skeletonBoneNum; ++b) {
             json.BeginObject();
@@ -1133,7 +1654,15 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
 
             float translation[3]{};
             float rotation[4]{0, 0, 0, 1};
-            BindPoseOf(*skeleton, b, translation, rotation);
+            float scale[3]{1, 1, 1};
+            if (sceneAnimation.has_value()) {
+                std::copy_n(sceneAnimation->Translations[b].data(), 3u, translation);
+                std::copy_n(sceneAnimation->Rotations[b].data(), 4u, rotation);
+                std::copy_n(sceneAnimation->Scales[b].data(), 3u, scale);
+            }
+            else {
+                BindPoseOf(*skeleton, b, translation, rotation);
+            }
 
             json.Key("translation");
             json.BeginArray();
@@ -1148,6 +1677,15 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
                 json.Value(static_cast<double>(value));
             }
             json.EndArray();
+
+            if (sceneAnimation.has_value()) {
+                json.Key("scale");
+                json.BeginArray();
+                for (const float value : scale) {
+                    json.Value(static_cast<double>(value));
+                }
+                json.EndArray();
+            }
 
             // Дети адресуются с учётом смещения: перед костями идут узел меша
             // и точки крепления самой модели.
@@ -1179,7 +1717,7 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
 
         for (std::size_t d = 0; d < skeleton->Dummies.size(); ++d) {
             float matrix[16]{};
-            ConvertMatrixToGltf(skeleton->Dummies[d].Mat, matrix);
+            ConvertMatrixToGltf(skeleton->Dummies[d].Mat, matrix, profile);
 
             json.BeginObject();
             json.Key("name");
@@ -1193,7 +1731,8 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
             json.EndObject();
         }
     }
-    else if (skinPolicy == GltfSkinPolicy::Preserve) {
+    else if (skinPolicy == GltfSkinPolicy::Preserve &&
+             profile == GltfCoordinateProfile::Generic) {
         for (std::size_t i = 0; i < mesh.BoneIndices.size(); ++i) {
             json.BeginObject();
             json.Key("name");
@@ -1204,25 +1743,85 @@ GltfStatus WriteGltf(const LgoGeomObj& obj, const std::filesystem::path& gltfPat
     json.EndArray();
 
     if (hasSkin) {
-        // inverseBindMatrices не указываются намеренно: по спецификации это
-        // необязательное поле, при его отсутствии подразумеваются единичные
-        // матрицы. Настоящие обратные bind-матрицы лежат в .lab.
+        // Плоский Generic skin без skeleton оставляет единичные IBM по
+        // умолчанию. Parsed BONE всегда публикует исходные inverse bind
+        // matrices и полную иерархию.
         json.Key("skins");
         json.BeginArray();
         json.BeginObject();
         json.Key("joints");
         json.BeginArray();
-        const std::size_t firstJointNode = 1 + obj.Helper.Dummies.size();
+        const std::size_t firstJointNode =
+            (profile == GltfCoordinateProfile::SceneMap ? 2u : 1u) +
+            obj.Helper.Dummies.size();
         const std::size_t jointCount =
             hasSkeleton ? skeletonBoneNum : mesh.BoneIndices.size();
         for (std::size_t i = 0; i < jointCount; ++i) {
             json.Value(static_cast<std::int64_t>(firstJointNode + i));
         }
         json.EndArray();
+        if (sceneAnimation.has_value()) {
+            json.Key("skeleton");
+            json.Value(static_cast<std::int64_t>(
+                firstJointNode + sceneAnimation->RootBone));
+        }
         if (hasSkeleton) {
             json.Key("inverseBindMatrices");
             json.Value(inverseBindAccessor);
         }
+        json.EndObject();
+        json.EndArray();
+    }
+
+    if (sceneAnimation.has_value()) {
+        const std::size_t firstBoneNode = 2u + obj.Helper.Dummies.size();
+        json.Key("animations");
+        json.BeginArray();
+        json.BeginObject();
+        json.Key("name");
+        json.Value("legacy_bone");
+
+        json.Key("samplers");
+        json.BeginArray();
+        for (std::uint32_t bone = 0; bone < skeletonBoneNum; ++bone) {
+            const std::array<std::int64_t, 3> outputs{
+                animationTranslationAccessors[bone],
+                animationRotationAccessors[bone],
+                animationScaleAccessors[bone]};
+            for (const std::int64_t outputAccessor : outputs) {
+                json.BeginObject();
+                json.Key("input");
+                json.Value(animationTimeAccessor);
+                json.Key("output");
+                json.Value(outputAccessor);
+                json.Key("interpolation");
+                json.Value("LINEAR");
+                json.EndObject();
+            }
+        }
+        json.EndArray();
+
+        json.Key("channels");
+        json.BeginArray();
+        for (std::uint32_t bone = 0; bone < skeletonBoneNum; ++bone) {
+            constexpr std::array<std::string_view, 3> paths{
+                "translation", "rotation", "scale"};
+            for (std::size_t channel = 0; channel < paths.size(); ++channel) {
+                json.BeginObject();
+                json.Key("sampler");
+                json.Value(static_cast<std::int64_t>(bone) * 3 +
+                           static_cast<std::int64_t>(channel));
+                json.Key("target");
+                json.BeginObject();
+                json.Key("node");
+                json.Value(static_cast<std::int64_t>(firstBoneNode + bone));
+                json.Key("path");
+                json.Value(paths[channel]);
+                json.EndObject();
+                json.EndObject();
+            }
+        }
+        json.EndArray();
         json.EndObject();
         json.EndArray();
     }

@@ -47,7 +47,8 @@ constexpr std::string_view kUsage =
     "--map <path> --database <path> --client-root <path> --alpha <path> "
     "--output <path> --page X Y --require-present-rect X Y Width Height "
     "--max-rss-mib N --max-cache-mib N --max-png-mib N "
-    "--max-height-error-cm N --max-rms-error-cm N";
+    "--max-height-error-cm N --max-rms-error-cm N "
+    "[--coordinate-profile rigid-q]";
 
 enum class JsonType : std::uint32_t {
     OBJECT,
@@ -1770,6 +1771,7 @@ std::optional<TerrainReferenceOptions> ParseTerrainReferenceArguments(
     enum Field : std::size_t { MAP, DATABASE, CLIENT, ALPHA, OUTPUT, PAGE, RECT,
                               RSS, CACHE, PNG, MAX_HEIGHT, RMS, COUNT };
     std::array<bool, COUNT> seen{};
+    bool coordinateProfileSeen = false;
     auto fail = [&](std::string message) -> std::optional<TerrainReferenceOptions> {
         detail = std::move(message);
         return std::nullopt;
@@ -1857,6 +1859,21 @@ std::optional<TerrainReferenceOptions> ParseTerrainReferenceArguments(
             }
             if (field == MAX_HEIGHT) options.Mesh.MaxAbsCm = value;
             else options.Mesh.MaxRmsCm = value;
+        }
+        else if (option == "--coordinate-profile") {
+            if (coordinateProfileSeen) {
+                return fail("duplicate switch --coordinate-profile");
+            }
+            coordinateProfileSeen = true;
+            if (!require(1u)) {
+                return std::nullopt;
+            }
+            if (arguments[index++] != "rigid-q") {
+                return fail(
+                    "--coordinate-profile expects exact value rigid-q");
+            }
+            options.Mesh.CoordinateProfile =
+                TerrainPageCoordinateProfile::RigidQ;
         }
         else {
             return fail(std::format("unknown argument {}", option));
@@ -2200,6 +2217,10 @@ bool ValidateTerrainReferenceOptionsForCommand(
         !std::isfinite(options.Mesh.MaxSharedBoundaryCm) ||
         options.Mesh.MaxAbsCm < 0.0 || options.Mesh.MaxRmsCm < 0.0 ||
         options.Mesh.MaxSharedBoundaryCm != 0.0 ||
+        (options.Mesh.CoordinateProfile !=
+             TerrainPageCoordinateProfile::Task8Legacy &&
+         options.Mesh.CoordinateProfile !=
+             TerrainPageCoordinateProfile::RigidQ) ||
         options.Bake.TestOnlyRemoveCompletedOutput ||
         options.Mesh.TestOnlyWriteGltf) {
         detail = "terrain-reference budget or test seam options are invalid";
@@ -2240,7 +2261,7 @@ std::string ShellQuote(std::string_view value) {
 std::string TerrainReferenceRecoveryCommand(
     const TerrainReferenceOptions& options) {
     constexpr std::size_t mib = 1024u * 1024u;
-    return std::format(
+    std::string command = std::format(
         "nice -n 10 ./tools/AssetConverter/build/AssetConverter "
         "terrain-reference --map {} --database {} --client-root {} "
         "--alpha {} --output {} --page {} {} "
@@ -2259,6 +2280,11 @@ std::string TerrainReferenceRecoveryCommand(
         options.Bake.MaxTextureCacheBytes / mib,
         options.Bake.MaxPngBytes / mib,
         options.Mesh.MaxAbsCm, options.Mesh.MaxRmsCm);
+    if (options.Mesh.CoordinateProfile ==
+        TerrainPageCoordinateProfile::RigidQ) {
+        command += " --coordinate-profile rigid-q";
+    }
+    return command;
 }
 
 std::string JsonQuotedPath(const std::filesystem::path& path) {
@@ -6649,6 +6675,14 @@ int RunTerrainReference(
         : 0u;
     const std::uint64_t expectedMeshSamples =
         meshVerticesPerAxis * meshVerticesPerAxis;
+    const double expectedActorXcm =
+        options.Mesh.CoordinateProfile == TerrainPageCoordinateProfile::RigidQ
+            ? -static_cast<double>(expectedY) * 100.0
+            : static_cast<double>(expectedX) * 100.0;
+    const double expectedActorYcm =
+        options.Mesh.CoordinateProfile == TerrainPageCoordinateProfile::RigidQ
+            ? static_cast<double>(expectedX) * 100.0
+            : -static_cast<double>(expectedY) * 100.0;
     if (expectedX > UINT32_MAX || expectedY > UINT32_MAX ||
         expectedPixels > UINT32_MAX ||
         products->Bake.SourceCellBounds.X != expectedX ||
@@ -6664,8 +6698,8 @@ int RunTerrainReference(
             *runDirectory / kTerrainReferenceLeaves[6] ||
         !supportedMeshStep ||
         products->Mesh.Error.Samples != expectedMeshSamples ||
-        products->Mesh.ActorWorldXcm != static_cast<double>(expectedX) * 100.0 ||
-        products->Mesh.ActorWorldYcm != -static_cast<double>(expectedY) * 100.0) {
+        products->Mesh.ActorWorldXcm != expectedActorXcm ||
+        products->Mesh.ActorWorldYcm != expectedActorYcm) {
         error << "terrain-reference build metadata does not match request\n";
         return 1;
     }
@@ -6950,6 +6984,10 @@ std::optional<int> TryRunTerrainReferenceSubcommand(
     std::ostream& error) {
     if (arguments.size() < 2u || arguments[1] != "terrain-reference") {
         return std::nullopt;
+    }
+    if (arguments.size() == 3u && arguments[2] == "--help") {
+        output << kUsage << '\n';
+        return 0;
     }
     std::string detail;
     const auto options = ParseTerrainReferenceArguments(arguments.subspan(2u), detail);

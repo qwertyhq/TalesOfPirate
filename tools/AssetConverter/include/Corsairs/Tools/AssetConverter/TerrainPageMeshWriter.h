@@ -21,14 +21,24 @@ struct TerrainMeshError {
 [[nodiscard]] TerrainMeshError EvaluateTerrainPageStep(
     const MapPageTiles& page, std::uint32_t step);
 
+enum class TerrainPageCoordinateProfile : std::uint8_t {
+    // Task8 production contract: local=(x,-y), actor=(pageX,-pageY).
+    Task8Legacy,
+    // Rigid scene basis Q: local=(-y,x), actor=(-pageY,pageX).
+    RigidQ,
+};
+
 struct TerrainPageMeshOptions {
     double MaxAbsCm{5.0};
     double MaxRmsCm{2.0};
     double MaxSharedBoundaryCm{0.0};
+    TerrainPageCoordinateProfile CoordinateProfile{
+        TerrainPageCoordinateProfile::Task8Legacy};
     // Test-only paired writer; empty in production. Its status is advisory:
     // physical pair validation and cleanup remain authoritative.
     std::function<GltfStatus(
-        const LgoGeomObj&, const std::filesystem::path&, std::string&)>
+        const LgoGeomObj&, const std::filesystem::path&, std::string&,
+        const GltfAssetMetadata&)>
         TestOnlyWriteGltf;
 };
 

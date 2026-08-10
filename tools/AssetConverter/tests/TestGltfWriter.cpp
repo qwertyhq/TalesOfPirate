@@ -397,7 +397,7 @@ CORSAIRS_TEST(GltfWriter_GenericProfileKeepsLiteralBytes) {
                std::string{"c6556ee2a67875919aa1bd270fd511caf11710bc516568328feea6862db21057"});
 }
 
-CORSAIRS_TEST(GltfWriter_SceneMapMirrorsStaticPartExactlyOnce) {
+CORSAIRS_TEST(GltfWriter_SceneMapUsesGenericLocalBasis) {
     AC::LgoGeomObj object;
     object.Version = 0x1004u;
     object.Mesh.Positions = {
@@ -448,19 +448,19 @@ CORSAIRS_TEST(GltfWriter_SceneMapMirrorsStaticPartExactlyOnce) {
     REQUIRE_EQ(positions[1].Z, 0.0f);
     REQUIRE_EQ(positions[2].X, 0.0f);
     REQUIRE_EQ(positions[2].Y, 0.0f);
-    REQUIRE_EQ(positions[2].Z, -1.0f);
+    REQUIRE_EQ(positions[2].Z, 1.0f);
     REQUIRE_EQ(normals[0].X, 0.0f);
     REQUIRE_EQ(normals[0].Y, 1.0f);
     REQUIRE_EQ(normals[0].Z, 0.0f);
     REQUIRE_EQ(indices[0], 0u);
-    REQUIRE_EQ(indices[1], 1u);
-    REQUIRE_EQ(indices[2], 2u);
+    REQUIRE_EQ(indices[1], 2u);
+    REQUIRE_EQ(indices[2], 1u);
 
     const auto written = AC::ReadWholeFile(gltfPath);
     REQUIRE(written.has_value());
     const std::string text{reinterpret_cast<const char*>(written->data()), written->size()};
     REQUIRE(text.find(
-        R"("nodes":[{"name":"part_root","children":[1],"matrix":[1,0,0,0,0,1,0,0,0,0,1,0,3,0,-4,1]},{"mesh":0,"name":"mesh"}])") !=
+        R"("nodes":[{"name":"part_root","children":[1],"matrix":[1,0,0,0,0,1,0,0,0,0,1,0,3,0,4,1]},{"mesh":0,"name":"mesh"}])") !=
             std::string::npos);
     REQUIRE(text.find(R"("scenes":[{"nodes":[0]}])") != std::string::npos);
 }
@@ -766,6 +766,40 @@ CORSAIRS_TEST(GltfWriter_EmitsMaterialWithTexture) {
     REQUIRE(text.find(R"("uri":"textures/0066000000.png")") != std::string::npos);
     // Подсет связан с материалом.
     REQUIRE(text.find(R"("material":0)") != std::string::npos);
+}
+
+CORSAIRS_TEST(GltfWriter_TextureUriUsesLogicalBaseDuringModelStaging) {
+    const auto bytes = AC::ReadWholeFile(SampleLgo());
+    REQUIRE(bytes.has_value());
+    AC::LgoDiagnostics diag;
+    const auto object = AC::ParseLgo(*bytes, diag);
+    REQUIRE(object.has_value());
+
+    const std::filesystem::path logicalRoot = OutputDir() / "logical-model";
+    const std::filesystem::path stage = logicalRoot / ".model-stage";
+    std::filesystem::create_directories(stage);
+    const std::filesystem::path gltfPath = stage / "model.gltf";
+
+    AC::GltfTextureOptions options;
+    options.ResolvedTextures.resize(1);
+    options.ResolvedTextures[0].push_back(
+        std::filesystem::path{CORSAIRS_REPO_ROOT} / "Client" / "texture" /
+        "character" / "0066000000.png");
+    options.CopyTo = logicalRoot / "textures";
+    options.UriBase = logicalRoot;
+
+    std::string detail;
+    REQUIRE_EQ(static_cast<std::uint32_t>(
+                   AC::WriteGltf(*object, gltfPath, detail, options)),
+               static_cast<std::uint32_t>(AC::GltfStatus::OK));
+    const auto written = AC::ReadWholeFile(gltfPath);
+    REQUIRE(written.has_value());
+    const std::string text{
+        reinterpret_cast<const char*>(written->data()), written->size()};
+    REQUIRE(text.find(R"("uri":"textures/0066000000.png")") !=
+            std::string::npos);
+    REQUIRE(text.find(R"("uri":"../textures/0066000000.png")") ==
+            std::string::npos);
 }
 
 CORSAIRS_TEST(GltfWriter_EmitsMaterialWithoutTextureWhenUnresolved) {

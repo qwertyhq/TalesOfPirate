@@ -492,18 +492,22 @@ bool IsPhysicalRegularFile(const std::filesystem::path& path,
     return true;
 }
 
-LgoGeomObj MakeGltfMesh(const BuiltPageMesh& mesh) {
+LgoGeomObj MakeGltfMesh(
+    const BuiltPageMesh& mesh,
+    TerrainPageCoordinateProfile coordinateProfile) {
     LgoGeomObj object;
     object.Version = 0x1004u;
     object.Mesh.Positions.reserve(mesh.Vertices.size());
     object.Mesh.Normals.reserve(mesh.Vertices.size());
     object.Mesh.Texcoords[0].reserve(mesh.Vertices.size());
     for (const SourceVertex& vertex : mesh.Vertices) {
-        object.Mesh.Positions.push_back(Vector3{
-            static_cast<float>(vertex.X),
-            -static_cast<float>(vertex.Y),
-            static_cast<float>(vertex.HeightCm / 100.0),
-        });
+        const float x = static_cast<float>(vertex.X);
+        const float y = static_cast<float>(vertex.Y);
+        const float height = static_cast<float>(vertex.HeightCm / 100.0);
+        object.Mesh.Positions.push_back(
+            coordinateProfile == TerrainPageCoordinateProfile::RigidQ
+                ? Vector3{-y, x, height}
+                : Vector3{x, -y, height});
         object.Mesh.Normals.push_back(Vector3{0.0f, 0.0f, 1.0f});
         object.Mesh.Texcoords[0].push_back(Vector2{
             static_cast<float>(vertex.X) / static_cast<float>(kCellsPerPage),
@@ -513,8 +517,16 @@ LgoGeomObj MakeGltfMesh(const BuiltPageMesh& mesh) {
     object.Mesh.Indices.reserve(mesh.Triangles.size() * 3u);
     for (const SourceTriangle& triangle : mesh.Triangles) {
         object.Mesh.Indices.push_back(triangle.A);
-        object.Mesh.Indices.push_back(triangle.B);
-        object.Mesh.Indices.push_back(triangle.C);
+        if (coordinateProfile == TerrainPageCoordinateProfile::RigidQ) {
+            // Q сохраняет handedness raw map plane; preflip компенсирует
+            // обязательную Generic source->glTF смену winding.
+            object.Mesh.Indices.push_back(triangle.C);
+            object.Mesh.Indices.push_back(triangle.B);
+        }
+        else {
+            object.Mesh.Indices.push_back(triangle.B);
+            object.Mesh.Indices.push_back(triangle.C);
+        }
     }
     object.Mesh.Header.Fvf =
         static_cast<std::uint32_t>(FvfFlag::NORMAL) |
@@ -601,6 +613,11 @@ TerrainPageMeshResult WriteTerrainPageMesh(
         !IsFiniteNonnegative(options.MaxSharedBoundaryCm)) {
         return fail("terrain mesh error limits должны быть finite и nonnegative");
     }
+    if (options.CoordinateProfile !=
+            TerrainPageCoordinateProfile::Task8Legacy &&
+        options.CoordinateProfile != TerrainPageCoordinateProfile::RigidQ) {
+        return fail("неизвестный terrain coordinate profile");
+    }
 
     constexpr std::uint64_t cells = kCellsPerPage;
     const std::uint64_t expectedX =
@@ -664,10 +681,19 @@ TerrainPageMeshResult WriteTerrainPageMesh(
     }
 
     writeAttemptStarted = true;
-    const LgoGeomObj object = MakeGltfMesh(*selectedMesh);
+    const LgoGeomObj object = MakeGltfMesh(
+        *selectedMesh, options.CoordinateProfile);
+    GltfAssetMetadata assetMetadata;
+    if (options.CoordinateProfile == TerrainPageCoordinateProfile::RigidQ) {
+        assetMetadata.TerrainCoordinateProfile =
+            GltfTerrainCoordinateProfile::RigidQ;
+    }
     const GltfStatus status = options.TestOnlyWriteGltf
-        ? options.TestOnlyWriteGltf(object, gltfPath, detail)
-        : WriteGltf(object, gltfPath, detail);
+        ? options.TestOnlyWriteGltf(
+              object, gltfPath, detail, assetMetadata)
+        : WriteGltf(object, gltfPath, detail, {}, nullptr,
+                    GltfCoordinateProfile::Generic,
+                    GltfSkinPolicy::Preserve, assetMetadata);
     if (status != GltfStatus::OK) {
         return fail("WriteGltf не записал terrain mesh pair");
     }
@@ -690,8 +716,14 @@ TerrainPageMeshResult WriteTerrainPageMesh(
     result.Error = selectedError;
     result.GltfPath = gltfPath;
     result.BinPath = binPath;
-    result.ActorWorldXcm = static_cast<double>(page.Cells.X) * 100.0;
-    result.ActorWorldYcm = -static_cast<double>(page.Cells.Y) * 100.0;
+    if (options.CoordinateProfile == TerrainPageCoordinateProfile::RigidQ) {
+        result.ActorWorldXcm = -static_cast<double>(page.Cells.Y) * 100.0;
+        result.ActorWorldYcm = static_cast<double>(page.Cells.X) * 100.0;
+    }
+    else {
+        result.ActorWorldXcm = static_cast<double>(page.Cells.X) * 100.0;
+        result.ActorWorldYcm = -static_cast<double>(page.Cells.Y) * 100.0;
+    }
     detail.clear();
     return result;
 }
