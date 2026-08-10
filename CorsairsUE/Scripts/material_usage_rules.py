@@ -8,7 +8,7 @@ def required_usages(component_kind, nanite_enabled, blend_mode):
         required.add("instanced_static_meshes")
     if not nanite_enabled:
         return required
-    if blend_mode == "translucent":
+    if blend_mode not in ("opaque", "masked"):
         required.add("disallow_nanite")
     else:
         required.add("nanite")
