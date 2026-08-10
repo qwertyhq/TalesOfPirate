@@ -908,10 +908,12 @@ LegacyMaterialStatus ResolveLegacyMaterial(
         if (!hasBlendPair || output.SrcBlend != 2u || output.DestBlend != 2u) {
             return rejectBlendPair();
         }
-        if (output.AlphaTestEnabled) {
-            detail = "alpha test и additive blend включены одновременно";
-            return LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE;
-        }
+        // Оригинальный движок допускает alpha test вместе с additive
+        // blending: lwMtlTexAgent::BeginSet применяет все render state
+        // из файла без отсева, а в DX9 тест отсекает пиксели до
+        // смешивания (sources/Engine/Resource/ResourceMgr.cpp:1786).
+        // Для additive-режима отброшенные пиксели и так несли бы
+        // почти нулевой вклад, поэтому режим остаётся Additive.
         output.Mode = LegacyMaterialMode::Additive;
         output.AlphaBlendEnabled = true;
         break;
@@ -920,28 +922,41 @@ LegacyMaterialStatus ResolveLegacyMaterial(
         if (!hasBlendPair || output.SrcBlend != 1u || output.DestBlend != 4u) {
             return rejectBlendPair();
         }
-        if (output.AlphaTestEnabled) {
-            detail = "alpha test и subtractive blend включены одновременно";
-            return LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE;
-        }
+        // То же рассуждение, что и для ADDITIVE: subtractive и alpha
+        // test в оригинале совместимы.
         output.Mode = LegacyMaterialMode::Subtractive;
         output.AlphaBlendEnabled = true;
         break;
 
     case 0u: {
-        if (hasBlendPair &&
+        // FILTER не трогает blend-состояния из файла: пара ONE/ONE,
+        // записанная в материале, остаётся в силе и рендерит
+        // аддитивно. Значит такой материал по смыслу — additive.
+        const bool explicitAdditive =
+            hasBlendPair && output.SrcBlend == 2u && output.DestBlend == 2u;
+        if (hasBlendPair && !explicitAdditive &&
             (output.SrcBlend != 5u || output.DestBlend != 6u)) {
             return rejectBlendPair();
         }
 
         const bool opacityBlend = !hasBlendPair && material.Opacity < 1.0f;
         const bool blendEnabled = hasBlendPair || opacityBlend;
-        if (output.AlphaTestEnabled && blendEnabled) {
-            detail = "alpha test и alpha blend включены одновременно";
-            return LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE;
+        // Alpha test и alpha blend в оригинале тоже совместимы: DX9
+        // сначала отсекает пиксели тестом, затем смешивает оставшиеся.
+        // У родительского материала alpha нет discard-графа, поэтому
+        // пиксели ниже порога смешатся, а не пропадут — вклад почти
+        // нулевой, режим остаётся Alpha.
+        if (output.AlphaTestEnabled && !explicitAdditive && blendEnabled) {
+            output.Mode = LegacyMaterialMode::Alpha;
+            output.AlphaBlendEnabled = true;
+            break;
         }
 
-        if (hasBlendPair) {
+        if (explicitAdditive) {
+            output.Mode = LegacyMaterialMode::Additive;
+            output.AlphaBlendEnabled = true;
+        }
+        else if (hasBlendPair) {
             output.Mode = LegacyMaterialMode::Alpha;
             output.AlphaBlendEnabled = true;
         }

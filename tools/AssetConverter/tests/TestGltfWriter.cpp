@@ -106,7 +106,7 @@ CORSAIRS_TEST(LegacyMaterialResolver_ResolvesFiveLiteralModes) {
         std::uint32_t DestBlend;
     };
 
-    const std::array<Case, 5> cases{{
+    const std::array<Case, 11> cases{{
         {MaterialWithStates(0u, 0u, 1.0f, {{15u, 0u}, {27u, 0u}}),
          AC::LegacyMaterialMode::Opaque, false, 0u, 0u, false, 0u, 0u},
         {MaterialWithStates(0u, 0u, 1.0f,
@@ -118,6 +118,34 @@ CORSAIRS_TEST(LegacyMaterialResolver_ResolvesFiveLiteralModes) {
          AC::LegacyMaterialMode::Additive, false, 0u, 0u, true, 2u, 2u},
         {MaterialWithStates(2u, 5u, 1.0f, {{19u, 1u}, {20u, 4u}}),
          AC::LegacyMaterialMode::Subtractive, false, 0u, 0u, true, 1u, 4u},
+        // Alpha test совместим со смешиванием: оригинальный движок
+        // применяет все render state из файла без отсева
+        // (source/Engine/Resource/ResourceMgr.cpp, lwMtlTexAgent::BeginSet).
+        {MaterialWithStates(1u, 1u, 1.0f,
+                            {{15u, 1u}, {25u, 5u}, {24u, 129u},
+                             {19u, 2u}, {20u, 2u}}),
+         AC::LegacyMaterialMode::Additive, true, 129u, 5u, true, 2u, 2u},
+        {MaterialWithStates(2u, 5u, 1.0f,
+                            {{15u, 1u}, {25u, 5u}, {24u, 100u},
+                             {19u, 1u}, {20u, 4u}}),
+         AC::LegacyMaterialMode::Subtractive, true, 100u, 5u, true, 1u, 4u},
+        // FILTER не перекрывает blend-пару из файла: ONE/ONE срабатывает
+        // аддитивно (см. lwMtlTexAgent::BeginSet, ветка transp_type == FILTER).
+        {MaterialWithStates(0u, 0u, 1.0f, {{27u, 1u}, {19u, 2u}, {20u, 2u}}),
+         AC::LegacyMaterialMode::Additive, false, 0u, 0u, true, 2u, 2u},
+        {MaterialWithStates(0u, 0u, 1.0f,
+                            {{15u, 1u}, {25u, 5u}, {24u, 129u},
+                             {27u, 1u}, {19u, 2u}, {20u, 2u}}),
+         AC::LegacyMaterialMode::Additive, true, 129u, 5u, true, 2u, 2u},
+        {MaterialWithStates(0u, 0u, 1.0f,
+                            {{15u, 1u}, {25u, 5u}, {24u, 129u},
+                             {19u, 5u}, {20u, 6u}}),
+         AC::LegacyMaterialMode::Alpha, true, 129u, 5u, true, 5u, 6u},
+        // Прозрачность по opacity ниже единицы одновременно с alpha
+        // test — тоже легальная комбинация оригинального движка.
+        {MaterialWithStates(0u, 0u, 0.5f,
+                            {{15u, 1u}, {25u, 5u}, {24u, 129u}}),
+         AC::LegacyMaterialMode::Alpha, true, 129u, 5u, true, 0u, 0u},
     }};
 
     for (const Case& testCase : cases) {
@@ -144,9 +172,6 @@ CORSAIRS_TEST(LegacyMaterialResolver_ResolvesFiveLiteralModes) {
 CORSAIRS_TEST(LegacyMaterialResolver_RejectsLiteralContradictions) {
     auto conflicting = MaterialWithStates(
         0u, 0u, 1.0f, {{19u, 5u}, {19u, 2u}, {20u, 6u}});
-    auto maskedAndBlended = MaterialWithStates(
-        0u, 0u, 1.0f,
-        {{15u, 1u}, {25u, 5u}, {24u, 129u}, {19u, 5u}, {20u, 6u}});
     auto unsupportedAlpha = MaterialWithStates(
         0u, 0u, 1.0f, {{15u, 1u}, {25u, 4u}, {24u, 129u}});
     auto unsupportedBlend = MaterialWithStates(
@@ -159,9 +184,8 @@ CORSAIRS_TEST(LegacyMaterialResolver_RejectsLiteralContradictions) {
         const AC::LgoMaterial* Material;
         AC::LegacyMaterialStatus Status;
     };
-    const std::array<Case, 6> cases{{
+    const std::array<Case, 5> cases{{
         {&conflicting, AC::LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE},
-        {&maskedAndBlended, AC::LegacyMaterialStatus::CONTRADICTORY_RENDER_STATE},
         {&unsupportedAlpha, AC::LegacyMaterialStatus::UNSUPPORTED_ALPHA_TEST},
         {&unsupportedBlend, AC::LegacyMaterialStatus::UNSUPPORTED_BLEND_PAIR},
         {&normalizationMismatch,
