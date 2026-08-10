@@ -110,8 +110,7 @@ def report_line(text):
 
 
 def import_texture(png_path):
-    stem = os.path.splitext(os.path.basename(png_path))[0]
-    asset_name = "T_" + stem.replace("garner_page_", "Garner_")
+    """Импортирует PNG и возвращает точно один созданный Texture2D."""
     tools = unreal.AssetToolsHelpers.get_asset_tools()
     task = unreal.AssetImportTask()
     task.filename = png_path
@@ -121,10 +120,15 @@ def import_texture(png_path):
     task.save = True
     tools.import_asset_tasks([task])
     list(task.get_objects())
-    texture = unreal.load_asset(f"{CONTENT_ROOT}/{asset_name}.{asset_name}")
-    if not isinstance(texture, unreal.Texture2D):
-        raise RuntimeError(f"нет Texture2D {asset_name} после импорта {png_path}")
-    return texture
+    created = [
+        unreal.load_asset(str(path))
+        for path in task.get_editor_property("imported_object_paths")
+    ]
+    textures = [asset for asset in created if isinstance(asset, unreal.Texture2D)]
+    if len(textures) != 1:
+        raise RuntimeError(
+            f"импорт {png_path}: Texture2D получено {len(textures)}")
+    return textures[0]
 
 
 def make_page_instance(master, texture, page_x, page_y):

@@ -406,6 +406,7 @@ def place_terrain(report, actors):
             f"в {TERRAIN_ROOT}")
 
     placed = 0
+    baked_count = 0
     without_material = []
     for mesh in sorted(meshes, key=lambda item: item.get_name()):
         actor = actors.spawn_actor_from_class(
@@ -417,6 +418,17 @@ def place_terrain(report, actors):
         actor.static_mesh_component.set_static_mesh(mesh)
         label = f"{TERRAIN_ACTOR_PREFIX}{mesh.get_name()}"
         actor.set_actor_label(label)
+
+        # Запечённое альбедо — основной вариант; dominant-инстанс из таблицы
+        # — резервный fallback на случай отсутствия бейки.
+        suffix = mesh.get_name().rsplit("garner_terrain_", 1)[-1]
+        baked = unreal.load_asset(
+            f"/Game/Terrain/GarnerBlend/MI_Garner_{suffix}")
+        if isinstance(baked, unreal.MaterialInstanceConstant):
+            actor.static_mesh_component.set_material(0, baked)
+            baked_count += 1
+            placed += 1
+            continue
 
         texture_name = tiles.get(mesh.get_name())
         instance_path = (
@@ -433,7 +445,8 @@ def place_terrain(report, actors):
         placed += 1
 
     report.line(
-        f"TERRAIN: pages={placed}/64 withDominantMI={placed - len(without_material)} "
+        f"TERRAIN: pages={placed}/64 bakedMI={baked_count} "
+        f"withDominantMI={placed - baked_count - len(without_material)} "
         f"withoutMI={sorted(without_material)}")
 
 
