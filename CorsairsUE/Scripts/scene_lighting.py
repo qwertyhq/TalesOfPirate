@@ -13,6 +13,8 @@ import sqlite3
 from contextlib import closing
 from typing import Any
 
+from scene_coordinate_basis import source_location_to_ue
+
 
 PAYLOAD_FLOAT_COUNT = 33
 POINT_PAYLOAD_FLOAT_COUNT = 20
@@ -148,7 +150,15 @@ def _ue_direction(value: Any, field: str) -> tuple[float, float, float]:
     length = math.sqrt(x * x + y * y + z * z)
     if length == 0.0:
         raise ValueError(f"{field}: нулевое направление")
-    return x / length, -y / length, z / length
+
+    # Направление поворачивается тем же Q, что и всё остальное в сцене.
+    # Прежде здесь отрицалась ось Y — след старого зеркального базиса, и
+    # после перехода на поворот свет остался бы развёрнутым на девяносто
+    # градусов относительно мира: тени легли бы поперёк улиц.
+    #
+    # Q линеен и без сдвига, поэтому к вектору применяется та же функция,
+    # что и к точке.
+    return source_location_to_ue(x / length, y / length, z / length)
 
 
 def _mode_name(

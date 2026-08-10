@@ -74,11 +74,16 @@ class SceneLightingTests(unittest.TestCase):
         self.assertEqual((0, 0, 0), resolved[0]["diagnostics"]["flags"])
         self.assertIsNone(resolved[0]["diagnostics"]["areaId"])
 
+        # Направление света в данных — (-1, -1, -1) после нормировки. Поворот
+        # Q = (-y, x, z) переводит его в (+a, -a, -a). Прежде здесь стояло
+        # (-a, +a, -a) — результат зеркала (x, -y, z), от которого сцена уже
+        # отказалась; свет оставался развёрнутым на девяносто градусов
+        # относительно всего остального.
         inverse_sqrt_three = 0.5773502691896258
         area_lit = (
             1.0, 1.0, 0.0, 0.0,
             114.0 / 255.0, 148.0 / 255.0, 155.0 / 255.0,
-            -inverse_sqrt_three, inverse_sqrt_three, -inverse_sqrt_three,
+            inverse_sqrt_three, -inverse_sqrt_three, -inverse_sqrt_three,
             1.0, 1.0, 1.0,
             0.0, 0.0, 0.0,
             0.0, 0.0, 0.0,
@@ -116,8 +121,9 @@ class SceneLightingTests(unittest.TestCase):
         self.assertEqual("legacy-area-shade", env_shade_resolution["mode"])
         self.assertEqual((1.0, 1.0, 0.0, 1.0), env_and_shade[:4])
         self.assertEqual((0.0, 0.0, 150.0 / 255.0), env_and_shade[4:7])
+        # То же направление и тот же поворот Q, что и в проверке выше.
         self.assertEqual(
-            (-inverse_sqrt_three, inverse_sqrt_three, -inverse_sqrt_three),
+            (inverse_sqrt_three, -inverse_sqrt_three, -inverse_sqrt_three),
             env_and_shade[7:10],
         )
         self.assertEqual((1.0, 1.0, 1.0), env_and_shade[10:13])

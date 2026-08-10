@@ -48,6 +48,11 @@ void PrintUsage() {
         "                  [--static-reference-pose]\n"
         "                  [--legacy-capture-tick <positive-tick>]\n"
         "  AssetConverter scene-manifest MAP OBJ BASE\n"
+        "  AssetConverter terrain-reference --help\n"
+        "\n"
+        "Terrain-reference собирает эталонную страницу рельефа Garner; ключей у\n"
+        "неё десяток, и все обязательны, поэтому список живёт в её собственной\n"
+        "справке.\n"
         "\n"
         "Рекурсивно обходит входной каталог и конвертирует в glTF 2.0:\n"
         "  .lgo — геометрия, материалы и точки крепления;\n"
@@ -543,6 +548,19 @@ int main(int argc, char** argv) {
             AC::TryRunTerrainReferenceSubcommand(arguments, std::cout, std::cerr);
         terrainReference.has_value()) {
         return *terrainReference;
+    }
+
+    // Справка отвечает раньше проверки числа аргументов. `--help` — это один
+    // аргумент, так что до этой ветки запрос помощи упирался в проверку
+    // «мало аргументов» и уходил с кодом 2, то есть выглядел как ошибка
+    // пользователя и валил любой скрипт, где справку зовут через `set -e`.
+    // Ищется только первый аргумент. Поиск по всему списку превращал бы любой
+    // боевой запуск, где `--help` затесался в хвост, в молчаливое бездействие
+    // с кодом успеха: каталог не сконвертирован, а вызывающий скрипт уверен,
+    // что всё прошло.
+    if (arguments.size() > 1u && arguments[1] == "--help") {
+        PrintUsage();
+        return 0;
     }
 
     if (argc < 3) {
