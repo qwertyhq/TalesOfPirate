@@ -164,4 +164,9 @@ void JsonWriter::Value(bool value) {
     _out += value ? "true" : "false";
 }
 
+void JsonWriter::Null() {
+    Separate();
+    _out += "null";
+}
+
 } // namespace Corsairs::Tools::AssetConverter

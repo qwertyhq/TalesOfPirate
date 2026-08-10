@@ -2,6 +2,7 @@
 
 #include "Corsairs/Tools/AssetConverter/LabTypes.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -60,6 +61,17 @@ struct LabAnimation {
 
 // Имя кости как записано в файле, с ограничением по kMaxName.
 [[nodiscard]] std::string BoneName(const BoneBaseInfo& bone);
+
+// Разбирает BONE body без внешнего DWORD version. Используется как для
+// самостоятельного `.lab`, так и для embedded-контроллера `.lgo/.lmo`.
+// `availableBytes` жёстко ограничивает чтение: функция либо потребляет
+// корректное тело целиком, либо возвращает false, не принимая усечённые или
+// внутренне противоречивые массивы.
+[[nodiscard]] bool ParseBoneAnimationBody(class BinaryReader& reader,
+                                          std::uint32_t version,
+                                          std::size_t availableBytes,
+                                          LabAnimation& animation,
+                                          std::string& detail);
 
 // Разбирает .lab целиком. std::nullopt — файл непригоден; причина в diag.
 [[nodiscard]] std::optional<LabAnimation> ParseLab(std::span<const std::uint8_t> bytes,

@@ -5,9 +5,11 @@
 #include "Corsairs/Tools/AssetConverter/LabParser.h"
 #include "Corsairs/Tools/AssetConverter/LgoParser.h"
 #include "Corsairs/Tools/AssetConverter/LmoParser.h"
+#include "Corsairs/Tools/AssetConverter/LegacySceneBake.h"
 #include "Corsairs/Tools/AssetConverter/MapParser.h"
 #include "Corsairs/Tools/AssetConverter/MapSectionReader.h"
 #include "Corsairs/Tools/AssetConverter/MapWriter.h"
+#include "Corsairs/Tools/AssetConverter/ModelOutputTransaction.h"
 #include "Corsairs/Tools/AssetConverter/SceneParity.h"
 #include "Corsairs/Tools/AssetConverter/Sha256.h"
 #include "Corsairs/Tools/AssetConverter/TerrainMeshWriter.h"
@@ -17,6 +19,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <map>
 #include <optional>
 #include <span>
@@ -43,6 +46,7 @@ void PrintUsage() {
         "                  [--skeletons <каталог-скелетов>]\n"
         "                  [--profile generic|scene-map]\n"
         "                  [--static-reference-pose]\n"
+        "                  [--legacy-capture-tick <positive-tick>]\n"
         "  AssetConverter scene-manifest MAP OBJ BASE\n"
         "\n"
         "Рекурсивно обходит входной каталог и конвертирует в glTF 2.0:\n"
@@ -53,6 +57,8 @@ void PrintUsage() {
         "копируются в <выход>/textures/ с сохранением категорий.\n"
         "С --skeletons модели персонажей получают полную иерархию костей из\n"
         "одноимённого .lab — без этого дорожки анимации к ним не применяются.\n"
+        "Scene-map сохраняет embedded BONE из .lgo/.lmo как skin и animation;\n"
+        "--static-reference-pose оставляет прежний явный статический режим.\n"
         "Код возврата: 0 — все файлы обработаны, 1 — есть ошибки, 2 — неверные аргументы.\n";
 }
 
@@ -219,7 +225,8 @@ bool ConvertModel(const std::filesystem::path& input, const std::filesystem::pat
                   const AC::TextureResolver& resolver,
                   const std::filesystem::path& outputRoot,
                   AC::GltfCoordinateProfile profile,
-                  AC::GltfSkinPolicy skinPolicy) {
+                  AC::GltfSkinPolicy skinPolicy,
+                  std::optional<std::uint32_t> legacyCaptureTick) {
     const std::string relative = relativePath.generic_string();
     const auto bytes = AC::ReadWholeFile(input);
     if (!bytes) {
@@ -228,7 +235,7 @@ bool ConvertModel(const std::filesystem::path& input, const std::filesystem::pat
     }
 
     AC::LgoDiagnostics diag;
-    const auto model = AC::ParseLmo(*bytes, diag);
+    auto model = AC::ParseLmo(*bytes, diag);
     if (!model) {
         report.AddFailure(relative, AC::ToString(diag.Status), diag.Detail);
         return false;
@@ -246,26 +253,48 @@ bool ConvertModel(const std::filesystem::path& input, const std::filesystem::pat
         return false;
     }
 
-    for (std::size_t i = 0; i < model->Objects.size(); ++i) {
-        std::filesystem::path part = output;
-        if (model->Objects.size() > 1) {
-            part.replace_filename(
-                std::format("{}_{}.gltf", output.stem().string(), i));
-        }
-
-        const AC::GltfTextureOptions textures =
-            BuildTextureOptions(model->Objects[i], resolver, relativePath, outputRoot);
-
-        std::string detail;
-        const AC::GltfStatus status =
-            AC::WriteGltf(model->Objects[i], part, detail, textures, nullptr,
-                          profile, skinPolicy);
-        if (status != AC::GltfStatus::OK) {
-            const std::string_view name =
-                status == AC::GltfStatus::EMPTY_MESH ? "EMPTY_MESH" : "WRITE_FAILED";
-            report.AddFailure(relative, name, std::format("объект {}: {}", i, detail));
+    if (legacyCaptureTick.has_value()) {
+        const AC::LegacyBoneCapturePolicy bonePolicy =
+            skinPolicy == AC::GltfSkinPolicy::StaticReferencePose
+                ? AC::LegacyBoneCapturePolicy::StaticReferencePose
+                : AC::LegacyBoneCapturePolicy::PreserveAnimated;
+        std::string bakeDetail;
+        const AC::LegacyBakeStatus bakeStatus =
+            AC::BakeLegacyModelCaptureState(
+                model->Objects, *legacyCaptureTick, bakeDetail, bonePolicy);
+        if (bakeStatus != AC::LegacyBakeStatus::OK) {
+            report.AddFailure(relative, "LEGACY_CAPTURE_FAILED", bakeDetail);
             return false;
         }
+    }
+
+    std::string transactionDetail;
+    const AC::ModelOutputStatus transactionStatus =
+        AC::StageAndPublishModelOutputs(
+            AC::ModelOutputRequest{output, relativePath, model->Objects.size()},
+            [&](std::size_t index, const std::filesystem::path& stagedGltf,
+                std::string& stageDetail) {
+                AC::LgoGeomObj object = model->Objects[index];
+
+                AC::GltfTextureOptions textures = BuildTextureOptions(
+                    object, resolver, relativePath, outputRoot);
+                textures.UriBase = output.parent_path();
+                const AC::LabAnimation* embeddedBone =
+                    profile == AC::GltfCoordinateProfile::SceneMap &&
+                            skinPolicy == AC::GltfSkinPolicy::Preserve &&
+                            object.Animation.Bone.has_value()
+                        ? &*object.Animation.Bone
+                        : nullptr;
+                return AC::WriteGltf(
+                           object, stagedGltf, stageDetail, textures,
+                           embeddedBone, profile, skinPolicy) ==
+                       AC::GltfStatus::OK;
+            },
+            transactionDetail);
+    if (transactionStatus != AC::ModelOutputStatus::OK) {
+        report.AddFailure(relative, "MODEL_TRANSACTION_FAILED",
+                          transactionDetail);
+        return false;
     }
 
     report.AddSuccess(relative, AC::ToString(diag.Status));
@@ -318,7 +347,8 @@ bool ConvertOne(const std::filesystem::path& input, const std::filesystem::path&
                 const AC::TextureResolver& resolver,
                 const std::filesystem::path& outputRoot,
                 AC::GltfCoordinateProfile profile,
-                AC::GltfSkinPolicy skinPolicy) {
+                AC::GltfSkinPolicy skinPolicy,
+                std::optional<std::uint32_t> legacyCaptureTick) {
     const std::string relative = relativePath.generic_string();
 
     const auto bytes = AC::ReadWholeFile(input);
@@ -328,7 +358,7 @@ bool ConvertOne(const std::filesystem::path& input, const std::filesystem::path&
     }
 
     AC::LgoDiagnostics diag;
-    const auto obj = AC::ParseLgo(*bytes, diag);
+    auto obj = AC::ParseLgo(*bytes, diag);
     if (!obj) {
         report.AddFailure(relative, AC::ToString(diag.Status), diag.Detail);
         return false;
@@ -341,10 +371,29 @@ bool ConvertOne(const std::filesystem::path& input, const std::filesystem::path&
         return false;
     }
 
+    if (legacyCaptureTick.has_value()) {
+        const AC::LegacyBoneCapturePolicy bonePolicy =
+            skinPolicy == AC::GltfSkinPolicy::StaticReferencePose
+                ? AC::LegacyBoneCapturePolicy::StaticReferencePose
+                : AC::LegacyBoneCapturePolicy::PreserveAnimated;
+        std::string bakeDetail;
+        if (AC::BakeLegacyCaptureState(
+                *obj, *legacyCaptureTick, bakeDetail, bonePolicy) !=
+            AC::LegacyBakeStatus::OK) {
+            report.AddFailure(relative, "ANIMATION_BAKE_FAILED", bakeDetail);
+            return false;
+        }
+    }
+
     const AC::GltfTextureOptions textures =
         BuildTextureOptions(*obj, resolver, relativePath, outputRoot);
 
-    const AC::LabAnimation* skeleton = FindSkeleton(input, g_skeletonRoot);
+    const AC::LabAnimation* skeleton =
+        profile == AC::GltfCoordinateProfile::SceneMap &&
+                skinPolicy == AC::GltfSkinPolicy::Preserve &&
+                obj->Animation.Bone.has_value()
+            ? &*obj->Animation.Bone
+            : FindSkeleton(input, g_skeletonRoot);
 
     std::string detail;
     const AC::GltfStatus status =
@@ -507,6 +556,7 @@ int main(int argc, char** argv) {
     std::filesystem::path textureRoot;
     AC::GltfCoordinateProfile profile = AC::GltfCoordinateProfile::Generic;
     bool staticReferencePose = false;
+    std::optional<std::uint32_t> legacyCaptureTick;
 
     for (int i = 3; i < argc; ++i) {
         const std::string_view arg{argv[i]};
@@ -538,6 +588,18 @@ int main(int argc, char** argv) {
         else if (arg == "--static-reference-pose") {
             staticReferencePose = true;
         }
+        else if (arg == "--legacy-capture-tick" && i + 1 < argc) {
+            const std::string_view value{argv[++i]};
+            std::uint32_t parsed = 0;
+            const auto result = std::from_chars(
+                value.data(), value.data() + value.size(), parsed);
+            if (result.ec != std::errc{} || result.ptr != value.data() + value.size() ||
+                parsed == 0) {
+                PrintUsage();
+                return 2;
+            }
+            legacyCaptureTick = parsed;
+        }
         else {
             PrintUsage();
             return 2;
@@ -550,6 +612,11 @@ int main(int argc, char** argv) {
     }
 
     if (staticReferencePose && profile != AC::GltfCoordinateProfile::SceneMap) {
+        PrintUsage();
+        return 2;
+    }
+    if (legacyCaptureTick.has_value() &&
+        profile != AC::GltfCoordinateProfile::SceneMap) {
         PrintUsage();
         return 2;
     }
@@ -602,11 +669,11 @@ int main(int argc, char** argv) {
 
         if (isGeometry) {
             ConvertOne(entry.path(), output, relative, report, resolver, outputRoot,
-                       profile, skinPolicy);
+                       profile, skinPolicy, legacyCaptureTick);
         }
         else if (isModel) {
             ConvertModel(entry.path(), output, relative, report, resolver, outputRoot,
-                         profile, skinPolicy);
+                         profile, skinPolicy, legacyCaptureTick);
         }
         else {
             ConvertAnimation(entry.path(), output, relativeText, report);

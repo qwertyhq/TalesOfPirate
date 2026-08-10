@@ -27,6 +27,7 @@ public:
     void Value(double value);
     void Value(std::int64_t value);
     void Value(bool value);
+    void Null();
 
     [[nodiscard]] const std::string& Str() const {
         return _out;

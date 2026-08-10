@@ -11,7 +11,7 @@ namespace Corsairs::Tools::AssetConverter {
 
 namespace {
 
-constexpr std::uint32_t kNoParent = 0xFFFFFFFFu;
+constexpr std::uint32_t kLmoNoParent = 0xFFFFFFFFu;
 
 // Перемножение 4x4 в порядке движка: lwMatrix44Multiply(&out, &a, &b) даёт
 // out = a * b при строчных векторах DirectX, то есть сначала применяется `a`.
@@ -57,7 +57,7 @@ void ResolveModelMatrices(std::vector<LgoGeomObj>& objects) {
             chain.push_back(current);
 
             const std::uint32_t parentId = objects[current].Header.ParentId;
-            if (parentId == kNoParent) {
+            if (parentId == kLmoNoParent) {
                 break;
             }
             const auto it = byId.find(parentId);
@@ -73,7 +73,7 @@ void ResolveModelMatrices(std::vector<LgoGeomObj>& objects) {
             const std::size_t index = *it;
             const std::uint32_t parentId = objects[index].Header.ParentId;
             const auto parent = byId.find(parentId);
-            if (parentId != kNoParent && parent != byId.end() &&
+            if (parentId != kLmoNoParent && parent != byId.end() &&
                 parent->second != index && done[parent->second]) {
                 float composed[16]{};
                 Multiply(objects[index].Header.MatLocal,

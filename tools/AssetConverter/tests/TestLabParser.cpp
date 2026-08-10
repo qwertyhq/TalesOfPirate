@@ -3,8 +3,11 @@
 
 #include "TestHarness.h"
 
+#include <array>
+#include <cstring>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -12,6 +15,27 @@ namespace AC = Corsairs::Tools::AssetConverter;
 
 std::filesystem::path AnimPath(const char* name) {
     return std::filesystem::path{CORSAIRS_REPO_ROOT} / "Client" / "animation" / name;
+}
+
+template <typename T>
+void AppendPod(std::vector<std::uint8_t>& bytes, const T& value) {
+    const std::size_t offset = bytes.size();
+    bytes.resize(offset + sizeof(T));
+    std::memcpy(bytes.data() + offset, &value, sizeof(T));
+}
+
+std::array<float, 16> IdentityMatrix() {
+    return {1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1};
+}
+
+std::array<float, 12> IdentityMatrix43() {
+    return {1, 0, 0,
+            0, 1, 0,
+            0, 0, 1,
+            0, 0, 0};
 }
 
 CORSAIRS_TEST(LabParser_ParsesQuaternionAnimation) {
@@ -101,6 +125,39 @@ CORSAIRS_TEST(LabParser_RejectsOldVersion) {
     REQUIRE(!anim.has_value());
     REQUIRE_EQ(static_cast<std::uint32_t>(diag.Status),
                static_cast<std::uint32_t>(AC::LabStatus::VERSION_UNSUPPORTED));
+}
+
+CORSAIRS_TEST(LabParser_RejectsForwardParentWhoseOwnParentIsOutOfRange) {
+    // Мутация: единый проход проверки и обхода успевает пойти
+    // bone 0 -> bone 1 -> 999 до range-check самой bone 1.
+    std::vector<std::uint8_t> bytes;
+    AppendPod(bytes, std::uint32_t{0x1004u});
+    AppendPod(bytes, AC::BoneInfoHeader{
+        2u, 1u, 0u, static_cast<std::uint32_t>(AC::BoneKeyType::MAT43)});
+
+    AC::BoneBaseInfo first{};
+    first.Id = 0u;
+    first.ParentId = 1u;
+    AppendPod(bytes, first);
+    AC::BoneBaseInfo second{};
+    second.Id = 1u;
+    second.ParentId = 999u;
+    AppendPod(bytes, second);
+
+    const auto identity = IdentityMatrix();
+    AppendPod(bytes, identity);
+    AppendPod(bytes, identity);
+    const auto identity43 = IdentityMatrix43();
+    AppendPod(bytes, identity43);
+    AppendPod(bytes, identity43);
+
+    AC::LabDiagnostics diag;
+    const auto animation = AC::ParseLab(bytes, diag);
+    REQUIRE(!animation.has_value());
+    REQUIRE_EQ(static_cast<std::uint32_t>(diag.Status),
+               static_cast<std::uint32_t>(AC::LabStatus::DATA_MALFORMED));
+    REQUIRE_EQ(diag.Detail,
+               std::string{"кость 1 имеет parentId=999 вне 2 костей"});
 }
 
 } // namespace

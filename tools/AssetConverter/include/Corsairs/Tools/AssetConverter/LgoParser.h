@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Corsairs/Tools/AssetConverter/LabParser.h"
 #include "Corsairs/Tools/AssetConverter/LgoTypes.h"
 
 #include <array>
@@ -27,6 +28,7 @@ enum class LgoStatus : std::uint32_t {
     MESH_BLOCK_MALFORMED,
     HELPER_BLOCK_MALFORMED,
     HELPER_SECTION_UNSUPPORTED,
+    ANIM_BLOCK_MALFORMED,
 };
 
 [[nodiscard]] std::string_view ToString(LgoStatus status);
@@ -126,12 +128,56 @@ struct LgoHelper {
     std::vector<BoundingSphereInfo> BoundingSpheres;
 };
 
+// Embedded-контроллеры из AnimSize геометрической части. Матрицы хранятся в
+// исходной системе координат MindPower3D; writer преобразует уже итоговый
+// baked MatModel ровно один раз.
+struct LgoMatrixAnimation {
+    std::vector<std::array<float, 16>> Frames;
+};
+
+struct LgoTexUvAnimation {
+    std::uint32_t Subset{0};
+    std::uint32_t Stage{0};
+    std::vector<std::array<float, 16>> Frames;
+};
+
+struct LgoEmbeddedAnimation {
+    std::optional<LabAnimation> Bone;
+    std::optional<LgoMatrixAnimation> Matrix;
+    std::vector<LgoTexUvAnimation> TexUv;
+    std::uint32_t BoneDataSize{0};
+    std::uint32_t MaterialOpacityControllerCount{0};
+    std::uint32_t TexImageControllerCount{0};
+};
+
+struct LegacyTexUvSample {
+    std::uint32_t Subset{0};
+    std::uint32_t Stage{0};
+    std::uint32_t FrameCount{0};
+    std::uint32_t SampleFrame{0};
+};
+
+struct LegacyCaptureBakeMetadata {
+    bool Applied{false};
+    std::uint32_t CaptureTick{0};
+    std::uint32_t MatrixFrameCount{0};
+    std::uint32_t MatrixSampleFrame{0};
+    std::vector<LegacyTexUvSample> TexUvSamples;
+    std::uint32_t BoneDataSize{0};
+    std::uint32_t BoneFrameCount{0};
+    std::uint32_t BoneSampleFrame{0};
+    bool BoneStaticReferencePose{false};
+    bool BonePreserveAnimated{false};
+};
+
 struct LgoGeomObj {
     std::uint32_t Version{0};
     GeomObjHeader Header{};
     std::vector<LgoMaterial> Materials;
     LgoMesh Mesh;
     LgoHelper Helper;
+    LgoEmbeddedAnimation Animation;
+    LegacyCaptureBakeMetadata CaptureBake;
 
     // Положение объекта в пространстве модели. Для `.lgo`, где объект один,
     // совпадает с `Header.MatLocal`; для `.lmo` в неё свёрнута цепочка
@@ -147,8 +193,8 @@ struct LgoGeomObj {
 };
 
 // Разбирает .lgo целиком. std::nullopt — файл непригоден; причина в diag.
-// Блок anim пропускается по объявленному размеру: он не нужен для статической
-// геометрии, но его размер участвует в проверке целостности.
+// Embedded BONE/MAT/TEXUV разбираются по declared sizes; неподдержанные
+// MTLOPACITY/TEXIMG учитываются явно и не могут быть молча потеряны при bake.
 [[nodiscard]] std::optional<LgoGeomObj> ParseLgo(std::span<const std::uint8_t> bytes,
                                                  LgoDiagnostics& diag);
 

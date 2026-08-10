@@ -3,6 +3,7 @@
 #include "Corsairs/Tools/AssetConverter/BinaryReader.h"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 
 namespace Corsairs::Tools::AssetConverter {
@@ -20,6 +21,7 @@ std::string_view ToString(LgoStatus status) {
     case LgoStatus::MESH_BLOCK_MALFORMED:     return "MESH_BLOCK_MALFORMED";
     case LgoStatus::HELPER_BLOCK_MALFORMED:   return "HELPER_BLOCK_MALFORMED";
     case LgoStatus::HELPER_SECTION_UNSUPPORTED: return "HELPER_SECTION_UNSUPPORTED";
+    case LgoStatus::ANIM_BLOCK_MALFORMED:     return "ANIM_BLOCK_MALFORMED";
     }
     return "UNKNOWN";
 }
@@ -41,6 +43,12 @@ constexpr std::uint32_t kRsAlphaRef = 24u;
 constexpr std::uint32_t kRsAlphaFunc = 25u;
 constexpr std::uint32_t kRsAlphaBlendEnable = 27u;
 constexpr std::uint32_t kCompareGreater = 5u;
+
+template <std::size_t Size>
+bool AllFinite(const std::array<float, Size>& values) {
+    return std::all_of(values.begin(), values.end(),
+                       [](float value) { return std::isfinite(value); });
+}
 
 struct CanonicalRenderState {
     bool Present{false};
@@ -480,6 +488,274 @@ bool ParseMeshBlock(BinaryReader& reader, std::uint32_t meshSize,
     return true;
 }
 
+bool ParseMatrix43Animation(BinaryReader& reader, std::uint32_t declaredSize,
+                            LgoMatrixAnimation& animation,
+                            LgoDiagnostics& diag) {
+    std::uint32_t frameCount = 0;
+    if (declaredSize < sizeof(frameCount) || !reader.Read(frameCount)) {
+        diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+        diag.Detail = "MAT-контроллер не содержит frameCount";
+        return false;
+    }
+    constexpr std::uint64_t kMatrix43Bytes = sizeof(float) * 12u;
+    const std::uint64_t expected = sizeof(frameCount) +
+        static_cast<std::uint64_t>(frameCount) * kMatrix43Bytes;
+    if (frameCount == 0 || expected != declaredSize) {
+        diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+        diag.Detail = std::format(
+            "MAT frameCount={} даёт {} байт, объявлено {}",
+            frameCount, expected, declaredSize);
+        return false;
+    }
+
+    animation.Frames.resize(frameCount);
+    for (std::uint32_t frame = 0; frame < frameCount; ++frame) {
+        std::array<float, 12> source{};
+        if (!reader.Read(source)) {
+            diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+            diag.Detail = std::format("MAT усечён на frame {}", frame);
+            return false;
+        }
+        if (!AllFinite(source)) {
+            diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+            diag.Detail = std::format("MAT frame {} содержит NaN/Inf", frame);
+            return false;
+        }
+        auto& destination = animation.Frames[frame];
+        destination = {source[0], source[1], source[2], 0.0f,
+                       source[3], source[4], source[5], 0.0f,
+                       source[6], source[7], source[8], 0.0f,
+                       source[9], source[10], source[11], 1.0f};
+    }
+    return true;
+}
+
+bool ParseTexUvAnimation(BinaryReader& reader, std::uint32_t declaredSize,
+                         std::uint32_t subset, std::uint32_t stage,
+                         LgoTexUvAnimation& animation,
+                         LgoDiagnostics& diag) {
+    std::uint32_t frameCount = 0;
+    if (declaredSize < sizeof(frameCount) || !reader.Read(frameCount)) {
+        diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+        diag.Detail = std::format(
+            "TEXUV[{}/{}] не содержит frameCount", subset, stage);
+        return false;
+    }
+    constexpr std::uint64_t kMatrix44Bytes = sizeof(float) * 16u;
+    const std::uint64_t expected = sizeof(frameCount) +
+        static_cast<std::uint64_t>(frameCount) * kMatrix44Bytes;
+    if (frameCount == 0 || expected != declaredSize) {
+        diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+        diag.Detail = std::format(
+            "TEXUV[{}/{}] frameCount={} даёт {} байт, объявлено {}",
+            subset, stage, frameCount, expected, declaredSize);
+        return false;
+    }
+
+    animation.Subset = subset;
+    animation.Stage = stage;
+    animation.Frames.resize(frameCount);
+    if (!reader.ReadArray(animation.Frames.data(), animation.Frames.size())) {
+        diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+        diag.Detail = std::format("TEXUV[{}/{}] содержит усечённые матрицы",
+                                  subset, stage);
+        return false;
+    }
+    for (std::uint32_t frame = 0; frame < frameCount; ++frame) {
+        if (!AllFinite(animation.Frames[frame])) {
+            diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+            diag.Detail = std::format(
+                "TEXUV[{}/{}] frame {} содержит NaN/Inf",
+                subset, stage, frame);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ParseAnimationBlock(BinaryReader& reader, std::uint32_t animSize,
+                         std::uint32_t version, LgoEmbeddedAnimation& animation,
+                         LgoDiagnostics& diag) {
+    const std::size_t blockStart = reader.Offset();
+    animation = {};
+
+    if (version == kLegacyVersion) {
+        std::uint32_t legacyVersion = 0;
+        if (!reader.Read(legacyVersion)) {
+            diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+            diag.Detail = "не прочитана вложенная версия анимации";
+            return false;
+        }
+    }
+
+    std::uint32_t boneSize = 0;
+    std::uint32_t matrixSize = 0;
+    std::array<std::uint32_t, 16> opacitySizes{};
+    std::array<std::uint32_t, 64> texUvSizes{};
+    std::array<std::uint32_t, 64> texImageSizes{};
+    if (!reader.Read(boneSize) || !reader.Read(matrixSize) ||
+        (version >= 0x1005u && !reader.Read(opacitySizes)) ||
+        !reader.Read(texUvSizes) || !reader.Read(texImageSizes)) {
+        diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+        diag.Detail = "усечена таблица размеров embedded animation";
+        return false;
+    }
+
+    std::uint64_t expected = reader.Offset() - blockStart;
+    expected += boneSize;
+    expected += matrixSize;
+    for (const std::uint32_t size : opacitySizes) {
+        expected += size;
+    }
+    for (const std::uint32_t size : texUvSizes) {
+        expected += size;
+    }
+    for (const std::uint32_t size : texImageSizes) {
+        expected += size;
+    }
+    if (expected != animSize) {
+        diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+        diag.Detail = std::format(
+            "таблица контроллеров даёт {} байт, AnimSize={}", expected, animSize);
+        return false;
+    }
+
+    animation.BoneDataSize = boneSize;
+    if (boneSize > 0) {
+        const std::size_t boneStart = reader.Offset();
+        animation.Bone.emplace();
+        std::string boneDetail;
+        if (!ParseBoneAnimationBody(reader, version, boneSize,
+                                    *animation.Bone, boneDetail)) {
+            diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+            diag.Detail = std::format("BONE: {}", boneDetail);
+            return false;
+        }
+        const std::size_t consumedBoneBytes = reader.Offset() - boneStart;
+        if (consumedBoneBytes != boneSize) {
+            diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+            diag.Detail = std::format(
+                "BONE прочитал {} байт, объявлено {}",
+                consumedBoneBytes, boneSize);
+            return false;
+        }
+    }
+
+    if (matrixSize > 0) {
+        animation.Matrix.emplace();
+        if (!ParseMatrix43Animation(reader, matrixSize, *animation.Matrix, diag)) {
+            return false;
+        }
+    }
+
+    for (const std::uint32_t size : opacitySizes) {
+        if (size == 0) {
+            continue;
+        }
+        ++animation.MaterialOpacityControllerCount;
+        if (!reader.Skip(size)) {
+            diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+            diag.Detail = "усечён MTLOPACITY-контроллер";
+            return false;
+        }
+    }
+
+    for (std::size_t index = 0; index < texUvSizes.size(); ++index) {
+        const std::uint32_t size = texUvSizes[index];
+        if (size == 0) {
+            continue;
+        }
+        LgoTexUvAnimation controller;
+        const std::uint32_t subset = static_cast<std::uint32_t>(index / 4u);
+        const std::uint32_t stage = static_cast<std::uint32_t>(index % 4u);
+        if (!ParseTexUvAnimation(reader, size, subset, stage, controller, diag)) {
+            return false;
+        }
+        animation.TexUv.push_back(std::move(controller));
+    }
+
+    for (const std::uint32_t size : texImageSizes) {
+        if (size == 0) {
+            continue;
+        }
+        ++animation.TexImageControllerCount;
+        if (!reader.Skip(size)) {
+            diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+            diag.Detail = "усечён TEXIMG-контроллер";
+            return false;
+        }
+    }
+
+    const std::size_t consumed = reader.Offset() - blockStart;
+    if (consumed != animSize) {
+        diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+        diag.Detail = std::format("прочитано {} байт анимации, объявлено {}",
+                                  consumed, animSize);
+        return false;
+    }
+    return true;
+}
+
+bool ValidateEmbeddedBoneSkin(const LgoGeomObj& object,
+                              LgoDiagnostics& diag) {
+    if (!object.Animation.Bone.has_value()) {
+        return true;
+    }
+
+    const LabAnimation& animation = *object.Animation.Bone;
+    const LgoMesh& mesh = object.Mesh;
+    const std::uint32_t boneNum = animation.Header.BoneNum;
+    if (mesh.Blends.size() != mesh.Positions.size() ||
+        mesh.BoneIndices.empty()) {
+        diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+        diag.Detail = std::format(
+            "BONE имеет skin arrays blends={}, vertices={}, boneIndices={}",
+            mesh.Blends.size(), mesh.Positions.size(), mesh.BoneIndices.size());
+        return false;
+    }
+
+    for (std::size_t local = 0; local < mesh.BoneIndices.size(); ++local) {
+        if (mesh.BoneIndices[local] >= boneNum) {
+            diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+            diag.Detail = std::format(
+                "mesh BoneIndices[{}]={} вне {} BONE bones",
+                local, mesh.BoneIndices[local], boneNum);
+            return false;
+        }
+    }
+
+    for (std::size_t vertex = 0; vertex < mesh.Blends.size(); ++vertex) {
+        float weightSum = 0.0f;
+        for (std::size_t influence = 0; influence < 4; ++influence) {
+            const BlendInfo& blend = mesh.Blends[vertex];
+            if (blend.Index[influence] >= mesh.BoneIndices.size()) {
+                diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+                diag.Detail = std::format(
+                    "mesh blend vertex {} influence {} index {} вне {} local bones",
+                    vertex, influence, blend.Index[influence],
+                    mesh.BoneIndices.size());
+                return false;
+            }
+            if (!std::isfinite(blend.Weight[influence]) ||
+                blend.Weight[influence] < 0.0f) {
+                diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+                diag.Detail = std::format(
+                    "mesh blend vertex {} influence {} имеет weight {}",
+                    vertex, influence, blend.Weight[influence]);
+                return false;
+            }
+            weightSum += blend.Weight[influence];
+        }
+        if (!std::isfinite(weightSum) || weightSum <= 0.0f) {
+            diag.Status = LgoStatus::ANIM_BLOCK_MALFORMED;
+            diag.Detail = std::format("mesh blend vertex {} имеет сумму весов {}",
+                                      vertex, weightSum);
+            return false;
+        }
+    }
+    return true;
+}
+
 // В версиях <= 0x1001 бокс хранился как (точка, размер); приводим к
 // (центр, радиус), как делает движок.
 void ConvertBoxPointSizeToCenterRadius(Box& box) {
@@ -909,10 +1185,14 @@ bool ParseGeomObjBody(BinaryReader& reader, std::uint32_t version,
         }
     }
 
-    if (obj.Header.AnimSize > 0 && !reader.Skip(obj.Header.AnimSize)) {
-        diag.Status = LgoStatus::BLOCK_SIZES_INCONSISTENT;
-        diag.Detail = "блок анимации выходит за границы объекта";
-        return false;
+    if (obj.Header.AnimSize > 0) {
+        if (!ParseAnimationBlock(reader, obj.Header.AnimSize, version,
+                                 obj.Animation, diag)) {
+            return false;
+        }
+        if (!ValidateEmbeddedBoneSkin(obj, diag)) {
+            return false;
+        }
     }
 
     diag.Status = expectedTotal < availableBytes

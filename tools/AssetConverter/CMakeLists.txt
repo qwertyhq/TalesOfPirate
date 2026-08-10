@@ -33,6 +33,8 @@ add_library(AssetConverterLib STATIC
     src/LgoParser.cpp
     src/LabParser.cpp
     src/LmoParser.cpp
+    src/LegacySceneBake.cpp
+    src/ModelOutputTransaction.cpp
     src/MapParser.cpp
     src/MapSectionReader.cpp
     src/TerrainSurface.cpp
@@ -118,6 +120,30 @@ target_compile_definitions(AssetConverterTests
     PRIVATE CORSAIRS_REPO_ROOT="${CORSAIRS_REPO_ROOT}")
 
 add_test(NAME AssetConverterTests COMMAND AssetConverterTests)
+
+# Узкий executable для vertical slice scene tick 120 и embedded BONE. Он
+# намеренно отделён от полного corpus suite: здесь только parser/skeleton и
+# mutation-sensitive scene capture тесты.
+add_executable(AssetConverterTick120Tests
+    tests/TestMain.cpp
+    tests/TestLabParser.cpp
+    tests/TestLgoParser.cpp
+    tests/TestGltfWriter.cpp
+    tests/TestGltfSkeletonWriter.cpp
+    tests/TestLegacySceneBake.cpp
+    tests/TestModelOutputTransaction.cpp
+    tests/TestRigidTerrainBasis.cpp
+    tests/TestTerrainReferenceRigidCli.cpp
+)
+target_link_libraries(AssetConverterTick120Tests PRIVATE AssetConverterLib)
+target_include_directories(AssetConverterTick120Tests PRIVATE tests)
+corsairs_set_target_options(AssetConverterTick120Tests)
+target_compile_definitions(AssetConverterTick120Tests
+    PRIVATE
+        ASSET_CONVERTER_PATH="$<TARGET_FILE:AssetConverter>"
+        CORSAIRS_REPO_ROOT="${CORSAIRS_REPO_ROOT}")
+add_dependencies(AssetConverterTick120Tests AssetConverter)
+add_test(NAME AssetConverterTick120Tests COMMAND AssetConverterTick120Tests)
 
 add_executable(TerrainReferenceCommandTests
     tests/TestMain.cpp

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -63,6 +64,46 @@ void FillLegacyInvalidStates(AC::RenderStateSet2x8& states) {
             value.Value = 0u;
         }
     }
+}
+
+std::vector<std::uint8_t> AnimationOnlyLgo(
+    const std::optional<std::array<float, 12>>& matrix,
+    const std::optional<std::array<float, 16>>& texUv) {
+    constexpr std::uint32_t version = 0x1004u;
+    constexpr std::uint32_t tableSize =
+        sizeof(std::uint32_t) * (2u + 64u + 64u);
+    const std::uint32_t matrixSize = matrix.has_value()
+        ? sizeof(std::uint32_t) + sizeof(*matrix)
+        : 0u;
+    const std::uint32_t texUvSize = texUv.has_value()
+        ? sizeof(std::uint32_t) + sizeof(*texUv)
+        : 0u;
+
+    AC::GeomObjHeader header{};
+    header.MatLocal[0] = 1.0f;
+    header.MatLocal[5] = 1.0f;
+    header.MatLocal[10] = 1.0f;
+    header.MatLocal[15] = 1.0f;
+    header.AnimSize = tableSize + matrixSize + texUvSize;
+
+    std::vector<std::uint8_t> bytes;
+    AppendPod(bytes, version);
+    AppendPod(bytes, header);
+    AppendPod(bytes, std::uint32_t{0u});
+    AppendPod(bytes, matrixSize);
+    std::array<std::uint32_t, 64> texUvSizes{};
+    texUvSizes[0] = texUvSize;
+    AppendPod(bytes, texUvSizes);
+    AppendPod(bytes, std::array<std::uint32_t, 64>{});
+    if (matrix.has_value()) {
+        AppendPod(bytes, std::uint32_t{1u});
+        AppendPod(bytes, *matrix);
+    }
+    if (texUv.has_value()) {
+        AppendPod(bytes, std::uint32_t{1u});
+        AppendPod(bytes, *texUv);
+    }
+    return bytes;
 }
 
 CORSAIRS_TEST(LgoParser_ParsesHeaderOfRealFile) {
@@ -289,6 +330,36 @@ CORSAIRS_TEST(LgoParser_RejectsBlockSizesLargerThanFile) {
     REQUIRE(!obj.has_value());
     REQUIRE_EQ(static_cast<std::uint32_t>(diag.Status),
                static_cast<std::uint32_t>(AC::LgoStatus::BLOCK_SIZES_INCONSISTENT));
+}
+
+CORSAIRS_TEST(LgoParser_RejectsNonFiniteMatController) {
+    std::array<float, 12> matrix{
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        0, 0, 0};
+    matrix[7] = std::numeric_limits<float>::quiet_NaN();
+
+    AC::LgoDiagnostics diag;
+    const auto object = AC::ParseLgo(AnimationOnlyLgo(matrix, std::nullopt), diag);
+    REQUIRE(!object.has_value());
+    REQUIRE_EQ(static_cast<std::uint32_t>(diag.Status),
+               static_cast<std::uint32_t>(AC::LgoStatus::ANIM_BLOCK_MALFORMED));
+}
+
+CORSAIRS_TEST(LgoParser_RejectsNonFiniteTexUvController) {
+    std::array<float, 16> matrix{
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1};
+    matrix[15] = std::numeric_limits<float>::infinity();
+
+    AC::LgoDiagnostics diag;
+    const auto object = AC::ParseLgo(AnimationOnlyLgo(std::nullopt, matrix), diag);
+    REQUIRE(!object.has_value());
+    REQUIRE_EQ(static_cast<std::uint32_t>(diag.Status),
+               static_cast<std::uint32_t>(AC::LgoStatus::ANIM_BLOCK_MALFORMED));
 }
 
 CORSAIRS_TEST(LgoParser_ParsesMeshBlockOfRealFile) {
