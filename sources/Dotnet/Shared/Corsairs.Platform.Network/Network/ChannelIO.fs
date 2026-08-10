@@ -15,11 +15,36 @@ open Corsairs.Platform.Network.Protocol
 type ChannelIO(socket: Socket, handler: IoHandler) =
     static let mutable _generator = 0u
 
+    /// Адрес, который отдаётся, когда удалённая сторона неизвестна:
+    /// сокет уже закрыт либо ещё не подключён.
+    static let unknownEndPoint = IPEndPoint(IPAddress.None, 0)
+
+    /// Снять удалённый адрес с сокета; null — адрес пока недоступен.
+    /// Socket.RemoteEndPoint бросает ObjectDisposedException на закрытом сокете и
+    /// SocketException, пока соединение не установлено (исходящий канал создаётся
+    /// до ConnectAsync). Оба случая означают «адреса нет», а не сбой канала,
+    /// поэтому переводятся в null, а не в исключение у вызывающего.
+    static let tryReadRemoteEndPoint (s: Socket) : IPEndPoint =
+        try
+            match s.RemoteEndPoint with
+            | :? IPEndPoint as ep -> ep
+            | _ -> null
+        with
+        | :? ObjectDisposedException -> null
+        | :? SocketException -> null
+
     let _id = ChannelId_ (Interlocked.Increment(&_generator))
     let mutable _resetOperation = false
     let mutable _disposed = false
     let _stats = ChannelStats()
-    let _remoteEndPoint = lazy (socket.RemoteEndPoint :?> IPEndPoint)
+
+    // Адрес снимается сразу при создании канала, пока сокет заведомо жив.
+    // Ленивое чтение приводило к ObjectDisposedException, когда до первого
+    // обращения соединение успевало оборваться (и Lazy кэшировал исключение).
+    let mutable _remoteEndPoint = tryReadRemoteEndPoint socket
+
+    /// Маркер «удалённый адрес неизвестен».
+    static member UnknownEndPoint = unknownEndPoint
 
     /// Уникальный ID канала.
     member _.Id =  _id
@@ -27,8 +52,19 @@ type ChannelIO(socket: Socket, handler: IoHandler) =
     /// Сокет.
     member _.Socket = socket
 
-    /// Удалённый адрес.
-    member _.RemoteEndPoint = _remoteEndPoint.Value
+    /// Удалённый адрес. Никогда не бросает: для закрытого или ещё не подключённого
+    /// сокета возвращает UnknownEndPoint.
+    member _.RemoteEndPoint : IPEndPoint =
+        match _remoteEndPoint with
+        | null ->
+            // Исходящий канал создаётся до ConnectAsync — адреса при создании ещё нет,
+            // пробуем снять его повторно и запомнить.
+            match tryReadRemoteEndPoint socket with
+            | null -> unknownEndPoint
+            | ep ->
+                _remoteEndPoint <- ep
+                ep
+        | ep -> ep
 
     /// Статистика I/O.
     member _.Stats = _stats
@@ -86,8 +122,8 @@ type ChannelIO(socket: Socket, handler: IoHandler) =
     member _.IsDisposed = Volatile.Read(&_disposed)
 
     [<MethodImpl(MethodImplOptions.Synchronized)>]
-    override _.ToString() =
-        if _disposed then $"Channel#{_id} [disposed]" else $"Channel#{_id} {_remoteEndPoint.Value}"
+    override this.ToString() =
+        if _disposed then $"Channel#{_id} [disposed]" else $"Channel#{_id} {this.RemoteEndPoint}"
 
 /// Интерфейс обработчика I/O-операций.
 /// Реализация — IoHandlerImpl.

@@ -10,6 +10,7 @@
     <ItemGroup>
         <Compile Include="PacketTests.fs" />
         <Compile Include="OperationPoolTests.fs" />
+        <Compile Include="ChannelIOTests.fs" />
         <Compile Include="SystemCommandTests.fs" />
         <Compile Include="CryptoTests.fs" />
         <Compile Include="CommandMessagesTests.fs" />
