@@ -79,13 +79,20 @@ public:
 	// задаёт, сколько сантиметров UE занимает один тайл; при 100 масштаб
 	// получается один к одному.
 	//
-	// Ось Y инвертируется: MindPower3D левосторонняя, UE тоже левосторонняя,
-	// но с другим направлением Y — без инверсии карта окажется зеркальной.
+	// Координаты переводятся жёстким поворотом Q(x, y, z) = (-y, x, z) —
+	// поворотом XY на +90 градусов с определителем +1. Отражения нет:
+	// ориентация плоскости сохраняется, поэтому обход треугольников, знаки
+	// углов и «право/лево» сцены не переворачиваются. Тот же Q действует на
+	// рельеф, персонажей и камеру, эталон — Scripts/scene_coordinate_basis.py.
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	static FVector GetObjectLocation(const FCorsairsPlacedObject& Object,
 									 float UnitsPerTile = 100.0f);
 
-	// Поворот объекта. В файле Yaw хранится в десятых долях градуса.
+	// Поворот объекта вокруг вертикали.
+	//
+	// Yaw в манифесте — целые градусы (не десятые доли). Результат равен
+	// source_yaw - 90: собственный угол легаси-объекта равен θ-180
+	// (sources/Engine/Model/lwObjectMethod.cpp:41), а Q добавляет +90.
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	static FRotator GetObjectRotation(const FCorsairsPlacedObject& Object);
 };

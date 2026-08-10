@@ -101,16 +101,42 @@ bool UCorsairsSceneManifestLibrary::LoadSceneManifest(const FString& FilePath,
 FVector UCorsairsSceneManifestLibrary::GetObjectLocation(const FCorsairsPlacedObject& Object,
 														 float UnitsPerTile)
 {
-	// 100 исходных единиц = один тайл. Y инвертируется: без этого карта
-	// оказывается зеркальной относительно оригинала.
+	// 100 исходных единиц = один тайл; UnitsPerTile задаёт, сколько сантиметров
+	// UE приходится на тайл.
+	//
+	// Базис — жёсткий поворот Q(x, y, z) = (-y, x, z), то есть поворот плоскости
+	// XY на +90 градусов. Это именно поворот, а не отражение: определитель Q
+	// равен +1. Разница принципиальная — у отражения определитель -1, оно
+	// меняет ориентацию плоскости, а вместе с ней обход треугольников, знак
+	// угла и «право/лево» сцены, и каждый потребитель вынужден заводить
+	// встречную компенсацию. Поворот ориентацию сохраняет, поэтому один и тот
+	// же Q применяется ко всему миру без исключений: рельеф
+	// (tools/AssetConverter/src/TerrainPageMeshWriter.cpp:507-510 — вершины,
+	// :719-721 — origin актора), постройки (здесь), персонаж
+	// (FCorsairsCharacterGround::ActorCenter) и камера. Эталон —
+	// CorsairsUE/Scripts/scene_coordinate_basis.py, source_location_to_ue.
 	const float Scale = UnitsPerTile / 100.0f;
-	return FVector(static_cast<float>(Object.X) * Scale,
-				   -static_cast<float>(Object.Y) * Scale,
+	return FVector(-static_cast<float>(Object.Y) * Scale,
+				   static_cast<float>(Object.X) * Scale,
 				   static_cast<float>(Object.HeightOff) * Scale);
 }
 
 FRotator UCorsairsSceneManifestLibrary::GetObjectRotation(const FCorsairsPlacedObject& Object)
 {
-	// Yaw в файле — десятые доли градуса.
-	return FRotator(0.0f, static_cast<float>(Object.Yaw) / 10.0f, 0.0f);
+	// Yaw в манифесте — ЦЕЛЫЕ градусы, а не десятые доли: Angle2Radian(a)
+	// считает a*PI/180 (sources/Engine/Util/MPMath.h), редактор карт крутит
+	// объект шагом 5 и привязывает к сетке как nYaw/45*45
+	// (sources/Client/src/Tools/Editor/MPEditor.cpp:988-1008), а по данным
+	// garner все углы кратны пяти и по модулю 360 дают ровно 72 значения.
+	// Делить на десять нельзя — это сплющивало сцену в диапазон 36 градусов.
+	//
+	// Сдвиг -90 градусов: собственный угол легаси-объекта равен θ-180
+	// (sources/Engine/Model/lwObjectMethod.cpp:41 плюс row-vector раскладка
+	// sources/Engine/Math/lwMath.inl:1484-1489), а поворот Q добавляет +90.
+	// В сумме yaw_ue = source_yaw - 90 — то же, что делает
+	// source_scene_yaw_to_ue в Scripts/scene_coordinate_basis.py.
+	// NormalizeAxis сворачивает результат в (-180, 180], как unwind_degrees там же.
+	return FRotator(0.0f,
+					FRotator::NormalizeAxis(static_cast<float>(Object.Yaw) - 90.0f),
+					0.0f);
 }

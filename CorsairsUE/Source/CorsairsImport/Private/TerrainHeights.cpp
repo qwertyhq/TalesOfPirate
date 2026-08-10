@@ -59,10 +59,14 @@ double UCorsairsTerrainHeights::HeightAt(double WorldX, double WorldY) const
 		return 0.0;
 	}
 
-	// Ось Y инвертирована при размещении мира, поэтому здесь она
-	// разворачивается обратно.
-	const int32 Col = FMath::Clamp(FMath::FloorToInt(WorldX / UnitsPerCell), 0, Side - 1);
-	const int32 Row = FMath::Clamp(FMath::FloorToInt(-WorldY / UnitsPerCell), 0, Side - 1);
+	// Сетка высот проиндексирована исходными координатами карты: столбец —
+	// source X, строка — source Y. Мир построен поворотом Q(x, y) = (-y, x),
+	// значит обратный переход — source X = WorldY, source Y = -WorldX.
+	// Раньше здесь стояла пара к зеркалу (столбец от WorldX, строка от
+	// -WorldY); с Q она давала высоту из точки, отражённой относительно
+	// диагонали.
+	const int32 Col = FMath::Clamp(FMath::FloorToInt(WorldY / UnitsPerCell), 0, Side - 1);
+	const int32 Row = FMath::Clamp(FMath::FloorToInt(-WorldX / UnitsPerCell), 0, Side - 1);
 
 	const uint16 Stored = Cells[Row * Side + Col];
 	const int32 Original = static_cast<int32>(Stored) / HeightScale - HeightBias;
