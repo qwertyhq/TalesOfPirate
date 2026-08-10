@@ -103,8 +103,17 @@ type PlayerChannelIO(socket, ioHandler) =
     let _connectedAt = DateTimeOffset.UtcNow
 
     let _clientIp =
-        let ep = socket.RemoteEndPoint :?> System.Net.IPEndPoint
-        let ipBytes = ep.Address.GetAddressBytes()
+        // Клиент может оборвать соединение сразу после accept — тогда адреса
+        // у сокета уже нет. IP считается неизвестным (0), иначе исключение
+        // вылетает из фабрики каналов прямо в цикл приёма соединений.
+        let ipBytes =
+            try
+                match socket.RemoteEndPoint with
+                | :? System.Net.IPEndPoint as ep -> ep.Address.GetAddressBytes()
+                | _ -> Array.empty
+            with
+            | :? ObjectDisposedException -> Array.empty
+            | :? System.Net.Sockets.SocketException -> Array.empty
 
         if ipBytes.Length >= 4 then
             (uint32 ipBytes[3] <<< 24)
