@@ -494,8 +494,7 @@ def place_static_ism(report, actors, placements):
         transforms = [
             unreal.Transform(
                 unreal.Vector(*placement["location"]),
-                unreal.Rotator(
-                    roll=0.0, pitch=0.0, yaw=placement["yaw"]).quaternion(),
+                unreal.Rotator(roll=0.0, pitch=0.0, yaw=placement["yaw"]),
                 unreal.Vector(1.0, 1.0, 1.0))
             for placement in parts
         ]
