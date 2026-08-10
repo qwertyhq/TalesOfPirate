@@ -70,7 +70,12 @@ struct FCorsairsWorldActor
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
 	FIntPoint Position = FIntPoint::ZeroValue;
 
-	/** Угол поворота в десятых долях градуса, как в протоколе. */
+	/** Угол поворота в целых градусах. Оригинал кладёт пришедшее значение
+	 *  прямо в персонажа (`pCha->setYaw(sAngle)` в NetProtocol.cpp) и
+	 *  переводит в радианы умножением на пи и делением на сто восемьдесят —
+	 *  делителя в этом пути нет. Та же единица у построек и предметов на
+	 *  земле; отдельно стоят только эффекты, где угол хранится в сотых долях
+	 *  радиана. */
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
 	int32 Angle = 0;
 

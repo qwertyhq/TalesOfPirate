@@ -446,9 +446,18 @@ void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 	}
 
 	// ActorCenter переводит source-position через rigid Q=(-y,x).
-	// Source-angle приходит в десятых долях градуса и сохраняется:
-	// mesh у ACorsairsCharacter уже имеет нужный relative yaw -90°.
-	const FRotator Rotation(0.0, static_cast<double>(Actor.Angle) / 10.0, 0.0);
+	//
+	// Угол приходит целыми градусами и кладётся как есть: поправку -90°
+	// уже несёт меш-компонент ACorsairsCharacter, а поворот базиса на +90°
+	// её ровно компенсирует.
+	//
+	// Делителя здесь быть не должно. Оригинал переводит угол в радианы
+	// умножением на пи и делением на сто восемьдесят и ничего не делит
+	// предварительно: `pCha->setYaw(sAngle)` в NetProtocol.cpp кладёт
+	// пришедшее значение прямо в `_nYaw`, а `CCharacter::_UpdateYaw` берёт
+	// его через `Angle2Radian`. Делитель ужимал бы весь круг в 36 градусов,
+	// и каждый встречный смотрел бы почти в одну сторону.
+	const FRotator Rotation(0.0, static_cast<double>(Actor.Angle), 0.0);
 	ACorsairsCharacter* Spawned =
 		SpawnRemoteCharacter(Actor.Position, Rotation);
 	if (Spawned == nullptr)

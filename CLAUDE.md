@@ -147,13 +147,50 @@ dotnet build sources/Dotnet/Servers/Group/Corsairs.GroupServer
 dotnet build sources/Dotnet/Admin/Corsairs.Admin.Web
 ```
 
-### Run .NET servers
+### Запуск связки серверов
+
+Штатный способ — скрипты, а не `dotnet run` вручную. Порядок запуска задан
+зависимостями (Account → Group → Gate → GameServer), а строки подключения
+приходится задавать переменными окружения: в репозитории лежит конфигурация для
+Windows с `Trusted_Connection`, а вне Windows интегрированной аутентификации нет.
+
 ```bash
-dotnet run --project sources/Dotnet/Servers/Account/Corsairs.AccountServer  # TCP:9958, gRPC:15000
-dotnet run --project sources/Dotnet/Servers/Gate/Corsairs.GateServer        # TCP:1973, gRPC:15001
-dotnet run --project sources/Dotnet/Servers/Group/Corsairs.GroupServer      # Gate TCP:9957, Game TCP:9956, gRPC:15002
-dotnet run --project sources/Dotnet/Admin/Corsairs.Admin.Web                # HTTP:5100
+./scripts/dev/setup-database.sh    # разово: схема и учётная запись в MSSQL
+./scripts/dev/run-stack.sh         # сборка и запуск всей связки
+SKIP_BUILD=1 ./scripts/dev/run-stack.sh   # если серверы уже собраны
+./scripts/dev/stop-stack.sh        # остановка
 ```
+
+MSSQL обязателен для Account, Group и GameServer, нативной сборки под macOS не
+существует — он поднимается контейнером `corsairs-mssql` (mssql/server:2022 под
+Rosetta) на порту 1433. Контейнер периодически падает с SIGSEGV; лечится
+`docker start corsairs-mssql`. Если серверы ведут себя как сломанный логин —
+проверять его первым.
+
+`dotnet` не в `PATH`, он лежит в `~/.dotnet/dotnet`; скрипты это учитывают, а
+ручные команды из этого файла — нет.
+
+**Порты.** Клиент подключается только к Gate; остальные — внутренние.
+
+```
+  Client ──1973──> Gate ──1975──> Group ──1978──> Account
+                    ^
+                   1971
+                    |
+                GameServer
+```
+
+| сервер | TCP | gRPC |
+|---|---|---|
+| Gate | 1973 (клиент), 1971 (GameServer) | 15001 |
+| Group | 1975 (от Gate) | 15002 |
+| Account | 1978 (от Group) | 15000 |
+| Admin.Web | HTTP 5100 | — |
+
+Числа взяты из `appsettings.json` каждого сервера и схемы в шапке
+`run-stack.sh`. Прежде здесь стояли 9958/9957/9956 — они не соответствовали
+конфигам, и диагностика по ним уходила в «сервер не слушает порт», хотя сервер
+слушал другой.
 
 ### Tests
 ```bash
