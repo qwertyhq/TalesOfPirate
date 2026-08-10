@@ -73,19 +73,33 @@ TerrainMeshStats WriteTerrainMesh(const MapTerrain& terrain,
                     const std::size_t mapCol = (startCol + col) * options.Step;
                     const std::size_t mapRow = (startRow + row) * options.Step;
 
+                    // Базис мира — жёсткий поворот Q(x, y, z) = (-y, x, z),
+                    // тот же, что кладут TerrainPageMeshWriter (ветка RigidQ
+                    // в MakeGltfMesh) и Scripts/scene_coordinate_basis.py. Ему
+                    // уже подчиняются постройки, персонажи и камера, поэтому
+                    // рельеф обязан считаться так же — иначе земля выходит
+                    // зеркальной относительно города.
+                    //
+                    // Поворот кладётся в сами вершины руками. Запись glTF
+                    // переставляет Y и Z (высота на ось «вверх» спецификации),
+                    // но про базис карты не знает ничего, и импортёр тоже —
+                    // ждать поворота от них нельзя.
+                    //
+                    // Прежний вариант вместо поворота отражал ось строк
+                    // (Y = -mapRow). Отражение — не поворот: определитель
+                    // минус единица, и любая карта, кроме эталонной зоны,
+                    // собиралась с землёй, вывернутой относительно уже
+                    // переведённой на Q расстановки объектов.
                     Vector3 position;
-                    position.X = static_cast<float>(mapCol) * kUnitsPerTile;
-                    // Ось строк инвертируется — ровно как в размещении
-                    // объектов (GetObjectLocation в модуле CorsairsImport).
-                    // Без этого рельеф уехал бы в противоположный по Y угол
-                    // мира, и город повис бы отдельно от своей земли.
-                    position.Y = -static_cast<float>(mapRow) * kUnitsPerTile;
+                    position.X = -static_cast<float>(mapRow) * kUnitsPerTile;
+                    position.Y = static_cast<float>(mapCol) * kUnitsPerTile;
                     position.Z = static_cast<float>(HeightAt(terrain, mapCol, mapRow)) *
                                  kHeightUnit;
                     object.Mesh.Positions.push_back(position);
 
-                    // Нормали вверх по исходной оси высоты: перестановку осей
-                    // сделает общая запись glTF, как и для любой другой модели.
+                    // Нормаль вверх по исходной оси высоты. Q её не трогает
+                    // (Q(0, 0, 1) = (0, 0, 1)), а на ось «вверх» glTF её
+                    // переставит общая запись, как и для любой другой модели.
                     object.Mesh.Normals.push_back(Vector3{0.0f, 0.0f, 1.0f});
 
                     // Развёртка повторяется каждую клетку: конкретная текстура
@@ -107,18 +121,31 @@ TerrainMeshStats WriteTerrainMesh(const MapTerrain& terrain,
                         static_cast<std::uint32_t>((row + 1) * cols + col);
                     const std::uint32_t bottomRight = bottomLeft + 1;
 
-                    // Порядок обхода учитывает инверсию оси строк. Считать
-                    // его надо по векторному произведению: при Y = -row обход
-                    // topLeft → topRight → bottomLeft даёт нормаль вниз, и
-                    // земля пропадает при взгляде сверху, оставаясь видимой
-                    // снизу. Правильный обход — против часовой в плоскости XY.
+                    // Обход развёрнут заранее — второй и третий индекс стоят
+                    // не в том порядке, в каком лежат в плоскости карты.
+                    //
+                    // Запись glTF меняет местами второй и третий индекс
+                    // каждого треугольника безусловно (GltfWriter.cpp, «Смена
+                    // порядка обхода треугольника»). Там это парная операция к
+                    // перестановке Y и Z: такая замена базиса меняет рукость,
+                    // и без разворота обхода лицевая сторона стала бы
+                    // изнанкой. Поворот Q ориентацию плоскости сохраняет и
+                    // компенсации не требует, поэтому разворот приходится
+                    // вносить самому — иначе после записи нормали смотрят
+                    // вниз, и земля пропадает при взгляде сверху, оставаясь
+                    // видимой снизу. Ровно та же предкомпенсация сделана в
+                    // TerrainPageMeshWriter.cpp (ветка RigidQ в MakeGltfMesh).
+                    //
+                    // Прежнее зеркало Y = -mapRow ориентацию переворачивало
+                    // само и разворота обхода не требовало — отсюда и другой
+                    // порядок индексов до перехода на Q.
                     object.Mesh.Indices.push_back(topLeft);
-                    object.Mesh.Indices.push_back(bottomLeft);
                     object.Mesh.Indices.push_back(topRight);
+                    object.Mesh.Indices.push_back(bottomLeft);
 
                     object.Mesh.Indices.push_back(topRight);
-                    object.Mesh.Indices.push_back(bottomLeft);
                     object.Mesh.Indices.push_back(bottomRight);
+                    object.Mesh.Indices.push_back(bottomLeft);
                 }
             }
 

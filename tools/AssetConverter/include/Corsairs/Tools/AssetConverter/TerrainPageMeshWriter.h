@@ -32,6 +32,14 @@ struct TerrainPageMeshOptions {
     double MaxAbsCm{5.0};
     double MaxRmsCm{2.0};
     double MaxSharedBoundaryCm{0.0};
+    // По умолчанию — историческое зеркало, поворот выбирается ключом.
+    // Так задумано: контракт закреплён тестами RigidQIsOptInAndKeepsTask8Default
+    // и DefaultRemainsTask8Legacy.
+    //
+    // Ловушка тут всё же есть: сцена целиком живёт в повороте Q, и страница,
+    // испечённая без ключа, встанет зеркально относительно города. Пока у
+    // зеркала остаются потребители, снимать opt-in нельзя; когда их не
+    // останется — умолчание стоит перевернуть вместе с обоими тестами.
     TerrainPageCoordinateProfile CoordinateProfile{
         TerrainPageCoordinateProfile::Task8Legacy};
     // Test-only paired writer; empty in production. Its status is advisory:

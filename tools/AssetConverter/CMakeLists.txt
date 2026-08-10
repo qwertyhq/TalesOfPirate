@@ -108,6 +108,7 @@ add_executable(AssetConverterTests
     tests/TestTerrainTextureSampling.cpp
     tests/TestTerrainPageBaker.cpp
     tests/TestTerrainPageMeshWriter.cpp
+    tests/TestTerrainMeshWriterBasis.cpp
     tests/TestTerrainReferenceCommand.cpp
 )
 target_link_libraries(AssetConverterTests PRIVATE AssetConverterLib)
@@ -157,6 +158,7 @@ target_compile_definitions(TerrainReferenceCommandTests
         ASSET_CONVERTER_PATH="$<TARGET_FILE:AssetConverter>"
         CORSAIRS_REPO_ROOT="${CORSAIRS_REPO_ROOT}")
 add_dependencies(TerrainReferenceCommandTests AssetConverter)
+add_test(NAME TerrainReferenceCommandTests COMMAND TerrainReferenceCommandTests)
 
 add_executable(
     TerrainPageBudgetProbe
