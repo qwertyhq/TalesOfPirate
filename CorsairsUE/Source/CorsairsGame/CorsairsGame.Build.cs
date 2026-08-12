@@ -20,7 +20,23 @@ public class CorsairsGame : ModuleRules
 			"Json",
 			"JsonUtilities",
 		});
+		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL");
 
 		RuntimeDependencies.Add("$(ProjectDir)/Data/skills.json", StagedFileType.UFS);
+		RuntimeDependencies.Add(
+			"$(ProjectDir)/Data/Heights/garner.height.r16",
+			StagedFileType.UFS);
+		RuntimeDependencies.Add(
+			"$(ProjectDir)/Data/Heights/garner.block.raw",
+			StagedFileType.UFS);
+		RuntimeDependencies.Add(
+			"$(ProjectDir)/Data/Heights/garner.region.raw",
+			StagedFileType.UFS);
+		RuntimeDependencies.Add(
+			"$(ProjectDir)/Data/Heights/garner.terrain.json",
+			StagedFileType.UFS);
+		RuntimeDependencies.Add(
+			"$(ProjectDir)/Data/Heights/garner.runtime.json",
+			StagedFileType.UFS);
 	}
 }

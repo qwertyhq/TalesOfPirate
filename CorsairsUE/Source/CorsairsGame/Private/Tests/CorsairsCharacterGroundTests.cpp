@@ -30,6 +30,20 @@ namespace
 		return Bytes;
 	}
 
+	TArray<uint8> EncodeHeightR16(
+		const std::initializer_list<int32> RawHeights)
+	{
+		TArray<uint8> Bytes;
+		Bytes.Reserve(static_cast<int32>(RawHeights.size()) * 2);
+		for (const int32 RawHeight : RawHeights)
+		{
+			const uint16 Encoded = static_cast<uint16>((RawHeight + 128) * 256);
+			Bytes.Add(static_cast<uint8>(Encoded));
+			Bytes.Add(static_cast<uint8>(Encoded >> 8));
+		}
+		return Bytes;
+	}
+
 	FActorSpawnParameters AlwaysSpawnParameters()
 	{
 		FActorSpawnParameters Parameters;
@@ -50,12 +64,21 @@ namespace
 				(MapName + TEXT(".terrain.json"));
 			BlockPath = Directory /
 				(MapName + TEXT(".block.raw"));
+			RegionPath = Directory /
+				(MapName + TEXT(".region.raw"));
+			HeightPath = Directory /
+				(MapName + TEXT(".height.r16"));
+			RuntimePath = Directory /
+				(MapName + TEXT(".runtime.json"));
 		}
 
 		~FCharacterGroundDiskFixture()
 		{
 			IFileManager::Get().Delete(*MetadataPath, false, true);
 			IFileManager::Get().Delete(*BlockPath, false, true);
+			IFileManager::Get().Delete(*RegionPath, false, true);
+			IFileManager::Get().Delete(*HeightPath, false, true);
+			IFileManager::Get().Delete(*RuntimePath, false, true);
 		}
 
 		bool WriteMetadata(const FString& Text) const
@@ -68,14 +91,67 @@ namespace
 			return FFileHelper::SaveArrayToFile(Bytes, *BlockPath);
 		}
 
+		bool WriteNavigationContract(
+			const TArray<uint8>& BlockBytes,
+			const TArray<uint8>& RegionBytes,
+			const TArray<uint8>& HeightBytes,
+			const FString& MetadataText) const
+		{
+			const FString Contract = FString::Printf(
+				TEXT("{\"schemaVersion\":1,\"map\":\"%s\",\"gridWidth\":1,")
+				TEXT("\"gridHeight\":1,\"files\":{")
+				TEXT("\"height\":{\"name\":\"%s.height.r16\",\"sha256\":\"%s\",\"sizeBytes\":%d},")
+				TEXT("\"block\":{\"name\":\"%s.block.raw\",\"sha256\":\"%s\",\"sizeBytes\":%d},")
+				TEXT("\"region\":{\"name\":\"%s.region.raw\",\"sha256\":\"%s\",\"sizeBytes\":%d},")
+				TEXT("\"terrainMetadata\":{\"name\":\"%s.terrain.json\",\"sha256\":\"%s\",\"sizeBytes\":%d}}}"),
+				*MapName,
+				*MapName,
+				TEXT("96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7"),
+				HeightBytes.Num(),
+				*MapName,
+				TEXT("65b6f0dc207f3311afb8d1c50ccb270a8c48992e7c8bb71104df95213e1a32bc"),
+				BlockBytes.Num(),
+				*MapName,
+				TEXT("47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254"),
+				RegionBytes.Num(),
+				*MapName,
+				TEXT("2a7017327338a5c1e04e8fdf0dce3eb4b2cb9ef8d483fd6d476f2f5a48dafe50"),
+				MetadataText.Len());
+			return FFileHelper::SaveArrayToFile(RegionBytes, *RegionPath) &&
+				FFileHelper::SaveArrayToFile(HeightBytes, *HeightPath) &&
+				FFileHelper::SaveStringToFile(
+					Contract,
+					*RuntimePath,
+					FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		}
+
 		void DeleteBlock() const
 		{
 			IFileManager::Get().Delete(*BlockPath, false, true);
 		}
 
+		bool ReplaceContractText(
+			const FString& Before,
+			const FString& After) const
+		{
+			FString Contract;
+			if (!FFileHelper::LoadFileToString(Contract, *RuntimePath))
+			{
+				return false;
+			}
+			Contract = Contract.Replace(*Before, *After);
+			return FFileHelper::SaveStringToFile(
+				Contract,
+				*RuntimePath,
+				FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		}
+
 		FString MapName;
 		FString MetadataPath;
 		FString BlockPath;
+		FString RegionPath;
+		FString HeightPath;
+		FString RuntimePath;
 	};
 
 	int32 CountMovementBindings(
@@ -119,6 +195,123 @@ namespace
 		}
 		return Count;
 	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsCharacterGroundNavigationTest,
+	"Corsairs.Movement.Ground.NavigationIsStrictAndTraversalAware",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsCharacterGroundNavigationTest::RunTest(const FString&)
+{
+	FCorsairsCharacterGround Ground;
+	FString Error;
+	const TArray<uint8> BlockBytes = MakeRectangularRaster();
+	const TArray<uint8> HeightBytes = EncodeHeightR16({
+		0, 10, 20,
+		20, 0, 0,
+	});
+	const TArray<uint8> RegionBytes = {
+		0x01, 0x00,
+		0x00, 0x00,
+		0x08, 0x00,
+		0x02, 0x00,
+		0x04, 0x00,
+		0x09, 0x00,
+	};
+	TestTrue(
+		TEXT("navigation byte rasters load together"),
+		Ground.LoadRuntimeFromBytes(
+			3, 2, HeightBytes, BlockBytes, RegionBytes, Error));
+	TestTrue(TEXT("navigation is exposed only after both rasters"),
+		Ground.IsNavigationLoaded());
+	TestEqual(
+		TEXT("source bounds use 100-unit tiles"),
+		Ground.GetSourceBounds(),
+		FIntRect(0, 0, 300, 200));
+
+	double HeightCm = 777.0;
+	TestTrue(
+		TEXT("strict surface samples an in-bounds quadrant"),
+		Ground.TrySampleSurface(FVector2d(25.0, 25.0), HeightCm));
+	TestEqual(
+		TEXT("surface uses first source triangle, not block height"),
+		HeightCm,
+		75.0);
+	TestTrue(
+		TEXT("second source triangle is deterministic"),
+		Ground.TrySampleSurface(FVector2d(75.0, 75.0), HeightCm));
+	TestEqual(TEXT("second source triangle height"), HeightCm, 75.0);
+	TestFalse(
+		TEXT("strict surface rejects right edge without four vertices"),
+		Ground.TrySampleSurface(FVector2d(200.0, 0.0), HeightCm));
+	TestFalse(
+		TEXT("strict surface rejects negative fractional coordinate"),
+		Ground.TrySampleSurface(FVector2d(-0.1, 0.0), HeightCm));
+
+	FCorsairsNavigationCell Cell;
+	TestTrue(
+		TEXT("little-endian LAND region is readable"),
+		Ground.TrySampleNavigation(
+			FIntPoint(0, 0), ECorsairsTraversalKind::Land, Cell));
+	TestEqual(TEXT("LAND mask is exact"), Cell.RegionMask, static_cast<uint16>(0x0001));
+	TestFalse(TEXT("LAND traversal passes LAND"), Cell.bBlocked);
+
+	TestTrue(
+		TEXT("sea traversal can inspect LAND"),
+		Ground.TrySampleNavigation(
+			FIntPoint(0, 0), ECorsairsTraversalKind::Sea, Cell));
+	TestTrue(TEXT("sea traversal blocks LAND"), Cell.bBlocked);
+
+	TestTrue(
+		TEXT("sea tile is readable"),
+		Ground.TrySampleNavigation(
+			FIntPoint(100, 0), ECorsairsTraversalKind::Sea, Cell));
+	TestFalse(TEXT("sea traversal passes a region without LAND"), Cell.bBlocked);
+
+	TestTrue(
+		TEXT("bridge tile is readable"),
+		Ground.TrySampleNavigation(
+			FIntPoint(200, 0), ECorsairsTraversalKind::Land, Cell));
+	TestEqual(TEXT("BRIDGE mask is little-endian"), Cell.RegionMask, static_cast<uint16>(0x0008));
+	TestFalse(TEXT("land traversal passes BRIDGE"), Cell.bBlocked);
+
+	TestTrue(
+		TEXT("discretionary traversal reads any known region"),
+		Ground.TrySampleNavigation(
+			FIntPoint(0, 100), ECorsairsTraversalKind::Discretionary, Cell));
+	TestFalse(
+		TEXT("navigation rejects out of bounds"),
+		Ground.TrySampleNavigation(
+			FIntPoint(300, 0), ECorsairsTraversalKind::Land, Cell));
+
+	TArray<uint8> ShortRegion = RegionBytes;
+	ShortRegion.Pop();
+	TestFalse(
+		TEXT("short region raster is rejected"),
+		Ground.LoadRuntimeFromBytes(
+			3, 2, HeightBytes, BlockBytes, ShortRegion, Error));
+	TestFalse(TEXT("failed reload hides all navigation"),
+		Ground.IsNavigationLoaded());
+
+	TArray<uint8> UnknownRegion = RegionBytes;
+	UnknownRegion[8] = 0x80;
+	TestFalse(
+		TEXT("unknown region bits reject the whole raster"),
+		Ground.LoadRuntimeFromBytes(
+			3, 2, HeightBytes, BlockBytes, UnknownRegion, Error));
+	TestFalse(TEXT("unknown region keeps navigation unavailable"),
+		Ground.IsNavigationLoaded());
+
+	TArray<uint8> NonCanonicalHeight = HeightBytes;
+	NonCanonicalHeight[0] = 1;
+	TestFalse(
+		TEXT("non-canonical r16 height is rejected"),
+		Ground.LoadRuntimeFromBytes(
+			3, 2, NonCanonicalHeight, BlockBytes, RegionBytes, Error));
+	TestFalse(TEXT("invalid height keeps runtime surface unavailable"),
+		Ground.IsNavigationLoaded());
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -222,6 +415,14 @@ bool FCorsairsCharacterGroundRejectsInvalidRasterTest::RunTest(const FString&)
 	TestFalse(TEXT("overflow rejection stays unloaded"), Ground.IsLoaded());
 
 	Error.Empty();
+	TestFalse(
+		TEXT("source bounds reject multiplication overflow"),
+		Ground.LoadFromBytes(MAX_int32 / 100 + 1, 1, Empty, Error));
+	TestTrue(
+		TEXT("source bounds overflow is explicit"),
+		Error.Contains(TEXT("source bounds")));
+
+	Error.Empty();
 	AddExpectedError(
 		TEXT("метаданные character ground не найдены"),
 		EAutomationExpectedErrorFlags::Contains,
@@ -244,20 +445,82 @@ bool FCorsairsCharacterGroundProductionFilesTest::RunTest(const FString&)
 	FCorsairsCharacterGround Ground;
 	FString Error;
 	const TArray<uint8> ValidBytes = {0x05, 0x45, 0x85, 0x00};
+	const TArray<uint8> ValidRegion = {0x01, 0x00};
+	const TArray<uint8> ValidHeight = {0x00, 0x00};
+	const FString ValidMetadata =
+		TEXT("{\"gridWidth\":1,\"gridHeight\":1}");
 	TestTrue(
 		TEXT("valid metadata is written"),
-		Fixture.WriteMetadata(
-			TEXT("{\"gridWidth\":1,\"gridHeight\":1}")));
+		Fixture.WriteMetadata(ValidMetadata));
 	TestTrue(
 		TEXT("valid block raster is written"),
 		Fixture.WriteBlock(ValidBytes));
 	TestTrue(
+		TEXT("valid strict navigation contract is written"),
+		Fixture.WriteNavigationContract(
+			ValidBytes, ValidRegion, ValidHeight, ValidMetadata));
+	TestTrue(
 		TEXT("real disk load succeeds"),
 		Ground.Load(Fixture.MapName, Error));
+	TestTrue(
+		TEXT("real disk load exposes navigation"),
+		Ground.IsNavigationLoaded());
 	TestEqual(
 		TEXT("real disk load decodes block byte"),
 		Ground.Sample(FIntPoint(0, 0)).HeightCm,
 		25.0);
+
+	const TArray<uint8> CorruptRegion = {0x02, 0x00};
+	TestTrue(
+		TEXT("same-size corrupt region is written"),
+		FFileHelper::SaveArrayToFile(CorruptRegion, *Fixture.RegionPath));
+	AddExpectedError(
+		Fixture.MapName,
+		EAutomationExpectedErrorFlags::Contains,
+		1);
+	TestFalse(
+		TEXT("same-size region hash mismatch is rejected"),
+		Ground.Load(Fixture.MapName, Error));
+	TestFalse(
+		TEXT("hash mismatch keeps navigation unavailable"),
+		Ground.IsNavigationLoaded());
+	TestTrue(
+		TEXT("valid region is restored"),
+		FFileHelper::SaveArrayToFile(ValidRegion, *Fixture.RegionPath));
+	TArray<uint8> MetadataWithBom = {0xef, 0xbb, 0xbf};
+	FTCHARToUTF8 ValidMetadataUtf8(*ValidMetadata);
+	MetadataWithBom.Append(
+		reinterpret_cast<const uint8*>(ValidMetadataUtf8.Get()),
+		ValidMetadataUtf8.Length());
+	TestTrue(
+		TEXT("same JSON with different raw BOM bytes is written"),
+		FFileHelper::SaveArrayToFile(MetadataWithBom, *Fixture.MetadataPath));
+	TestTrue(
+		TEXT("fixture keeps size equal so raw SHA is the rejecting gate"),
+		Fixture.ReplaceContractText(
+			TEXT("\"sizeBytes\":30}}}"),
+			TEXT("\"sizeBytes\":33}}}")));
+	AddExpectedError(
+		Fixture.MapName,
+		EAutomationExpectedErrorFlags::Contains,
+		1);
+	TestFalse(
+		TEXT("raw metadata hash mismatch is rejected"),
+		Ground.Load(Fixture.MapName, Error));
+	TestTrue(
+		TEXT("metadata rejection reports exact SHA gate"),
+		Error.Contains(TEXT("SHA-256")));
+	TestFalse(
+		TEXT("metadata hash mismatch keeps navigation unavailable"),
+		Ground.IsNavigationLoaded());
+	TestTrue(
+		TEXT("valid raw metadata bytes are restored"),
+		Fixture.WriteMetadata(ValidMetadata));
+	TestTrue(
+		TEXT("valid metadata contract size is restored"),
+		Fixture.ReplaceContractText(
+			TEXT("\"sizeBytes\":33}}}"),
+			TEXT("\"sizeBytes\":30}}}")));
 
 	TestTrue(
 		TEXT("malformed metadata is written"),
@@ -531,7 +794,7 @@ bool FCorsairsCharacterGroundActivationFailureTest::RunTest(const FString&)
 	AddExpectedError(
 		MapName,
 		EAutomationExpectedErrorFlags::Contains,
-		2);
+		3);
 	FCorsairsWorldActor LocalActor;
 	LocalActor.WorldId = 77;
 	LocalActor.Name = TEXT("GroundFailureLocal");
@@ -585,9 +848,9 @@ bool FCorsairsCharacterGroundActivationFailureTest::RunTest(const FString&)
 		CountCharacters(World),
 		1);
 	TestEqual(
-		TEXT("deferred logout leaves session cache intact before tick"),
+		TEXT("new ENTERMAP immediately clears stale session cache"),
 		Session->GetVisibleActors().Num(),
-		1);
+		0);
 	TestEqual(
 		TEXT("logout is not reentrant inside stage callback"),
 		Session->GetStage(),

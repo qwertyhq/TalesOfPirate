@@ -115,6 +115,39 @@ class ManifestFixture:
         self.write_manifest()
         self.target = self.root / "runtime"
         self.target.mkdir()
+        (self.target / "garner.height.r16").write_bytes(b"x")
+        self.runtime_contract_path = self.target / "garner.runtime.json"
+        self.runtime_contract_path.write_text(
+            json.dumps({
+                "schemaVersion": 1,
+                "map": "garner",
+                "gridWidth": 4096,
+                "gridHeight": 4096,
+                "files": {
+                    "height": {
+                        "name": "garner.height.r16",
+                        "sha256": HASH_X,
+                        "sizeBytes": 1,
+                    },
+                    "block": {
+                        "name": "garner.block.raw",
+                        "sha256": HASH_X,
+                        "sizeBytes": 1,
+                    },
+                    "region": {
+                        "name": "garner.region.raw",
+                        "sha256": HASH_X,
+                        "sizeBytes": 1,
+                    },
+                    "terrainMetadata": {
+                        "name": "garner.terrain.json",
+                        "sha256": HASH_X,
+                        "sizeBytes": 1,
+                    },
+                },
+            }, separators=(",", ":")),
+            encoding="utf-8",
+        )
 
     def write_manifest(self):
         self.manifest_path.write_text(
@@ -147,17 +180,64 @@ class RuntimeMapInstallerTests(unittest.TestCase):
         self.assertTrue(
             callable(install_runtime_map_data.compare_deterministic_manifests))
 
-    def test_installs_verified_pair_and_cleans_owned_transaction(self):
+    def test_installs_verified_navigation_triple_and_preserves_height(self):
         fixture = ManifestFixture()
         self.addCleanup(fixture.close)
         result = install_runtime_map_data.install_runtime_map_data(
             fixture.manifest_path, fixture.target)
         self.assertEqual(result, "OK")
         self.assertEqual((fixture.target / "garner.block.raw").read_bytes(), b"x")
+        self.assertEqual((fixture.target / "garner.region.raw").read_bytes(), b"x")
         self.assertEqual((fixture.target / "garner.terrain.json").read_bytes(), b"x")
         self.assertEqual(
             list(fixture.target.glob(".garner-runtime-install*")), [])
-        self.assertFalse((fixture.target / "garner.height.r16").exists())
+        self.assertEqual((fixture.target / "garner.height.r16").read_bytes(), b"x")
+
+    def test_rejects_wrong_tracked_height_before_runtime_mutation(self):
+        fixture = ManifestFixture()
+        self.addCleanup(fixture.close)
+        block = fixture.target / "garner.block.raw"
+        region = fixture.target / "garner.region.raw"
+        metadata = fixture.target / "garner.terrain.json"
+        block.write_bytes(b"old-block")
+        region.write_bytes(b"old-region")
+        metadata.write_bytes(b"old-metadata")
+        (fixture.target / "garner.height.r16").write_bytes(b"wrong-height")
+
+        with self.assertRaises(install_runtime_map_data.InstallError) as caught:
+            install_runtime_map_data.install_runtime_map_data(
+                fixture.manifest_path, fixture.target)
+
+        self.assertIn("runtime height", str(caught.exception))
+        self.assertEqual(block.read_bytes(), b"old-block")
+        self.assertEqual(region.read_bytes(), b"old-region")
+        self.assertEqual(metadata.read_bytes(), b"old-metadata")
+
+    def test_fault_after_region_replace_rolls_back_complete_triple(self):
+        fixture = ManifestFixture()
+        self.addCleanup(fixture.close)
+        block = fixture.target / "garner.block.raw"
+        region = fixture.target / "garner.region.raw"
+        metadata = fixture.target / "garner.terrain.json"
+        block.write_bytes(b"old-block")
+        region.write_bytes(b"old-region")
+        metadata.write_bytes(b"old-metadata")
+        reached = []
+
+        def fail(point):
+            if point == "INSTALL_AFTER_REGION_REPLACE" and not reached:
+                reached.append(point)
+                return "fail"
+            return None
+
+        with self.assertRaises(install_runtime_map_data.InstallError):
+            install_runtime_map_data.install_runtime_map_data(
+                fixture.manifest_path, fixture.target, fault=fail)
+
+        self.assertEqual(reached, ["INSTALL_AFTER_REGION_REPLACE"])
+        self.assertEqual(block.read_bytes(), b"old-block")
+        self.assertEqual(region.read_bytes(), b"old-region")
+        self.assertEqual(metadata.read_bytes(), b"old-metadata")
 
     @unittest.skipIf(os.name == "nt", "POSIX retained-descriptor race fixture")
     def test_exclusive_create_writes_through_retained_descriptor(self):
@@ -518,6 +598,7 @@ class RuntimeMapInstallerTests(unittest.TestCase):
         fixture = ManifestFixture()
         self.addCleanup(fixture.close)
         (fixture.target / "garner.block.raw").write_bytes(b"old-block")
+        (fixture.target / "garner.region.raw").write_bytes(b"old-region")
         (fixture.target / "garner.terrain.json").write_bytes(b"old-meta")
         reached = []
 
