@@ -341,14 +341,17 @@ struct FCorsairsClickIntent
 
 **Behavior:**
 
-- LMB deprojects cursor; character trace uses owned character channel; ground uses `FCorsairsGroundPicker`.
+- LMB deprojects cursor; character trace uses `LineTraceMultiByObjectType` по
+  `ECC_Pawn` и принимает только `ACorsairsCharacter`; ground uses
+  `FCorsairsGroundPicker`.
 - Duplicate exact target inside 100 ms is suppressed.
 - Held LMB after 400 ms switches to StraightOnly and resamples no faster than 500 ms; release stops hold immediately.
 - Active MOVE: latest click overwrites pending intent, exactly one ENDACTION is sent, terminal replans from `Session.GetConfirmedPosition()`.
 - Truncated ARRIVE replans to original requested target.
 - RMB press stores cursor and captures it; only MouseX changes yaw. Release restores visible cursor and exact prior position.
 - RMB shorter/equal 200 ms below drag threshold clears prepared action and requests cancel; drag does not.
-- RMB double-click resets legacy camera yaw; wheel applies original small impulse and clamps profile.
+- RMB double-click resets legacy camera yaw; wheel applies original `0.03`
+  impulse and clamps profile.
 - F1..F12 prepare exact shortcut skill; повторное нажатие того же слота
   идемпотентно оставляет его подготовленным, а короткая RMB отменяет targeting;
   unsupported entry reports reason and sends nothing.

@@ -158,10 +158,11 @@ GROUND_SKILL_READY
 На зажатии ПКМ контроллер временно захватывает и скрывает курсор. На отпускании
 возвращает видимость и прежнюю экранную позицию.
 
-Actor hit-test выполняется по отдельному gameplay trace channel. На нём находятся
-капсулы серверных персонажей, NPC и монстров, но не декоративные mesh-компоненты
-города. Точный miss остаётся miss: никакой screen-space proximity fallback не
-допускается.
+Actor hit-test выполняется `LineTraceMultiByObjectType` по `ECC_Pawn` с
+обязательной фильтрацией до `ACorsairsCharacter`. На нём находятся capsule
+серверных персонажей, NPC и монстров; декоративные mesh-компоненты города имеют
+`NoCollision`. Точный miss остаётся miss: никакой screen-space proximity
+fallback не допускается.
 
 ## Ground pick и проходимость
 
