@@ -45,6 +45,8 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void PawnClientRestart() override;
+	virtual void OnRep_Controller() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 protected:
@@ -57,6 +59,9 @@ protected:
 	TObjectPtr<UCameraComponent> FollowCamera;
 
 private:
+	/** Один раз применяет профиль камеры после появления локального controller. */
+	void ApplyInitialCameraControlRotation();
+
 	/** Передаёт сессии текущую predicted position.
 	 *
 	 *  Сессия сама строит путь от последней подтверждённой сервером точки и
@@ -100,6 +105,7 @@ private:
 	bool bPredictionDisabledWithoutSession = false;
 	bool bPredictionLocked = false;
 	bool bMovementSpeedProtocolErrorReported = false;
+	bool bInitialCameraControlRotationApplied = false;
 	int64 LastMovementAuthorityEpoch = 0;
 
 	float TimeSinceReport = 0.0f;

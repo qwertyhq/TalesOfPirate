@@ -6,7 +6,9 @@
 #include "CorsairsLoginHud.h"
 #include "CorsairsSession.h"
 #include "Components/CapsuleComponent.h"
+#include "Camera/PlayerCameraManager.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
 
 namespace
@@ -134,26 +136,44 @@ void ACorsairsPlayerCharacter::AttachCharacterGround(
 void ACorsairsPlayerCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+	ApplyInitialCameraControlRotation();
+}
+
+void ACorsairsPlayerCharacter::PawnClientRestart()
+{
+	Super::PawnClientRestart();
+	ApplyInitialCameraControlRotation();
+}
+
+void ACorsairsPlayerCharacter::OnRep_Controller()
+{
+	Super::OnRep_Controller();
+	ApplyInitialCameraControlRotation();
+}
+
+void ACorsairsPlayerCharacter::ApplyInitialCameraControlRotation()
+{
+	APlayerController* PlayerController = Cast<APlayerController>(GetController());
+	if (bInitialCameraControlRotationApplied || PlayerController == nullptr ||
+		!PlayerController->IsLocalController())
+	{
+		return;
+	}
 
 	const auto Profile = Corsairs::Game::Camera::LegacyDefaultProfile();
 	const auto Rig = Corsairs::Game::Camera::DeriveRig(Profile, 16.0 / 9.0);
 
-	if (AController* OwningController = GetController())
-	{
-		OwningController->SetControlRotation(FRotator(
-			Rig.PitchDegrees,
-			Profile.InitialYawDegrees,
-			0.0));
+	PlayerController->SetControlRotation(FRotator(
+		Rig.PitchDegrees,
+		Profile.InitialYawDegrees,
+		0.0));
 
-		if (APlayerController* PlayerController = Cast<APlayerController>(OwningController))
-		{
-			if (PlayerController->PlayerCameraManager != nullptr)
-			{
-				PlayerController->PlayerCameraManager->ViewPitchMin = Rig.PitchDegrees;
-				PlayerController->PlayerCameraManager->ViewPitchMax = Rig.PitchDegrees;
-			}
-		}
+	if (PlayerController->PlayerCameraManager != nullptr)
+	{
+		PlayerController->PlayerCameraManager->ViewPitchMin = Rig.PitchDegrees;
+		PlayerController->PlayerCameraManager->ViewPitchMax = Rig.PitchDegrees;
 	}
+	bInitialCameraControlRotationApplied = true;
 }
 
 void ACorsairsPlayerCharacter::EndPlay(
