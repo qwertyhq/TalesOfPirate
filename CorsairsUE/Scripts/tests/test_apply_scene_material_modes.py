@@ -341,6 +341,22 @@ class LegacyUnlitMaterialTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "use vertex color"):
             planner("opaque", 1.0, None, 1)
 
+    def test_master_usage_plan_covers_skeletal_and_only_opaque_nanite(self):
+        expected = {
+            "opaque": {"skeletal_mesh", "nanite"},
+            "masked": {"skeletal_mesh", "nanite"},
+            "alpha": {"skeletal_mesh"},
+            "additive": {"skeletal_mesh"},
+            "subtractive": {"skeletal_mesh"},
+        }
+
+        actual = {
+            mode: material_modes.plan_master_usages(mode)
+            for mode in expected
+        }
+
+        self.assertEqual(expected, actual)
+
     def test_use_vertex_color_readback_requires_exact_binary_value(self):
         validator = getattr(
             material_modes, "validate_use_vertex_color_readback", None)
