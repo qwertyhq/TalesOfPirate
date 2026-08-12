@@ -62,6 +62,21 @@ class SkillCatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_skill_catalog.build_catalog_from_rows([row, dict(row)])
 
+    def test_skill_id_must_fit_uint32_wire_range(self):
+        row = {
+            "id": build_skill_catalog.MAX_SKILL_ID + 1,
+            "name": "Overflow",
+            "tar_type": 1,
+            "helpful": 0,
+            "apply_distance": 1,
+            "apply_target": 1,
+            "apply_type": 1,
+            "radii": 0,
+            "range_val": 0,
+        }
+        with self.assertRaises(ValueError):
+            build_skill_catalog.build_catalog_from_rows([row])
+
     def test_real_database_has_current_skill_census(self):
         catalog = build_skill_catalog.build_catalog(ROOT / "databases" / "gamedata.sqlite")
         self.assertEqual(411, len(catalog["skills"]))

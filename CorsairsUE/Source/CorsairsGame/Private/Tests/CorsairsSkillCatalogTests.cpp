@@ -49,6 +49,7 @@ bool FCorsairsSkillCatalogRejectsInvalidJsonTest::RunTest(const FString&)
 		{TEXT("SkillCatalogDuplicate.json"), TEXT(R"json({"schemaVersion":1,"skills":[{"skillId":1,"name":"A","applyDistance":1,"applyTarget":1,"applyType":1,"helpful":false,"habitatMask":1,"radius":0,"shape":0,"targetMode":"entity"},{"skillId":1,"name":"B","applyDistance":1,"applyTarget":1,"applyType":1,"helpful":false,"habitatMask":1,"radius":0,"shape":0,"targetMode":"entity"}]})json")},
 		{TEXT("SkillCatalogBool.json"), TEXT(R"json({"schemaVersion":1,"skills":[{"skillId":true,"name":"A","applyDistance":1,"applyTarget":1,"applyType":1,"helpful":false,"habitatMask":1,"radius":0,"shape":0,"targetMode":"entity"}]})json")},
 		{TEXT("SkillCatalogTarget.json"), TEXT(R"json({"schemaVersion":1,"skills":[{"skillId":1,"name":"A","applyDistance":1,"applyTarget":1,"applyType":1,"helpful":false,"habitatMask":1,"radius":0,"shape":0,"targetMode":"future"}]})json")},
+		{TEXT("SkillCatalogOverflow.json"), TEXT(R"json({"schemaVersion":1,"skills":[{"skillId":9223372036854775808,"name":"A","applyDistance":1,"applyTarget":1,"applyType":1,"helpful":false,"habitatMask":1,"radius":0,"shape":0,"targetMode":"entity"}]})json")},
 	};
 	for (const TPair<FString, FString>& Fixture : Fixtures)
 	{

@@ -23,6 +23,7 @@ ROW_FIELDS = (
     "radii",
     "range_val",
 )
+MAX_SKILL_ID = 0xFFFFFFFF
 
 
 def target_mode(apply_type):
@@ -41,8 +42,8 @@ def build_catalog_from_rows(rows):
         skill_id = values["id"]
         if isinstance(skill_id, bool) or not isinstance(skill_id, int):
             raise ValueError("skill id must be an integer")
-        if skill_id <= 0:
-            raise ValueError("skill id must be positive")
+        if skill_id <= 0 or skill_id > MAX_SKILL_ID:
+            raise ValueError("skill id must fit the uint32 wire range")
         if skill_id in skill_ids:
             raise ValueError(f"duplicate skill id: {skill_id}")
         skill_ids.add(skill_id)

@@ -55,3 +55,41 @@ Focused Editor automation: `Corsairs.Skill.Catalog` — 3/3 Success, exit 0.
 ## Concerns
 
 - Полный runtime Automation запускал координатор; локально выполнен разрешённый incremental Editor build, GUI/сервер не запускались.
+
+## Fix round 1 — overflow skillId
+
+### RED evidence
+
+Добавлен C++ fixture `SkillCatalogOverflow.json` со значением
+`skillId=9223372036854775808`. До исправления focused suite сообщил:
+
+```text
+Expected 'rejects SkillCatalogOverflow.json' to be false.
+Expected 'error for SkillCatalogOverflow.json' to be false.
+**** TEST COMPLETE. EXIT CODE: -1 ****
+```
+
+### Исправление
+
+- Runtime loader ограничивает `skillId` диапазоном `1..MAX_uint32`, поэтому JSON-число выше wire-диапазона отклоняется до преобразования в `int64`.
+- Python exporter применяет тот же `uint32` предел; добавлен regression test для `MAX_SKILL_ID + 1`.
+
+### GREEN evidence
+
+```text
+python3 -B -m unittest CorsairsUE.Scripts.tests.test_build_skill_catalog -v
+# Ran 4 tests ... OK
+
+/Users/Shared/Epic\ Games/UE_5.8/Engine/Build/BatchFiles/Mac/Build.sh \
+  CorsairsUEEditor Mac Development \
+  -Project="$PWD/CorsairsUE/CorsairsUE.uproject" -WaitMutex
+# Result: Succeeded
+
+UnrealEditor -nullrhi -unattended ... -ExecCmds='Automation RunTests Corsairs.Skill.Catalog; Quit'
+# LoadsAndLooksUp Success; RejectsInvalidJson Success; RejectsMissingFile Success
+# **** TEST COMPLETE. EXIT CODE: 0 ****
+```
+
+Self-review: пределы runtime и exporter совпадают; `MAX_uint32` точно представим в `double`, а значение выше него отклоняется до `static_cast<int64>`. Изменены только Task 1 catalog/exporter/test/report файлы; `CorsairsNet` и plan не затронуты.
+
+Fix commit: `fix(ue): reject overflowing skill identifiers`.

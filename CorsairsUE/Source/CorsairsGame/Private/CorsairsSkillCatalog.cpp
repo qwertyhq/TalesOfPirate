@@ -7,6 +7,7 @@
 
 namespace
 {
+constexpr int64 MaxSkillId = static_cast<int64>(MAX_uint32);
 const TSet<FString> RootFields = {TEXT("schemaVersion"), TEXT("skills")};
 const TSet<FString> SkillFields = {
 	TEXT("skillId"), TEXT("name"), TEXT("applyDistance"),
@@ -191,7 +192,7 @@ bool FCorsairsSkillCatalog::Load(const FString& JsonPath, FString& OutError)
 
 		FCorsairsSkillDefinition Definition;
 		int64 Number = 0;
-		if (!ReadInteger(*Object, TEXT("skillId"), Path, 1, MAX_int64, Number, OutError))
+		if (!ReadInteger(*Object, TEXT("skillId"), Path, 1, MaxSkillId, Number, OutError))
 		{
 			return false;
 		}
