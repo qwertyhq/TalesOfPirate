@@ -20,5 +20,7 @@ public class CorsairsGame : ModuleRules
 			"Json",
 			"JsonUtilities",
 		});
+
+		RuntimeDependencies.Add("$(ProjectDir)/Data/skills.json", StagedFileType.UFS);
 	}
 }
