@@ -46,9 +46,15 @@ class CharacterMapTests(unittest.TestCase):
     def test_non_player_keeps_static_mesh_fallback(self):
         warrior = self.catalog["characters"]["5"]
         self.assertEqual(4, warrior["modalType"])
+        self.assertEqual("loop", warrior["animationPolicy"])
         self.assertEqual(
             "/Game/All/0005000000/SkeletalMeshes/0005000000",
             warrior["staticMesh"])
+
+    def test_king_penguin_uses_static_reference_pose(self):
+        pappa = self.catalog["characters"]["260"]
+        self.assertEqual(223, pappa["modelId"])
+        self.assertEqual("staticReferencePose", pappa["animationPolicy"])
 
 
 if __name__ == "__main__":

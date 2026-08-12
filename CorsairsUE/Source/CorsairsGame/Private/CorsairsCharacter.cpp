@@ -35,6 +35,14 @@ namespace
 		Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
 		Mesh->PlayAnimation(Sequence, true);
 	}
+
+	void ApplyStaticReferencePose(USkeletalMeshComponent* Mesh)
+	{
+		Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+		Mesh->SetAnimation(nullptr);
+		Mesh->Stop();
+		Mesh->RefreshBoneTransforms();
+	}
 }
 
 ACorsairsCharacter::ACorsairsCharacter()
@@ -181,6 +189,14 @@ bool ACorsairsCharacter::ApplyAppearance(
 {
 	if (Appearance.bModular)
 	{
+		if (Appearance.AnimationPolicy != ECorsairsAnimationPolicy::Loop)
+		{
+			UE_LOG(
+				LogCorsairsCharacter,
+				Warning,
+				TEXT("модульный персонаж требует зацикленную анимацию"));
+			return false;
+		}
 		USkeletalMesh* Driver =
 			Cast<USkeletalMesh>(Appearance.DriverMesh.TryLoad());
 		if (Driver == nullptr)
@@ -258,18 +274,28 @@ bool ACorsairsCharacter::ApplyAppearance(
 		return false;
 	}
 
-	UAnimSequence* Animation =
-		LoadAppearanceAnimation(Appearance.Animation);
-	if (Animation == nullptr)
+	UAnimSequence* Animation = nullptr;
+	if (Appearance.AnimationPolicy == ECorsairsAnimationPolicy::Loop)
 	{
-		return false;
+		Animation = LoadAppearanceAnimation(Appearance.Animation);
+		if (Animation == nullptr)
+		{
+			return false;
+		}
 	}
 
 	HideVisibleParts();
 	GetMesh()->SetSkeletalMesh(Mesh);
 	GetMesh()->SetVisibility(true, false);
 	ApplySharedScale();
-	PlayLoopingAnimation(GetMesh(), Animation);
+	if (Appearance.AnimationPolicy == ECorsairsAnimationPolicy::Loop)
+	{
+		PlayLoopingAnimation(GetMesh(), Animation);
+	}
+	else
+	{
+		ApplyStaticReferencePose(GetMesh());
+	}
 	return true;
 }
 

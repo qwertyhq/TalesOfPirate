@@ -36,6 +36,10 @@ bool FCorsairsCharacterCatalogTest::RunTest(const FString&)
 	TestEqual(TEXT("default body"),
 		Default.PartMeshes[2].ToString(),
 		FString(TEXT("/Game/All/0000610002/SkeletalMeshes/0000610002")));
+	TestEqual(
+		TEXT("player animation loops"),
+		Default.AnimationPolicy,
+		ECorsairsAnimationPolicy::Loop);
 
 	Look.EquipIds[2] = 289;
 	FCorsairsResolvedAppearance Equipped;
@@ -70,6 +74,18 @@ bool FCorsairsCharacterCatalogTest::RunTest(const FString&)
 	TestEqual(TEXT("NPC mesh"),
 		Npc.StaticMesh.ToString(),
 		FString(TEXT("/Game/All/0005000000/SkeletalMeshes/0005000000")));
+	TestEqual(
+		TEXT("ordinary NPC animation loops"),
+		Npc.AnimationPolicy,
+		ECorsairsAnimationPolicy::Loop);
+
+	FCorsairsResolvedAppearance Pappa;
+	TestTrue(TEXT("Pappa resolves"),
+		Catalog.Resolve(260, NpcLook, Pappa, Error));
+	TestEqual(
+		TEXT("Pappa keeps reference pose"),
+		Pappa.AnimationPolicy,
+		ECorsairsAnimationPolicy::StaticReferencePose);
 
 	Look.bIsBoat = true;
 	FCorsairsResolvedAppearance Boat;
