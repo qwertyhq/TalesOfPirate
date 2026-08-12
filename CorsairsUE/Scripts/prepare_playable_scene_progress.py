@@ -197,6 +197,8 @@ def remove_baked_npcs(report, unreal, actor_subsystem):
         report.line("BAKED NPC: уже удалены")
         return
 
+    # Сначала проверяем весь exact-набор. Пока проверка не завершена, карта
+    # остаётся нетронутой: ошибка в последнем актёре не удалит первые четыре.
     for actor in matches:
         class_path = _actor_class_path(actor)
         if class_path != CHARACTER_CLASS:
@@ -204,6 +206,8 @@ def remove_baked_npcs(report, unreal, actor_subsystem):
                 f"отказ удаления чужого actor: {actor.get_actor_label()} имеет "
                 f"класс {class_path}, ожидался {CHARACTER_CLASS}"
             )
+
+    for actor in matches:
         if not actor_subsystem.destroy_actor(actor):
             raise RuntimeError(
                 f"не удалён baked NPC {actor.get_actor_label()}"
@@ -309,8 +313,12 @@ def publish_transaction(report, library, levels, source, target):
         _rollback_publish(library, levels, source, target, temporary, backup, had_target)
         raise RuntimeError(f"publish: target не загрузился {target}")
     if had_target and not delete_owned_map(library, backup):
-        _rollback_publish(library, levels, source, target, temporary, backup, had_target)
-        raise RuntimeError(f"publish: backup не удалён {backup}")
+        # Удаление могло физически убрать package, пока Asset Registry ещё видит
+        # stale backup. Новый target уже загружен и проверен; откат к, возможно,
+        # исчезнувшей копии здесь способен уничтожить единственную рабочую карту.
+        raise RuntimeError(
+            f"publish: backup не удалён {backup}; подтверждённый target сохранён"
+        )
     if (not library.does_asset_exist(target)
             or library.does_asset_exist(temporary)
             or library.does_asset_exist(backup)):
