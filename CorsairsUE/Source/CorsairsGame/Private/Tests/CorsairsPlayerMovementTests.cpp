@@ -14,7 +14,7 @@ namespace
 {
 using Corsairs::Net::WPacket;
 
-constexpr int64 LocalWorldId = 77;
+constexpr int64 PlayerMovementLocalWorldId = 77;
 constexpr int64 MovementSpeed = 450;
 constexpr uint16 BeginActionCommand = 6;
 const FIntPoint Spawn(223325, 278475);
@@ -26,7 +26,7 @@ void BroadcastLocalEvent(
 	const bool bRequireNeutral = false)
 {
 	FCorsairsMovementEvent Event;
-	Event.WorldId = LocalWorldId;
+	Event.WorldId = PlayerMovementLocalWorldId;
 	Event.Type = Type;
 	Event.Waypoints = {Endpoint};
 	Event.Endpoint = Endpoint;
@@ -202,7 +202,7 @@ bool CreatePossessedPawn(
 	Pawn->SetActorLocation(FVector(-Spawn.Y, Spawn.X, 321.0));
 
 	Session = NewObject<UCorsairsSession>(World);
-	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	Session->SetInWorldForTests(PlayerMovementLocalWorldId, Spawn);
 	Session->SetMovementSpeedForTests(MovementSpeed);
 	Pawn->AttachSession(Session);
 	return true;
@@ -568,7 +568,7 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 
 	const FVector Reconciled = Pawn->GetActorLocation();
 	FCorsairsMovementEvent ManualAccepted;
-	ManualAccepted.WorldId = LocalWorldId;
+	ManualAccepted.WorldId = PlayerMovementLocalWorldId;
 	ManualAccepted.Type = ECorsairsMovementEventType::AcceptedPath;
 	ManualAccepted.Waypoints = {Terminal, FIntPoint(224500, 279500)};
 	ManualAccepted.Endpoint = ManualAccepted.Waypoints.Last();
@@ -583,7 +583,7 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 
 	UWorld* World = TestWorld.GetTestWorld();
 	UCorsairsSession* Replacement = NewObject<UCorsairsSession>(World);
-	Replacement->SetInWorldForTests(LocalWorldId, Terminal);
+	Replacement->SetInWorldForTests(PlayerMovementLocalWorldId, Terminal);
 	Replacement->SetMovementSpeedForTests(MovementSpeed);
 	Pawn->AttachSession(Replacement);
 	Pawn->AttachSession(Replacement);
@@ -600,7 +600,7 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 		1);
 
 	FCorsairsMovementEvent ReplacementTerminal;
-	ReplacementTerminal.WorldId = LocalWorldId;
+	ReplacementTerminal.WorldId = PlayerMovementLocalWorldId;
 	ReplacementTerminal.Type = ECorsairsMovementEventType::Terminal;
 	ReplacementTerminal.Endpoint = FIntPoint(223900, 278900);
 	ReplacementTerminal.bLocal = true;

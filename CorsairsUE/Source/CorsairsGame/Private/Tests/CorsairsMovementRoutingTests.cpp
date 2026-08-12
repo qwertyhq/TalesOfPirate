@@ -20,7 +20,7 @@ namespace
 	constexpr int64 LocalWorldId = 77;
 	constexpr double ServerSpeedCmPerSecond = 200.0;
 
-	FActorSpawnParameters AlwaysSpawnParameters()
+	FActorSpawnParameters MovementRoutingAlwaysSpawnParameters()
 	{
 		FActorSpawnParameters Parameters;
 		Parameters.SpawnCollisionHandlingOverride =
@@ -116,13 +116,13 @@ namespace
 				ACorsairsGameMode::StaticClass(),
 				FVector::ZeroVector,
 				FRotator::ZeroRotator,
-				AlwaysSpawnParameters());
+				MovementRoutingAlwaysSpawnParameters());
 			Controller = World->SpawnActor<APlayerController>();
 			Local = World->SpawnActor<ACorsairsPlayerCharacter>(
 				ACorsairsPlayerCharacter::StaticClass(),
 				FVector::ZeroVector,
 				FRotator::ZeroRotator,
-				AlwaysSpawnParameters());
+				MovementRoutingAlwaysSpawnParameters());
 			if (!Test->TestNotNull(TEXT("routing game mode spawned"), GameMode) ||
 				!Test->TestNotNull(TEXT("routing controller spawned"), Controller) ||
 				!Test->TestNotNull(TEXT("routing local pawn spawned"), Local))
@@ -302,7 +302,7 @@ bool FCorsairsCharacterServerIdentityTest::RunTest(const FString&)
 			ACorsairsCharacter::StaticClass(),
 			FVector::ZeroVector,
 			FRotator::ZeroRotator,
-			AlwaysSpawnParameters());
+			MovementRoutingAlwaysSpawnParameters());
 	if (!TestNotNull(TEXT("unbound character exists"), unbound))
 	{
 		return false;
@@ -511,7 +511,7 @@ bool FCorsairsUngroundedCharacterRigidBasisTest::RunTest(const FString&)
 		ACorsairsCharacter::StaticClass(),
 		FVector(999.0, 999.0, 321.0),
 		FRotator::ZeroRotator,
-		AlwaysSpawnParameters());
+		MovementRoutingAlwaysSpawnParameters());
 	if (!TestNotNull(TEXT("ungrounded character spawned"), Character))
 	{
 		World->DestroyWorld(false);
