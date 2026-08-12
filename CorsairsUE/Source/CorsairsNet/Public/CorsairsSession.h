@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "CorsairsActionReducer.h"
 #include "CorsairsConnection.h"
+#include "CorsairsWorldActor.h"
 #include "UObject/Object.h"
 
 #include "CorsairsSession.generated.h"
@@ -30,82 +31,52 @@ struct FCorsairsCharacterSlot
 	int32 TypeId = 0;
 };
 
-inline constexpr int32 CorsairsEquipSlotCount = 34;
-
+/** Снимок серверной записи навыка без потери полей wire-протокола. */
 USTRUCT(BlueprintType)
-struct FCorsairsCharacterLook
+struct FCorsairsSkillEntry
 {
 	GENERATED_BODY()
 
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	int32 SynType = 0;
+	int64 SkillId = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	int32 TypeId = 0;
+	int32 State = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	int32 HairId = 0;
+	int32 Level = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	bool bIsBoat = false;
+	int64 UseSp = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	TArray<int32> EquipIds;
+	int64 UseEndure = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int64 UseEnergy = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int64 ResumeTime = 0;
+
+	/** Четыре параметра области действия из ChaSkillBagInfo. */
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	TArray<int64> Range;
 };
 
-/** Персонаж, попавший в поле зрения: другой игрок, NPC или монстр. */
+/** Одна ячейка серверной панели быстрых действий. */
 USTRUCT(BlueprintType)
-struct FCorsairsWorldActor
+struct FCorsairsShortcutEntry
 {
 	GENERATED_BODY()
 
-	/** Идентификатор в мире. По нему приходят все дальнейшие сообщения. */
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	int64 WorldId = 0;
+	int32 Slot = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	FString Name;
-
-	/** Положение в координатах карты. */
-	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	FIntPoint Position = FIntPoint::ZeroValue;
-
-	/** Угол поворота в целых градусах. Оригинал кладёт пришедшее значение
-	 *  прямо в персонажа (`pCha->setYaw(sAngle)` в NetProtocol.cpp) и
-	 *  переводит в радианы умножением на пи и делением на сто восемьдесят —
-	 *  делителя в этом пути нет. Та же единица у построек и предметов на
-	 *  земле; отдельно стоят только эффекты, где угол хранится в сотых долях
-	 *  радиана. */
-	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	int32 Angle = 0;
-
-	/** Тип модели. Разворачивается в тело через таблицу персонажей. */
-	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	int32 TypeId = 0;
-
-	/** Управляющий тип: игрок, NPC, монстр. */
-	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	int32 CtrlType = 0;
-
-	/** Запись в таблице персонажей. У NPC именно она задаёт модель: поле
-	 *  внешности, которым пользуются игроки, у них пустое. */
-	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	int32 ChaId = 0;
-
-	/** Ключ сущности на сервере. Идёт в паре с идентификатором: одного
-	 *  идентификатора серверу мало, он сверяет обе половины. */
-	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	int64 Handle = 0;
-
-	/** Здоровье. Обновляется итогами ударов — по нему и видно урон. */
-	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	int64 Hp = 0;
+	int32 Type = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	double MovementSpeedCmPerSecond = 0.0;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
-	FCorsairsCharacterLook Look;
+	int64 GridId = 0;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCorsairsActorSeen,
@@ -128,6 +99,11 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	bLocked,
 	int64,
 	Epoch);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCorsairsSkillStateChanged);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+	FCorsairsTargetPolicyChanged,
+	const FCorsairsWorldActor&,
+	Actor);
 
 /** Стадия входа. Именно она определяет, что показывать на экране. */
 UENUM(BlueprintType)
@@ -195,6 +171,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
 	FCorsairsWorldActor GetLocalActor() const { return LocalActor; }
 
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	int64 GetDefaultSkillId() const { return _defaultSkillId; }
+
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	const TArray<FCorsairsSkillEntry>& GetSkillBag() const { return _skillBag; }
+
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	const TArray<FCorsairsShortcutEntry>& GetShortcuts() const { return _shortcuts; }
+
 	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
 	FCorsairsLoginStageChanged OnStageChanged;
 
@@ -218,6 +203,12 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
 	FCorsairsMovementAuthorityChanged OnMovementAuthorityChanged;
+
+	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
+	FCorsairsSkillStateChanged OnSkillStateChanged;
+
+	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
+	FCorsairsTargetPolicyChanged OnTargetPolicyChanged;
 
 	/** Отправляет серверу путь движения.
 	 *
@@ -362,6 +353,10 @@ public:
 		const FCorsairsWorldActor& Actor);
 	void SetMovementAuthorityObserverForTests(
 		TFunction<void(bool, int64)> Observer);
+	void SetSkillStateObserverForTests(
+		TFunction<void()> Observer);
+	void SetTargetPolicyObserverForTests(
+		TFunction<void(const FCorsairsWorldActor&)> Observer);
 	void HandlePacketForTests(
 		Corsairs::Net::RPacket& Packet);
 	void HandleConnectionStateForTests(
@@ -389,6 +384,10 @@ private:
 	void ApplyReducerEffects(
 		const FCorsairsReducerEffects& Effects);
 	void PublishMovementAuthorityIfChanged();
+	void PublishSkillStateChanged();
+	void PublishTargetPolicyChanged(const FCorsairsWorldActor& Actor);
+	void ResetAuthoritativeState();
+	void ReportProtocolError(const FString& Message);
 
 	UPROPERTY()
 	TObjectPtr<UCorsairsConnection> Connection;
@@ -417,12 +416,16 @@ private:
 	 *  не собрать ни удар, ни экипировку. */
 	TMap<int64, int64> Attributes;
 	TMap<int64, int64> Kitbag;
+	int64 _defaultSkillId = 0;
+	TArray<FCorsairsSkillEntry> _skillBag;
+	TArray<FCorsairsShortcutEntry> _shortcuts;
 
 	/** Ищет цель в поле зрения. Удар адресуется парой «идентификатор +
 	 *  handle», и handle берётся отсюда: у сущностей вроде NPC старший бит
 	 *  идентификатора установлен, и одного его серверу мало. */
 	const FCorsairsWorldActor* FindActor(int64 TargetWorldId) const;
 	FCorsairsWorldActor* FindMutableActor(int64 TargetWorldId);
+	FCorsairsWorldActor* FindMutableActorIncludingLocal(int64 TargetWorldId);
 
 	FString PendingAccount;
 	FString PendingPasswordHash;
@@ -434,5 +437,7 @@ private:
 	TFunction<void(const FString&)> TestProtocolErrorObserver;
 	TFunction<void(ECorsairsLoginStage)> TestStageObserver;
 	TFunction<void(bool, int64)> TestMovementAuthorityObserver;
+	TFunction<void()> TestSkillStateObserver;
+	TFunction<void(const FCorsairsWorldActor&)> TestTargetPolicyObserver;
 #endif
 };

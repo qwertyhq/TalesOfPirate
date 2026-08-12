@@ -14,6 +14,8 @@ DEFINE_LOG_CATEGORY_STATIC(LogCorsairsSession, Log, All);
 
 namespace
 {
+	namespace Msg = Corsairs::Net::Msg;
+
 	/** Версия клиента. Gate сверяет её с настройкой ClientVersion и отвергает
 	 *  вход при несовпадении. */
 	constexpr int64 ClientVersion = 32125;
@@ -27,6 +29,9 @@ namespace
 	constexpr int64 kAttrHp = 1;
 	constexpr int64 kAttrMovementSpeed = 44;
 	constexpr double kMovementReportDistanceCm = 100.0;
+	constexpr int64 kSkillBagSyncInit = 0;
+	constexpr int64 kSkillBagSyncAdd = 1;
+	constexpr int64 kSkillBagSyncModify = 2;
 
 	/** Действия внутри разговора с NPC (BuildNpcActionTable в NpcScript.cpp).
 	 *  Сервер читает код действия вторым полем и по нему выбирает ветку
@@ -48,6 +53,70 @@ namespace
 		const double DeltaY = static_cast<double>(To.Y) - From.Y;
 		return DeltaX * DeltaX + DeltaY * DeltaY <
 			kMovementReportDistanceCm * kMovementReportDistanceCm;
+	}
+
+	FCorsairsSkillEntry MakeSkillEntry(const Msg::SkillEntry& Source)
+	{
+		FCorsairsSkillEntry Result;
+		Result.SkillId = Source.id;
+		Result.State = static_cast<int32>(Source.state);
+		Result.Level = static_cast<int32>(Source.level);
+		Result.UseSp = Source.useSp;
+		Result.UseEndure = Source.useEndure;
+		Result.UseEnergy = Source.useEnergy;
+		Result.ResumeTime = Source.resumeTime;
+		Result.Range.SetNum(Msg::SKILL_RANGE_PARAM_NUM);
+		for (int32 Index = 0; Index < Msg::SKILL_RANGE_PARAM_NUM; ++Index)
+		{
+			Result.Range[Index] = Source.range[Index];
+		}
+		return Result;
+	}
+
+	TArray<FCorsairsSkillEntry> MakeSkillBag(
+		const Msg::ChaSkillBagInfo& Source)
+	{
+		TArray<FCorsairsSkillEntry> Result;
+		Result.Reserve(static_cast<int32>(Source.skills.size()));
+		for (const Msg::SkillEntry& Skill : Source.skills)
+		{
+			Result.Add(MakeSkillEntry(Skill));
+		}
+		return Result;
+	}
+
+	TArray<FCorsairsShortcutEntry> MakeShortcuts(
+		const Msg::ChaShortcutInfo& Source)
+	{
+		TArray<FCorsairsShortcutEntry> Result;
+		Result.Reserve(Msg::SHORT_CUT_NUM);
+		for (int32 Slot = 0; Slot < Msg::SHORT_CUT_NUM; ++Slot)
+		{
+			Result.Add(FCorsairsShortcutEntry{
+				Slot,
+				static_cast<int32>(Source.entries[Slot].type),
+				Source.entries[Slot].gridId,
+			});
+		}
+		return Result;
+	}
+
+	FCorsairsTargetPolicy MakeTargetPolicy(const Msg::ChaBaseInfo& Source)
+	{
+		return FCorsairsTargetPolicy{
+			Source.guildId,
+			Source.teamLeaderId,
+			static_cast<int32>(Source.side.sideId),
+			static_cast<int32>(Source.pkCtrl),
+		};
+	}
+
+	bool HasTargetPolicy(const FCorsairsTargetPolicy& Policy)
+	{
+		return Policy.GuildId != 0 ||
+			Policy.TeamLeaderId != 0 ||
+			Policy.SideId != 0 ||
+			Policy.PkControl != 0;
 	}
 }
 
@@ -237,6 +306,16 @@ FCorsairsWorldActor* UCorsairsSession::FindMutableActor(
 		{
 			return A.WorldId == TargetWorldId;
 		});
+}
+
+FCorsairsWorldActor* UCorsairsSession::FindMutableActorIncludingLocal(
+	const int64 TargetWorldId)
+{
+	if (TargetWorldId == WorldId && LocalActor.WorldId == TargetWorldId)
+	{
+		return &LocalActor;
+	}
+	return FindMutableActor(TargetWorldId);
 }
 
 ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
@@ -476,6 +555,76 @@ void UCorsairsSession::PublishMovementAuthorityIfChanged()
 #endif
 }
 
+void UCorsairsSession::PublishSkillStateChanged()
+{
+	OnSkillStateChanged.Broadcast();
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestSkillStateObserver)
+	{
+		TestSkillStateObserver();
+	}
+#endif
+}
+
+void UCorsairsSession::PublishTargetPolicyChanged(
+	const FCorsairsWorldActor& Actor)
+{
+	OnTargetPolicyChanged.Broadcast(Actor);
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestTargetPolicyObserver)
+	{
+		TestTargetPolicyObserver(Actor);
+	}
+#endif
+}
+
+void UCorsairsSession::ReportProtocolError(const FString& Message)
+{
+	OnProtocolError.Broadcast(Message);
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestProtocolErrorObserver)
+	{
+		TestProtocolErrorObserver(Message);
+	}
+#endif
+}
+
+void UCorsairsSession::ResetAuthoritativeState()
+{
+	const bool bSkillStateChanged =
+		_defaultSkillId != 0 || !_skillBag.IsEmpty() || !_shortcuts.IsEmpty();
+	TArray<FCorsairsWorldActor> ChangedActors;
+
+	_defaultSkillId = 0;
+	_skillBag.Reset();
+	_shortcuts.Reset();
+
+	if (HasTargetPolicy(LocalActor.TargetPolicy))
+	{
+		LocalActor.TargetPolicy = FCorsairsTargetPolicy{};
+		ChangedActors.Add(LocalActor);
+	}
+	for (FCorsairsWorldActor& Actor : VisibleActors)
+	{
+		if (HasTargetPolicy(Actor.TargetPolicy))
+		{
+			Actor.TargetPolicy = FCorsairsTargetPolicy{};
+			ChangedActors.Add(Actor);
+		}
+	}
+
+	// Все поля очищены до первого callback: подписчик никогда не увидит
+	// частично сброшенный authoritative snapshot.
+	if (bSkillStateChanged)
+	{
+		PublishSkillStateChanged();
+	}
+	for (const FCorsairsWorldActor& Actor : ChangedActors)
+	{
+		PublishTargetPolicyChanged(Actor);
+	}
+}
+
 void UCorsairsSession::ApplyReducerEffects(
 	const FCorsairsReducerEffects& Effects)
 {
@@ -485,18 +634,6 @@ void UCorsairsSession::ApplyReducerEffects(
 	{
 		return;
 	}
-
-	const auto ReportProtocolError =
-		[this](const FString& Message)
-		{
-			OnProtocolError.Broadcast(Message);
-#if WITH_DEV_AUTOMATION_TESTS
-			if (TestProtocolErrorObserver)
-			{
-				TestProtocolErrorObserver(Message);
-			}
-#endif
-		};
 
 	if (Effects.bProtocolError)
 	{
@@ -632,6 +769,7 @@ void UCorsairsSession::Logout()
 		Connection->Disconnect();
 		Connection = nullptr;
 	}
+	ResetAuthoritativeState();
 	LocalActor = FCorsairsWorldActor{};
 	VisibleActors.Reset();
 	++ActionReducerGeneration;
@@ -651,6 +789,7 @@ void UCorsairsSession::HandleConnectionState(ECorsairsConnectionState NewState,
 	if (NewState == ECorsairsConnectionState::Failed ||
 		NewState == ECorsairsConnectionState::Disconnected)
 	{
+		ResetAuthoritativeState();
 		++ActionReducerGeneration;
 		ActionReducer.Reset();
 		PublishMovementAuthorityIfChanged();
@@ -803,17 +942,23 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		}
 
 		const auto& Data = Message.data.value();
-		LocalActor.WorldId = Data.baseInfo.worldId;
-		LocalActor.Name = ToFString(Data.baseInfo.name);
-		LocalActor.Position = FIntPoint(
+		FCorsairsWorldActor EnteredActor;
+		EnteredActor.WorldId = Data.baseInfo.worldId;
+		EnteredActor.Name = ToFString(Data.baseInfo.name);
+		EnteredActor.Position = FIntPoint(
 			static_cast<int32>(Data.baseInfo.posX),
 			static_cast<int32>(Data.baseInfo.posY));
-		LocalActor.Angle = static_cast<int32>(Data.baseInfo.angle);
-		LocalActor.TypeId = static_cast<int32>(Data.baseInfo.look.typeId);
-		LocalActor.CtrlType = static_cast<int32>(Data.baseInfo.ctrlType);
-		LocalActor.ChaId = static_cast<int32>(Data.baseInfo.chaId);
-		LocalActor.Handle = Data.baseInfo.handle;
-		LocalActor.Look = MakeCharacterLook(Data.baseInfo.look);
+		EnteredActor.Angle = static_cast<int32>(Data.baseInfo.angle);
+		EnteredActor.TypeId = static_cast<int32>(Data.baseInfo.look.typeId);
+		EnteredActor.CtrlType = static_cast<int32>(Data.baseInfo.ctrlType);
+		EnteredActor.ChaId = static_cast<int32>(Data.baseInfo.chaId);
+		EnteredActor.Handle = Data.baseInfo.handle;
+		EnteredActor.Look = MakeCharacterLook(Data.baseInfo.look);
+		EnteredActor.TargetPolicy = MakeTargetPolicy(Data.baseInfo);
+		TArray<FCorsairsSkillEntry> EnteredSkillBag =
+			MakeSkillBag(Data.skillBag);
+		TArray<FCorsairsShortcutEntry> EnteredShortcuts =
+			MakeShortcuts(Data.shortcut);
 
 		// Сумка и характеристики приходят вместе со входом. Без содержимого
 		// сумки нечем надеть оружие, а без него сервер подтвердит удар, но
@@ -832,14 +977,21 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 			Attributes.Add(Entry.attrId, Entry.attrVal);
 			if (Entry.attrId == kAttrHp)
 			{
-				LocalActor.Hp = Entry.attrVal;
+				EnteredActor.Hp = Entry.attrVal;
 			}
 			else if (Entry.attrId == kAttrMovementSpeed)
 			{
-				LocalActor.MovementSpeedCmPerSecond =
+				EnteredActor.MovementSpeedCmPerSecond =
 					static_cast<double>(Entry.attrVal);
 			}
 		}
+
+		// ENTERMAP является одним authoritative snapshot. Сначала заменяем все
+		// связанные поля, затем разрешаем внешним подписчикам их читать.
+		LocalActor = MoveTemp(EnteredActor);
+		_defaultSkillId = Data.skillBag.defSkillId;
+		_skillBag = MoveTemp(EnteredSkillBag);
+		_shortcuts = MoveTemp(EnteredShortcuts);
 		WorldId = LocalActor.WorldId;
 		SpawnPosition = LocalActor.Position;
 		MapName = ToFString(Data.mapName);
@@ -848,6 +1000,8 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		++ActionReducerGeneration;
 		ActionReducer.EnterWorld(WorldId, SpawnPosition);
 		PublishMovementAuthorityIfChanged();
+		PublishSkillStateChanged();
+		PublishTargetPolicyChanged(LocalActor);
 
 		SetStage(ECorsairsLoginStage::InWorld,
 				 FString::Printf(TEXT("карта %s, позиция (%d, %d)"),
@@ -862,6 +1016,36 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		// действия, а опыт и расход бьющего — в наборе для источника.
 		Corsairs::Net::Msg::McCharacterActionMessage Message;
 		Corsairs::Net::Msg::deserialize(Packet, Message);
+
+		if (Message.actionType == Msg::ActionType::SHORTCUT)
+		{
+			if (Message.worldId == WorldId)
+			{
+				if (const auto* Shortcut =
+						std::get_if<Msg::ChaShortcutInfo>(&Message.data))
+				{
+					_shortcuts = MakeShortcuts(*Shortcut);
+					PublishSkillStateChanged();
+				}
+			}
+			return;
+		}
+
+		if (Message.actionType == Msg::ActionType::PK_CTRL)
+		{
+			if (const auto* PkControl =
+					std::get_if<Msg::ActionPkCtrlData>(&Message.data))
+			{
+				if (FCorsairsWorldActor* Actor =
+						FindMutableActorIncludingLocal(Message.worldId))
+				{
+					Actor->TargetPolicy.PkControl =
+						static_cast<int32>(PkControl->pkCtrl);
+					PublishTargetPolicyChanged(*Actor);
+				}
+			}
+			return;
+		}
 
 		if (const auto* Move =
 				std::get_if<Corsairs::Net::Msg::ActionMoveData>(&Message.data))
@@ -992,6 +1176,117 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		return;
 	}
 
+	if (Cmd == CMD_MC_SYNSKILLBAG)
+	{
+		Msg::McSynSkillBagMessage Message;
+		Msg::deserialize(Packet, Message);
+		if (Message.worldId != WorldId)
+		{
+			return;
+		}
+		if (Message.skillBag.synType != kSkillBagSyncInit &&
+			Message.skillBag.synType != kSkillBagSyncAdd &&
+			Message.skillBag.synType != kSkillBagSyncModify)
+		{
+			ReportProtocolError(FString::Printf(
+				TEXT("неизвестный тип синхронизации skill bag: %lld"),
+				Message.skillBag.synType));
+			return;
+		}
+
+		const TArray<FCorsairsSkillEntry> Delta =
+			MakeSkillBag(Message.skillBag);
+		TArray<FCorsairsSkillEntry> Updated = _skillBag;
+		if (Message.skillBag.synType == kSkillBagSyncInit)
+		{
+			Updated = Delta;
+		}
+		else
+		{
+			for (const FCorsairsSkillEntry& Entry : Delta)
+			{
+				FCorsairsSkillEntry* Existing = Updated.FindByPredicate(
+					[&Entry](const FCorsairsSkillEntry& Candidate)
+					{
+						return Candidate.SkillId == Entry.SkillId;
+					});
+				if (Message.skillBag.synType == kSkillBagSyncModify &&
+					Entry.Level <= 0)
+				{
+					Updated.RemoveAll(
+						[&Entry](const FCorsairsSkillEntry& Candidate)
+						{
+							return Candidate.SkillId == Entry.SkillId;
+						});
+				}
+				else if (Existing != nullptr)
+				{
+					*Existing = Entry;
+				}
+				else
+				{
+					Updated.Add(Entry);
+				}
+			}
+		}
+
+		_defaultSkillId = Message.skillBag.defSkillId;
+		_skillBag = MoveTemp(Updated);
+		PublishSkillStateChanged();
+		return;
+	}
+
+	if (Cmd == CMD_MC_SYNDEFAULTSKILL)
+	{
+		Msg::McSynDefaultSkillMessage Message;
+		Msg::deserialize(Packet, Message);
+		if (Message.worldId == WorldId)
+		{
+			_defaultSkillId = Message.skillId;
+			PublishSkillStateChanged();
+		}
+		return;
+	}
+
+	if (Cmd == CMD_MC_TLEADER_ID)
+	{
+		Msg::McSynTLeaderIdMessage Message;
+		Msg::deserialize(Packet, Message);
+		if (FCorsairsWorldActor* Actor =
+				FindMutableActorIncludingLocal(Message.worldId))
+		{
+			Actor->TargetPolicy.TeamLeaderId = Message.leaderId;
+			PublishTargetPolicyChanged(*Actor);
+		}
+		return;
+	}
+
+	if (Cmd == CMD_MC_SIDE_INFO)
+	{
+		Msg::McSynSideInfoMessage Message;
+		Msg::deserialize(Packet, Message);
+		if (FCorsairsWorldActor* Actor =
+				FindMutableActorIncludingLocal(Message.worldId))
+		{
+			Actor->TargetPolicy.SideId = static_cast<int32>(Message.side.sideId);
+			PublishTargetPolicyChanged(*Actor);
+		}
+		return;
+	}
+
+	if (Cmd == CMD_MC_GUILD_INFO)
+	{
+		Msg::McGuildInfoMessage Message;
+		Msg::deserialize(Packet, Message);
+		if (FCorsairsWorldActor* Actor =
+				FindMutableActorIncludingLocal(Message.charId))
+		{
+			Actor->TargetPolicy.GuildId = Message.guildId;
+			PublishTargetPolicyChanged(*Actor);
+		}
+		return;
+	}
+
 	if (Cmd == CMD_MC_SYNATTR)
 	{
 		Corsairs::Net::Msg::McSynAttributeMessage Message;
@@ -1052,6 +1347,7 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		Actor.CtrlType = static_cast<int32>(Message.base.ctrlType);
 		Actor.ChaId = static_cast<int32>(Message.base.chaId);
 		Actor.Handle = Message.base.handle;
+		Actor.TargetPolicy = MakeTargetPolicy(Message.base);
 		for (const auto& Entry : Message.attr.attrs)
 		{
 			if (Entry.attrId == kAttrHp)
@@ -1074,6 +1370,7 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 
 		VisibleActors.Add(Actor);
 		OnActorSeen.Broadcast(Actor);
+		PublishTargetPolicyChanged(Actor);
 		return;
 	}
 
@@ -1135,6 +1432,9 @@ void UCorsairsSession::SetInWorldForTests(
 	LocalActor.Position = Spawn;
 	VisibleActors.Reset();
 	Attributes.Reset();
+	_defaultSkillId = 0;
+	_skillBag.Reset();
+	_shortcuts.Reset();
 	ActionPacketId = 0;
 	MovementBeginSendCount = 0;
 	++ActionReducerGeneration;
@@ -1149,6 +1449,10 @@ void UCorsairsSession::SetInWorldAndBroadcastForTests(
 {
 	WorldId = InLocalActor.WorldId;
 	LocalActor = InLocalActor;
+	VisibleActors.Reset();
+	_defaultSkillId = 0;
+	_skillBag.Reset();
+	_shortcuts.Reset();
 	SpawnPosition = InLocalActor.Position;
 	MapName = InMapName;
 	ActionPacketId = 0;
@@ -1181,6 +1485,18 @@ void UCorsairsSession::SetMovementAuthorityObserverForTests(
 	TFunction<void(bool, int64)> Observer)
 {
 	TestMovementAuthorityObserver = MoveTemp(Observer);
+}
+
+void UCorsairsSession::SetSkillStateObserverForTests(
+	TFunction<void()> Observer)
+{
+	TestSkillStateObserver = MoveTemp(Observer);
+}
+
+void UCorsairsSession::SetTargetPolicyObserverForTests(
+	TFunction<void(const FCorsairsWorldActor&)> Observer)
+{
+	TestTargetPolicyObserver = MoveTemp(Observer);
 }
 
 void UCorsairsSession::HandlePacketForTests(RPacket& Packet)
