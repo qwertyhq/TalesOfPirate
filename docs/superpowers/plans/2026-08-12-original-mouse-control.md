@@ -349,7 +349,9 @@ struct FCorsairsClickIntent
 - RMB press stores cursor and captures it; only MouseX changes yaw. Release restores visible cursor and exact prior position.
 - RMB shorter/equal 200 ms below drag threshold clears prepared action and requests cancel; drag does not.
 - RMB double-click resets legacy camera yaw; wheel applies original small impulse and clamps profile.
-- F1..F12 prepare exact shortcut skill; second press same slot clears it; unsupported entry reports reason and sends nothing.
+- F1..F12 prepare exact shortcut skill; повторное нажатие того же слота
+  идемпотентно оставляет его подготовленным, а короткая RMB отменяет targeting;
+  unsupported entry reports reason and sends nothing.
 - PlayerCharacter no longer binds production MoveForward/MoveRight/Turn/LookUp and no longer calls periodic `SubmitPredictedPosition`.
 - Spring arm stays attached to pawn; network Angle/pawn rotation is not changed by camera yaw.
 
