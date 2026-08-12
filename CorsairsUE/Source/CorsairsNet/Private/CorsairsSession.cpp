@@ -32,6 +32,10 @@ namespace
 	constexpr int64 kSkillBagSyncInit = 0;
 	constexpr int64 kSkillBagSyncAdd = 1;
 	constexpr int64 kSkillBagSyncModify = 2;
+	constexpr int32 kMinimumActionPathPoints = 2;
+	constexpr int32 kMaximumActionPathPoints = 32;
+	constexpr int32 kWirePointBytes = sizeof(int32) * 2;
+	constexpr int32 kMaximumActionPathBytes = 256;
 
 	/** Действия внутри разговора с NPC (BuildNpcActionTable в NpcScript.cpp).
 	 *  Сервер читает код действия вторым полем и по нему выбирает ветку
@@ -118,6 +122,45 @@ namespace
 			Policy.SideId != 0 ||
 			Policy.PkControl != 0;
 	}
+
+	bool IsValidActionPath(const TArray<FIntPoint>& Path)
+	{
+		if (Path.Num() < kMinimumActionPathPoints ||
+			Path.Num() > kMaximumActionPathPoints)
+		{
+			return false;
+		}
+
+		const int64 ByteCount =
+			static_cast<int64>(Path.Num()) * kWirePointBytes;
+		return ByteCount <= kMaximumActionPathBytes;
+	}
+
+	TArray<uint8> SerializeActionPath(const TArray<FIntPoint>& Path)
+	{
+		TArray<uint8> Blob;
+		Blob.Reserve(Path.Num() * kWirePointBytes);
+		for (const FIntPoint& Point : Path)
+		{
+			const int32 Coordinates[2] = {Point.X, Point.Y};
+			Blob.Append(
+				reinterpret_cast<const uint8*>(Coordinates),
+				sizeof(Coordinates));
+		}
+		return Blob;
+	}
+
+	bool FitsUnsignedWireId(const int64 Value)
+	{
+		return Value > 0 &&
+			Value <= static_cast<int64>(MAX_uint32);
+	}
+
+	bool FitsSignedWireValue(const int64 Value)
+	{
+		return Value >= static_cast<int64>(MIN_int32) &&
+			Value <= static_cast<int64>(MAX_int32);
+	}
 }
 
 void UCorsairsSession::Login(const FString& Host, int32 Port,
@@ -178,35 +221,16 @@ ECorsairsActionRequestResult UCorsairsSession::SendMovePath(
 	{
 		return ECorsairsActionRequestResult::Invalid;
 	}
+	if (!IsValidActionPath(Path))
+	{
+		return ECorsairsActionRequestResult::Invalid;
+	}
 	if (!CanSendBeginActionPacket())
 	{
 		return ECorsairsActionRequestResult::TransportFailed;
 	}
-	if (Path.Num() < 2)
-	{
-		// Путь из одной точки сервер трактует как отсутствие движения.
-		return ECorsairsActionRequestResult::Invalid;
-	}
 
-	// Точки укладываются в двоичный блок ровно так, как их читает сервер:
-	// пара 32-битных чисел на точку, без выравнивания. Формат задан
-	// структурой Corsairs::Util::Point, которую сервер копирует напрямую.
-	TArray<uint8> Blob;
-	Blob.Reserve(Path.Num() * 2 * sizeof(int32));
-	for (const FIntPoint& Point : Path)
-	{
-		const int32 Coordinates[2] = {Point.X, Point.Y};
-		Blob.Append(reinterpret_cast<const uint8*>(Coordinates), sizeof(Coordinates));
-	}
-
-	WPacket Packet(64 + Blob.Num());
-	Packet.WriteCmd(CMD_CM_BEGINACTION);
-	Packet.WriteInt64(WorldId);
 	const int64 PacketId = ++ActionPacketId;
-	Packet.WriteInt64(PacketId);
-	Packet.WriteInt64(Corsairs::Net::Msg::ActionType::MOVE);
-	Packet.WriteSequence(Blob.GetData(), static_cast<uint16>(Blob.Num()));
-
 	const FCorsairsPendingMove PendingMove{
 		PacketId,
 		Path[0],
@@ -217,7 +241,22 @@ ECorsairsActionRequestResult UCorsairsSession::SendMovePath(
 		PacketId,
 		ECorsairsBeginActionType::Move,
 		PendingMove,
-		[&]() { return SendBeginActionPacket(Packet); });
+		[&]()
+		{
+			if (!IsValidActionPath(Path))
+			{
+				return false;
+			}
+			const TArray<uint8> Blob = SerializeActionPath(Path);
+			WPacket Packet = Msg::serializeCmBeginActionHeader(
+				WorldId,
+				PacketId,
+				Msg::ActionType::MOVE);
+			Packet.WriteSequence(
+				Blob.GetData(),
+				static_cast<uint16>(Blob.Num()));
+			return SendBeginActionPacket(Packet);
+		});
 	if (ActionReducerGeneration != BeginGeneration)
 	{
 		if (Stage == ECorsairsLoginStage::InWorld)
@@ -235,6 +274,23 @@ ECorsairsActionRequestResult UCorsairsSession::SendMovePath(
 		++MovementBeginSendCount;
 	}
 	return Result;
+}
+
+bool UCorsairsSession::EndActiveAction()
+{
+	if (Stage != ECorsairsLoginStage::InWorld ||
+		!CanSendBeginActionPacket())
+	{
+		return false;
+	}
+
+	const ECorsairsActionRequestResult Result = ActionReducer.RequestCancel(
+		[&]()
+		{
+			WPacket Packet = Msg::serializeCmEndActionCmd();
+			return SendBeginActionPacket(Packet);
+		});
+	return Result == ECorsairsActionRequestResult::Sent;
 }
 
 ECorsairsActionRequestResult UCorsairsSession::SubmitPredictedPosition(
@@ -275,6 +331,16 @@ FIntPoint UCorsairsSession::GetConfirmedPosition() const
 	return ActionReducer.GetConfirmedPosition();
 }
 
+bool UCorsairsSession::HasActiveAction() const
+{
+	return ActionReducer.HasActiveAction();
+}
+
+bool UCorsairsSession::IsCancelPending() const
+{
+	return ActionReducer.IsCancelPending();
+}
+
 bool UCorsairsSession::IsMovementAuthorityLocked() const
 {
 	return ActionReducer.IsMovementAuthorityLocked();
@@ -296,6 +362,34 @@ const FCorsairsWorldActor* UCorsairsSession::FindActor(
 {
 	return VisibleActors.FindByPredicate(
 		[TargetWorldId](const FCorsairsWorldActor& A) { return A.WorldId == TargetWorldId; });
+}
+
+bool UCorsairsSession::HasUsableSkill(const int64 SkillId) const
+{
+	return _skillBag.ContainsByPredicate(
+		[SkillId](const FCorsairsSkillEntry& Entry)
+		{
+			return Entry.SkillId == SkillId && Entry.Level > 0;
+		});
+}
+
+bool UCorsairsSession::HasExactActorIdentity(
+	const int64 TargetWorldId,
+	const int64 TargetHandle) const
+{
+	if (LocalActor.WorldId == TargetWorldId)
+	{
+		return LocalActor.Handle == TargetHandle;
+	}
+	for (int32 Index = VisibleActors.Num() - 1; Index >= 0; --Index)
+	{
+		const FCorsairsWorldActor& Actor = VisibleActors[Index];
+		if (Actor.WorldId == TargetWorldId)
+		{
+			return Actor.Handle == TargetHandle;
+		}
+	}
+	return false;
 }
 
 FCorsairsWorldActor* UCorsairsSession::FindMutableActor(
@@ -320,9 +414,52 @@ FCorsairsWorldActor* UCorsairsSession::FindMutableActorIncludingLocal(
 
 ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
 	const int64 SkillId,
-	const int64 TargetWorldId)
+	const int64 TargetWorldId,
+	const int64 TargetHandle,
+	const TArray<FIntPoint>& ApproachPath)
 {
-	if (Stage != ECorsairsLoginStage::InWorld)
+	if (!FitsUnsignedWireId(TargetWorldId) ||
+		!FitsSignedWireValue(TargetHandle) ||
+		!HasExactActorIdentity(TargetWorldId, TargetHandle))
+	{
+		return ECorsairsActionRequestResult::Invalid;
+	}
+	return SendSkillAction(
+		SkillId,
+		static_cast<uint32>(TargetWorldId),
+		static_cast<int32>(TargetHandle),
+		ApproachPath,
+		[this, TargetWorldId, TargetHandle]()
+		{
+			return HasExactActorIdentity(TargetWorldId, TargetHandle);
+		});
+}
+
+ECorsairsActionRequestResult UCorsairsSession::UseSkillAtPoint(
+	const int64 SkillId,
+	const FIntPoint TargetPoint,
+	const TArray<FIntPoint>& ApproachPath)
+{
+	return SendSkillAction(
+		SkillId,
+		TargetPoint.X,
+		TargetPoint.Y,
+		ApproachPath,
+		[]() { return true; });
+}
+
+ECorsairsActionRequestResult UCorsairsSession::SendSkillAction(
+	const int64 SkillId,
+	const int64 TargetInfo1,
+	const int64 TargetInfo2,
+	const TArray<FIntPoint>& ApproachPath,
+	TFunctionRef<bool()> RevalidateTarget)
+{
+	if (Stage != ECorsairsLoginStage::InWorld ||
+		!FitsUnsignedWireId(SkillId) ||
+		!IsValidActionPath(ApproachPath) ||
+		!HasUsableSkill(SkillId) ||
+		!RevalidateTarget())
 	{
 		return ECorsairsActionRequestResult::Invalid;
 	}
@@ -330,40 +467,12 @@ ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
 	{
 		return ECorsairsActionRequestResult::TransportFailed;
 	}
-	const FCorsairsWorldActor* Target = FindActor(TargetWorldId);
-	if (Target == nullptr)
-	{
-		// Цели нет в поле зрения — сервер всё равно ответил бы отказом
-		// «цели не существует», и разбирать его пришлось бы вслепую.
-		return ECorsairsActionRequestResult::Invalid;
-	}
 
-	// Путь ведёт от персонажа к цели. Сервер сам проводит по нему персонажа и
-	// бьёт по прибытии; путь из одной точки он не разыгрывает вовсе.
-	const FIntPoint ConfirmedPosition =
-		ActionReducer.GetConfirmedPosition();
-	const int32 Coordinates[4] = {
-		ConfirmedPosition.X, ConfirmedPosition.Y,
-		Target->Position.X, Target->Position.Y };
-	TArray<uint8> Blob;
-	Blob.Append(reinterpret_cast<const uint8*>(Coordinates), sizeof(Coordinates));
-
-	WPacket Packet(128 + Blob.Num());
-	Packet.WriteCmd(CMD_CM_BEGINACTION);
-	Packet.WriteInt64(WorldId);
 	const int64 PacketId = ++ActionPacketId;
-	Packet.WriteInt64(PacketId);
-	Packet.WriteInt64(Corsairs::Net::Msg::ActionType::SKILL);
-	// Признак движения строго 2 — «подойти и ударить». С нулём сервер молчит.
-	Packet.WriteInt64(2);
-	Packet.WriteInt64(PacketId);
-	Packet.WriteSequence(Blob.GetData(), static_cast<uint16>(Blob.Num()));
-	Packet.WriteInt64(SkillId);
-	Packet.WriteInt64(Target->WorldId);
-	Packet.WriteInt64(Target->Handle);
 
 	const uint64 BeginGeneration = ActionReducerGeneration;
 	bool bReservationSuperseded = false;
+	bool bValidationFailed = false;
 	const auto IsExpectedReservation = [this, PacketId]()
 	{
 		const TOptional<FCorsairsActiveBeginAction>& Active =
@@ -371,7 +480,8 @@ ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
 		return Active.IsSet() &&
 			Active->PacketId == PacketId &&
 			Active->ActionType == ECorsairsBeginActionType::Skill &&
-			Active->Phase == ECorsairsActionPhase::Requested;
+			Active->Phase == ECorsairsActionPhase::Requested &&
+			!ActionReducer.IsCancelPending();
 	};
 	ECorsairsActionRequestResult Result = ActionReducer.Begin(
 		PacketId,
@@ -395,6 +505,28 @@ ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
 				return true;
 			}
 
+			if (!IsValidActionPath(ApproachPath) ||
+				!HasUsableSkill(SkillId) ||
+				!RevalidateTarget())
+			{
+				bValidationFailed = true;
+				return false;
+			}
+
+			const TArray<uint8> Blob = SerializeActionPath(ApproachPath);
+			WPacket Packet = Msg::serializeCmBeginActionHeader(
+				WorldId,
+				PacketId,
+				Msg::ActionType::SKILL);
+			// Признак движения строго 2 — «подойти и применить навык».
+			Packet.WriteInt64(2);
+			Packet.WriteInt64(PacketId);
+			Packet.WriteSequence(
+				Blob.GetData(),
+				static_cast<uint16>(Blob.Num()));
+			Packet.WriteInt64(static_cast<uint32>(SkillId));
+			Packet.WriteInt64(TargetInfo1);
+			Packet.WriteInt64(TargetInfo2);
 			const bool bSent = SendBeginActionPacket(Packet);
 			if (ActionReducerGeneration == BeginGeneration &&
 				!IsExpectedReservation())
@@ -422,8 +554,30 @@ ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
 	{
 		Result = ECorsairsActionRequestResult::TransportFailed;
 	}
+	else if (bValidationFailed)
+	{
+		Result = ECorsairsActionRequestResult::Invalid;
+	}
 	return Result;
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
+	const int64 SkillId,
+	const int64 TargetWorldId)
+{
+	const FCorsairsWorldActor* Target = FindActor(TargetWorldId);
+	if (Target == nullptr)
+	{
+		return ECorsairsActionRequestResult::Invalid;
+	}
+	return UseSkillOn(
+		SkillId,
+		Target->WorldId,
+		Target->Handle,
+		{ActionReducer.GetConfirmedPosition(), Target->Position});
+}
+#endif
 
 ECorsairsActionRequestResult UCorsairsSession::EquipItem(
 	const int64 FromGrid,

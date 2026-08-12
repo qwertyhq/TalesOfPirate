@@ -222,12 +222,25 @@ public:
 	ECorsairsActionRequestResult SendMovePath(
 		const TArray<FIntPoint>& Path);
 
+	/** Запрашивает отмену текущего действия. Повтор до серверного завершения не
+	 *  создаёт второй пакет. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	bool EndActiveAction();
+
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	ECorsairsActionRequestResult SubmitPredictedPosition(
 		FIntPoint Endpoint);
 
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
 	FIntPoint GetConfirmedPosition() const;
+
+	/** Есть ли действие, которое ещё не завершено сервером или сбросом. */
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	bool HasActiveAction() const;
+
+	/** Ожидает ли уже отправленная отмена серверного завершения или сброса. */
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	bool IsCancelPending() const;
 
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
 	bool IsMovementAuthorityLocked() const;
@@ -249,7 +262,24 @@ public:
 	 *  поломки, поэтому оружие надевается заранее. */
 	UFUNCTION(BlueprintCallable, Category = "Corsairs")
 	ECorsairsActionRequestResult UseSkillOn(
+		int64 SkillId,
+		int64 TargetWorldId,
+		int64 TargetHandle,
+		const TArray<FIntPoint>& ApproachPath);
+
+	/** Применяет площадной навык к точной точке карты. */
+	UFUNCTION(BlueprintCallable, Category = "Corsairs")
+	ECorsairsActionRequestResult UseSkillAtPoint(
+		int64 SkillId,
+		FIntPoint TargetPoint,
+		const TArray<FIntPoint>& ApproachPath);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** Совместимость прежних проверочных сценариев до переноса игрового
+	 *  маршрутизатора. */
+	ECorsairsActionRequestResult UseSkillOn(
 		int64 SkillId, int64 TargetWorldId);
+#endif
 
 	/** Надевает вещь: перекладывает её из ячейки сумки в слот экипировки.
 	 *
@@ -380,9 +410,18 @@ private:
 	void SetStage(ECorsairsLoginStage NewStage, const FString& Message);
 	ECorsairsActionRequestResult SendMoveFromConfirmed(
 		FIntPoint Endpoint);
+	ECorsairsActionRequestResult SendSkillAction(
+		int64 SkillId,
+		int64 TargetInfo1,
+		int64 TargetInfo2,
+		const TArray<FIntPoint>& ApproachPath,
+		TFunctionRef<bool()> RevalidateTarget);
 	bool SendBeginActionPacket(
 		Corsairs::Net::WPacket& Packet);
 	bool CanSendBeginActionPacket() const;
+	bool HasUsableSkill(int64 SkillId) const;
+	bool HasExactActorIdentity(
+		int64 TargetWorldId, int64 TargetHandle) const;
 	void ApplyReducerEffects(
 		const FCorsairsReducerEffects& Effects);
 	void PublishMovementAuthorityIfChanged();

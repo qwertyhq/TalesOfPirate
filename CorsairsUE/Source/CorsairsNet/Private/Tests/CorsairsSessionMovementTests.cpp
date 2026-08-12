@@ -91,6 +91,10 @@ Msg::McEnterMapMessage MakeEnterMap(
 	Data.baseInfo.posY = Position.Y;
 	Data.baseInfo.handle = 7007;
 	Data.baseInfo.look.typeId = 1;
+	Msg::SkillEntry Skill;
+	Skill.id = 26;
+	Skill.level = 1;
+	Data.skillBag.skills.push_back(Skill);
 	Data.attr.attrs.push_back({1, 1234});
 	if (Speed.IsSet())
 	{
@@ -182,6 +186,14 @@ UCorsairsSession* CreateSkillSession()
 {
 	UCorsairsSession* Session = NewObject<UCorsairsSession>();
 	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	Msg::McSynSkillBagMessage SkillBag;
+	SkillBag.worldId = LocalWorldId;
+	SkillBag.skillBag.synType = 0;
+	Msg::SkillEntry Skill;
+	Skill.id = 26;
+	Skill.level = 1;
+	SkillBag.skillBag.skills.push_back(Skill);
+	Deliver(Session, SkillBag);
 	Session->SetMovementSpeedForTests(static_cast<int64>(LocalSpeed));
 	Deliver(
 		Session,
@@ -302,6 +314,321 @@ bool FCorsairsSessionSerializesAtomicBeginActionTest::RunTest(const FString&)
 			ResetDuringSend->GetMovementBeginSendCountForDiagnostics(),
 			0LL);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionStrictMoveWireTest,
+	"Corsairs.Net.Session.StrictMoveWire",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionStrictMoveWireTest::RunTest(const FString&)
+{
+	UCorsairsSession* Invalid = NewObject<UCorsairsSession>();
+	Invalid->SetInWorldForTests(LocalWorldId, Spawn);
+	int32 InvalidSendCount = 0;
+	Invalid->SetSendOverrideForTests(
+		[&](WPacket&)
+		{
+			++InvalidSendCount;
+			return true;
+		});
+	TestResult(this, TEXT("одна точка отклонена"),
+		Invalid->SendMovePath({Spawn}),
+		ECorsairsActionRequestResult::Invalid);
+	TArray<FIntPoint> TooLong;
+	TooLong.SetNum(33);
+	TestResult(this, TEXT("33 точки отклонены"),
+		Invalid->SendMovePath(TooLong),
+		ECorsairsActionRequestResult::Invalid);
+	TestEqual(TEXT("невалидные пути не отправляются"), InvalidSendCount, 0);
+
+	UCorsairsSession* Minimum = NewObject<UCorsairsSession>();
+	Minimum->SetInWorldForTests(LocalWorldId, Spawn);
+	bool bMinimumWireMatches = false;
+	Minimum->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+			const bool bHeaderMatches =
+				Packet.GetCmd() == CMD_CM_BEGINACTION &&
+				Packet.ReadInt64() == LocalWorldId &&
+				Packet.ReadInt64() == 1 &&
+				Packet.ReadInt64() == Msg::ActionType::MOVE;
+			uint16 Count = 0;
+			const char* Bytes = Packet.ReadSequence(Count);
+			bMinimumWireMatches = bHeaderMatches &&
+				SameBytes(
+					Bytes,
+					Count,
+					SpawnToFirstEndpointBytes,
+					UE_ARRAY_COUNT(SpawnToFirstEndpointBytes));
+			return true;
+		});
+	TestResult(this, TEXT("две точки отправлены"),
+		Minimum->SendMovePath({Spawn, FIntPoint(1300, 2400)}),
+		ECorsairsActionRequestResult::Sent);
+	TestTrue(TEXT("две точки имеют точные wire bytes"),
+		bMinimumWireMatches);
+
+	UCorsairsSession* Maximum = NewObject<UCorsairsSession>();
+	Maximum->SetInWorldForTests(LocalWorldId, Spawn);
+	TArray<FIntPoint> MaximumPath;
+	for (int32 Index = 0; Index < 32; ++Index)
+	{
+		MaximumPath.Emplace(1000 + Index * 50, 2000 - Index * 25);
+	}
+	bool bMaximumWireMatches = false;
+	Maximum->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+			const bool bHeaderMatches =
+				Packet.GetCmd() == CMD_CM_BEGINACTION &&
+				Packet.ReadInt64() == LocalWorldId &&
+				Packet.ReadInt64() == 1 &&
+				Packet.ReadInt64() == Msg::ActionType::MOVE;
+			uint16 Count = 0;
+			const char* Bytes = Packet.ReadSequence(Count);
+			bMaximumWireMatches = bHeaderMatches &&
+				Count == 256 &&
+				FMemory::Memcmp(
+					Bytes,
+					MaximumPath.GetData(),
+					Count) == 0;
+			return true;
+		});
+	TestResult(this, TEXT("32 точки отправлены"),
+		Maximum->SendMovePath(MaximumPath),
+		ECorsairsActionRequestResult::Sent);
+	TestTrue(TEXT("32 точки занимают точные 256 wire bytes"),
+		bMaximumWireMatches);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionEndActiveActionTest,
+	"Corsairs.Net.Session.EndActiveAction",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionEndActiveActionTest::RunTest(const FString&)
+{
+	UCorsairsSession* Session = NewObject<UCorsairsSession>();
+	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	int32 MoveSendCount = 0;
+	int32 CancelSendCount = 0;
+	bool bCancelIsCommandOnly = false;
+	Session->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+			if (Packet.GetCmd() == CMD_CM_ENDACTION)
+			{
+				++CancelSendCount;
+				bCancelIsCommandOnly = Packet.PayloadLength() == 0;
+			}
+			else if (Packet.GetCmd() == CMD_CM_BEGINACTION)
+			{
+				++MoveSendCount;
+			}
+			return true;
+		});
+	TestResult(this, TEXT("MOVE резервирует действие"),
+		Session->SendMovePath({Spawn, FIntPoint(1300, 2400)}),
+		ECorsairsActionRequestResult::Sent);
+	TestTrue(TEXT("Session публикует наличие active action"),
+		Session->HasActiveAction());
+	TestFalse(TEXT("до EndActiveAction cancel не pending"),
+		Session->IsCancelPending());
+	TestTrue(TEXT("первая отмена отправлена"), Session->EndActiveAction());
+	TestTrue(TEXT("после EndActiveAction cancel pending"),
+		Session->IsCancelPending());
+	TestFalse(TEXT("повторная отмена до terminal занята"),
+		Session->EndActiveAction());
+	TestResult(this, TEXT("новый BEGIN до terminal занят"),
+		Session->SendMovePath({Spawn, FIntPoint(1400, 2400)}),
+		ECorsairsActionRequestResult::Busy);
+	TestEqual(TEXT("ENDACTION отправлен один раз"), CancelSendCount, 1);
+	TestEqual(TEXT("до terminal второй MOVE не отправлен"), MoveSendCount, 1);
+	TestTrue(TEXT("ENDACTION не содержит payload"), bCancelIsCommandOnly);
+
+	Deliver(
+		Session,
+		MakeMove(
+			LocalWorldId,
+			1,
+			1,
+			Endpoint1500Bytes,
+			UE_ARRAY_COUNT(Endpoint1500Bytes)));
+	TestResult(this, TEXT("после terminal новый BEGIN разрешён"),
+		Session->SendMovePath(
+			{FIntPoint(1500, 1000), FIntPoint(1700, 1000)}),
+		ECorsairsActionRequestResult::Sent);
+	TestEqual(TEXT("после terminal отправлен второй MOVE"), MoveSendCount, 2);
+	TestTrue(TEXT("после нового BEGIN active seam снова поднят"),
+		Session->HasActiveAction());
+	TestFalse(TEXT("terminal очистил прежнюю cancel reservation"),
+		Session->IsCancelPending());
+
+	UCorsairsSession* Retry = NewObject<UCorsairsSession>();
+	Retry->SetInWorldForTests(LocalWorldId, Spawn);
+	bool bFailCancel = true;
+	int32 RetryCancelCount = 0;
+	Retry->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			if (Wire.GetCmd() == CMD_CM_ENDACTION)
+			{
+				++RetryCancelCount;
+				return !bFailCancel;
+			}
+			return true;
+		});
+	Retry->SendMovePath({Spawn, FIntPoint(1300, 2400)});
+	TestFalse(TEXT("transport failure отмены возвращает false"),
+		Retry->EndActiveAction());
+	bFailCancel = false;
+	TestTrue(TEXT("rollback разрешает retry отмены"),
+		Retry->EndActiveAction());
+	TestEqual(TEXT("retry делает ровно вторую попытку"), RetryCancelCount, 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionReentrantCancelBeforeSkillTransportTest,
+	"Corsairs.Net.Session.ReentrantCancelBeforeSkillTransport",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionReentrantCancelBeforeSkillTransportTest::RunTest(
+	const FString&)
+{
+	// Мутация: считать ту же пару пакета и фазы достаточной после уведомления
+	// о блокировке. Тогда слушатель успевает отправить ENDACTION, а следом
+	// уходит BEGIN навыка.
+	UCorsairsSession* Session = CreateSkillSession();
+	int32 SkillBeginCount = 0;
+	int32 CancelCount = 0;
+	int32 ItemBeginCount = 0;
+	Session->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			if (Wire.GetCmd() == CMD_CM_ENDACTION)
+			{
+				++CancelCount;
+				return true;
+			}
+
+			RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+			if (Packet.GetCmd() == CMD_CM_BEGINACTION)
+			{
+				Packet.ReadInt64();
+				Packet.ReadInt64();
+				const int64 ActionType = Packet.ReadInt64();
+				if (ActionType == Msg::ActionType::SKILL)
+				{
+					++SkillBeginCount;
+				}
+				else if (ActionType == Msg::ActionType::ITEM_PICK)
+				{
+					++ItemBeginCount;
+				}
+			}
+			return true;
+		});
+
+	bool bCancelAccepted = false;
+	Session->SetMovementAuthorityObserverForTests(
+		[&](const bool bLocked, const int64)
+		{
+			if (bLocked)
+			{
+				bCancelAccepted = Session->EndActiveAction();
+			}
+		});
+
+	TestResult(this, TEXT("локально отменённый outer Skill не считается Sent"),
+		Session->UseSkillOn(26, RemoteWorldId),
+		ECorsairsActionRequestResult::TransportFailed);
+	TestTrue(TEXT("reentrant cancel принят"), bCancelAccepted);
+	TestEqual(TEXT("unsent Skill не требует ENDACTION"), CancelCount, 0);
+	TestEqual(TEXT("после локальной отмены Skill BEGIN не отправлен"),
+		SkillBeginCount, 0);
+	TestFalse(TEXT("локальная отмена освобождает active action"),
+		Session->HasActiveAction());
+	TestFalse(TEXT("локальная отмена не ждёт server terminal"),
+		Session->IsCancelPending());
+	TestResult(this, TEXT("после локальной отмены новый BEGIN разрешён"),
+		Session->PickUpItem(901, 902),
+		ECorsairsActionRequestResult::Sent);
+	TestEqual(TEXT("следующий BEGIN отправлен ровно раз"), ItemBeginCount, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionReentrantCommittedMovementStateTest,
+	"Corsairs.Net.Session.ReentrantCommittedMovementState",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionReentrantCommittedMovementStateTest::RunTest(
+	const FString&)
+{
+	UCorsairsSession* Session = NewObject<UCorsairsSession>();
+	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	ECorsairsActionRequestResult NestedResult =
+		ECorsairsActionRequestResult::Invalid;
+	int32 ItemSendCount = 0;
+	Session->SetEventObserversForTests(
+		[&](const FCorsairsMovementEvent& Event)
+		{
+			if (Event.bLocal &&
+				Event.Type == ECorsairsMovementEventType::Terminal)
+			{
+				NestedResult = Session->PickUpItem(901, 902);
+			}
+		},
+		TFunction<void(const FString&)>(),
+		TFunction<void(ECorsairsLoginStage)>());
+	Session->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+			if (Packet.GetCmd() != CMD_CM_BEGINACTION)
+			{
+				return true;
+			}
+			Packet.ReadInt64();
+			const int64 PacketId = Packet.ReadInt64();
+			const int64 ActionType = Packet.ReadInt64();
+			if (ActionType == Msg::ActionType::MOVE)
+			{
+				Deliver(
+					Session,
+					MakeMove(
+						LocalWorldId,
+						PacketId,
+						1,
+						Endpoint1500Bytes,
+						UE_ARRAY_COUNT(Endpoint1500Bytes)));
+				return false;
+			}
+			if (ActionType == Msg::ActionType::ITEM_PICK)
+			{
+				++ItemSendCount;
+			}
+			return true;
+		});
+
+	TestResult(this, TEXT("outer transport failure остаётся явным"),
+		Session->SendMovePath({Spawn, FIntPoint(1300, 2400)}),
+		ECorsairsActionRequestResult::TransportFailed);
+	TestResult(this, TEXT("observer видит уже завершённый MOVE"),
+		NestedResult, ECorsairsActionRequestResult::Sent);
+	TestEqual(TEXT("вложенный action отправлен ровно раз"), ItemSendCount, 1);
+	TestResult(this, TEXT("вложенный committed action не затёрт rollback"),
+		Session->PickUpItem(903, 904),
+		ECorsairsActionRequestResult::Busy);
+	TestEqual(TEXT("terminal confirmation пережила outer rollback"),
+		Session->GetConfirmedPosition(), FIntPoint(1500, 1000));
 	return true;
 }
 
