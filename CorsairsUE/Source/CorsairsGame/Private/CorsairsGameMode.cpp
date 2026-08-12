@@ -3,6 +3,7 @@
 #include "CorsairsCharacter.h"
 #include "CorsairsLoginHud.h"
 #include "CorsairsPlayerCharacter.h"
+#include "CorsairsPlayerController.h"
 
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/PlayerController.h"
@@ -18,11 +19,13 @@ namespace
 	 *  Scripts/build_character_map.py по таблице characters игровых данных:
 	 *  внутри игры нет ни sqlite3, ни доступа к исходникам. */
 	const TCHAR* CharacterMapRelativePath = TEXT("Data/character_map.json");
+	const TCHAR* SkillCatalogRelativePath = TEXT("Data/skills.json");
 }
 
 ACorsairsGameMode::ACorsairsGameMode()
 {
 	DefaultPawnClass = ACorsairsPlayerCharacter::StaticClass();
+	PlayerControllerClass = ACorsairsPlayerController::StaticClass();
 	// Экран состояния сессии: без него отказ сервера виден только в журнале.
 	HUDClass = ACorsairsLoginHud::StaticClass();
 }
@@ -33,25 +36,25 @@ void ACorsairsGameMode::BeginPlay()
 
 	// Сессия создаётся всегда: экран входа опирается на её стадию, и без
 	// объекта ему нечего показывать даже до подключения.
-	Session = NewObject<UCorsairsSession>(this);
-	Session->OnStageChanged.AddDynamic(this, &ACorsairsGameMode::HandleStageChanged);
-	Session->OnActorSeen.AddDynamic(this, &ACorsairsGameMode::HandleActorSeen);
-	Session->OnActorLeft.AddDynamic(this, &ACorsairsGameMode::HandleActorLeft);
-	Session->OnActorLookChanged.AddDynamic(
+	_session = NewObject<UCorsairsSession>(this);
+	_session->OnStageChanged.AddDynamic(this, &ACorsairsGameMode::HandleStageChanged);
+	_session->OnActorSeen.AddDynamic(this, &ACorsairsGameMode::HandleActorSeen);
+	_session->OnActorLeft.AddDynamic(this, &ACorsairsGameMode::HandleActorLeft);
+	_session->OnActorLookChanged.AddDynamic(
 		this,
 		&ACorsairsGameMode::HandleActorLookChanged);
-	Session->OnMovementChanged.AddDynamic(
+	_session->OnMovementChanged.AddDynamic(
 		this,
 		&ACorsairsGameMode::HandleMovementChanged);
 
-	CharacterCatalog = MakeUnique<FCorsairsCharacterCatalog>();
-	StartupError.Empty();
+	_characterCatalog = MakeUnique<FCorsairsCharacterCatalog>();
+	_startupError.Empty();
 	const FString CatalogPath =
 		FPaths::ProjectDir() / CharacterMapRelativePath;
 	FString CatalogError;
-	if (!CharacterCatalog->Load(CatalogPath, CatalogError))
+	if (!_characterCatalog->Load(CatalogPath, CatalogError))
 	{
-		StartupError = FString::Printf(
+		_startupError = FString::Printf(
 			TEXT("каталог персонажей '%s' не загрузился: %s"),
 			*CatalogPath,
 			*CatalogError);
@@ -59,8 +62,27 @@ void ACorsairsGameMode::BeginPlay()
 			LogCorsairsGameMode,
 			Error,
 			TEXT("ошибка запуска: %s"),
-			*StartupError);
-		CharacterCatalog.Reset();
+			*_startupError);
+		_characterCatalog.Reset();
+		return;
+	}
+
+	_skillCatalog = MakeUnique<FCorsairsSkillCatalog>();
+	const FString SkillCatalogPath =
+		FPaths::ProjectDir() / SkillCatalogRelativePath;
+	FString SkillCatalogError;
+	if (!_skillCatalog->Load(SkillCatalogPath, SkillCatalogError))
+	{
+		_startupError = FString::Printf(
+			TEXT("каталог навыков '%s' не загрузился: %s"),
+			*SkillCatalogPath,
+			*SkillCatalogError);
+		UE_LOG(
+			LogCorsairsGameMode,
+			Error,
+			TEXT("ошибка запуска: %s"),
+			*_startupError);
+		_skillCatalog.Reset();
 		return;
 	}
 
@@ -81,28 +103,33 @@ void ACorsairsGameMode::StartLogin()
 			LogCorsairsGameMode,
 			Error,
 			TEXT("вход заблокирован ошибкой запуска: %s"),
-			*StartupError);
+			*_startupError);
 		return;
 	}
 
-	if (Session == nullptr)
+	if (_session == nullptr)
 	{
 		return;
 	}
-	Session->Login(Host, Port, Account, Password);
+	_session->Login(Host, Port, Account, Password);
 }
 
 void ACorsairsGameMode::EndPlay(const EEndPlayReason::Type Reason)
 {
-	if (Session != nullptr)
+	if (_session != nullptr)
 	{
-		Session->OnMovementChanged.RemoveDynamic(
+		_session->OnMovementChanged.RemoveDynamic(
 			this,
 			&ACorsairsGameMode::HandleMovementChanged);
 	}
 
 	APlayerController* Controller =
 		UGameplayStatics::GetPlayerController(this, 0);
+	if (ACorsairsPlayerController* CorsairsController =
+		Cast<ACorsairsPlayerController>(Controller))
+	{
+		CorsairsController->AttachGameplay(nullptr, nullptr, nullptr);
+	}
 	if (ACorsairsPlayerCharacter* Local = Controller != nullptr
 		? Cast<ACorsairsPlayerCharacter>(Controller->GetPawn())
 		: nullptr)
@@ -112,12 +139,13 @@ void ACorsairsGameMode::EndPlay(const EEndPlayReason::Type Reason)
 	}
 
 	CleanupRemoteActors();
-	CharacterGround.Reset();
+	_characterGround.Reset();
+	_skillCatalog.Reset();
 
-	if (Session != nullptr)
+	if (_session != nullptr)
 	{
-		Session->Logout();
-		Session = nullptr;
+		_session->Logout();
+		_session = nullptr;
 	}
 	Super::EndPlay(Reason);
 }
@@ -131,7 +159,7 @@ void ACorsairsGameMode::HandleMovementChanged(
 	}
 
 	const TObjectPtr<ACorsairsCharacter>* Found =
-		WorldActors.Find(Event.WorldId);
+		_worldActors.Find(Event.WorldId);
 	if (Found == nullptr || *Found == nullptr)
 	{
 		return;
@@ -143,6 +171,16 @@ void ACorsairsGameMode::HandleMovementChanged(
 void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FString& Message)
 {
 	UE_LOG(LogCorsairsGameMode, Log, TEXT("вход: %s"), *Message);
+	if (Stage == ECorsairsLoginStage::InWorld)
+	{
+		// Каждый ENTERMAP начинает новый authoritative world snapshot, даже
+		// если предыдущая стадия также была InWorld.
+		CleanupRemoteActors();
+	}
+	else
+	{
+		DeactivateLocalGameplay();
+	}
 
 	switch (Stage)
 	{
@@ -154,17 +192,17 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 				LogCorsairsGameMode,
 				Error,
 				TEXT("выбор персонажа заблокирован ошибкой запуска: %s"),
-				*StartupError);
+				*_startupError);
 			break;
 		}
 
 		// Пока экрана выбора нет — берём первого пригодного персонажа.
-		const TArray<FCorsairsCharacterSlot>& Characters = Session->GetCharacters();
+		const TArray<FCorsairsCharacterSlot>& Characters = _session->GetCharacters();
 		for (int32 Index = 0; Index < Characters.Num(); ++Index)
 		{
 			if (Characters[Index].Valid)
 			{
-				Session->EnterWorld(Index);
+				_session->EnterWorld(Index);
 				return;
 			}
 		}
@@ -181,11 +219,11 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 				LogCorsairsGameMode,
 				Error,
 				TEXT("вход в мир заблокирован ошибкой запуска: %s"),
-				*StartupError);
+				*_startupError);
 			break;
 		}
 
-		const FCorsairsWorldActor LocalActor = Session->GetLocalActor();
+		const FCorsairsWorldActor LocalActor = _session->GetLocalActor();
 		APlayerController* Controller =
 			UGameplayStatics::GetPlayerController(this, 0);
 		ACorsairsPlayerCharacter* Character =
@@ -212,6 +250,7 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 				LogCorsairsGameMode,
 				Error,
 				TEXT("вход в мир остановлен: внешность локального персонажа недоступна"));
+			FailClosedLocalActivation();
 			break;
 		}
 
@@ -222,7 +261,7 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 		const bool bGroundLoaded =
 			ActivateLocalCharacter(
 				Character,
-				Session->GetMapName(),
+				_session->GetMapName(),
 				Spawn);
 		if (!bGroundLoaded)
 		{
@@ -235,7 +274,7 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 			TEXT("позиция от сервера: (%d, %d) на карте %s -> (%.0f, %.0f, %.0f), земля %s"),
 			Spawn.X,
 			Spawn.Y,
-			*Session->GetMapName(),
+			*_session->GetMapName(),
 			Location.X,
 			Location.Y,
 			Location.Z,
@@ -251,17 +290,17 @@ void ACorsairsGameMode::HandleStageChanged(ECorsairsLoginStage Stage, const FStr
 
 bool ACorsairsGameMode::LoadCharacterGround(const FString& MapName)
 {
-	if (CharacterGround == nullptr)
+	if (_characterGround == nullptr)
 	{
-		CharacterGround = MakeUnique<FCorsairsCharacterGround>();
+		_characterGround = MakeUnique<FCorsairsCharacterGround>();
 	}
 	FString Error;
-	if (CharacterGround->Load(MapName, Error))
+	if (_characterGround->Load(MapName, Error))
 	{
 		return true;
 	}
 
-	StartupError = FString::Printf(
+	_startupError = FString::Printf(
 		TEXT("character ground карты %s не загрузился: %s"),
 		*MapName,
 		*Error);
@@ -269,7 +308,7 @@ bool ACorsairsGameMode::LoadCharacterGround(const FString& MapName)
 		LogCorsairsGameMode,
 		Error,
 		TEXT("%s"),
-		*StartupError);
+		*_startupError);
 	return false;
 }
 
@@ -281,13 +320,13 @@ void ACorsairsGameMode::GroundCharacter(
 	{
 		return;
 	}
-	if (CharacterGround == nullptr || !CharacterGround->IsLoaded())
+	if (_characterGround == nullptr || !_characterGround->IsLoaded())
 	{
 		return;
 	}
 
-	Character->AttachCharacterGround(CharacterGround.Get());
-	const FVector Center = CharacterGround->ActorCenter(
+	Character->AttachCharacterGround(_characterGround.Get());
+	const FVector Center = _characterGround->ActorCenter(
 		SourcePosition,
 		Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
 	Character->SetActorLocation(
@@ -306,7 +345,7 @@ ACorsairsCharacter* ACorsairsGameMode::SpawnRemoteCharacter(
 	{
 		return nullptr;
 	}
-	if (CharacterGround == nullptr || !CharacterGround->IsLoaded())
+	if (_characterGround == nullptr || !_characterGround->IsLoaded())
 	{
 		return nullptr;
 	}
@@ -316,7 +355,7 @@ ACorsairsCharacter* ACorsairsGameMode::SpawnRemoteCharacter(
 	const double HalfHeight = DefaultCharacter->GetCapsuleComponent()
 		->GetScaledCapsuleHalfHeight();
 	const FVector Center =
-		CharacterGround->ActorCenter(SourcePosition, HalfHeight);
+		_characterGround->ActorCenter(SourcePosition, HalfHeight);
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.SpawnCollisionHandlingOverride =
 		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
@@ -334,27 +373,60 @@ bool ACorsairsGameMode::ActivateLocalCharacter(
 	const FString& MapName,
 	const FIntPoint SourcePosition)
 {
-	if (Character == nullptr || Session == nullptr)
+	if (Character == nullptr || _session == nullptr)
 	{
 		return false;
 	}
 	if (!LoadCharacterGround(MapName))
 	{
-		Character->AttachSession(nullptr);
-		Character->AttachCharacterGround(nullptr);
-		CleanupRemoteActors();
-		ScheduleSessionLogoutAfterGroundFailure();
+		FailClosedLocalActivation();
 		return false;
 	}
 
 	GroundCharacter(Character, SourcePosition);
-	Character->AttachSession(Session);
+	Character->AttachSession(_session);
+	if (ACorsairsPlayerController* Controller =
+		Cast<ACorsairsPlayerController>(Character->GetController()))
+	{
+		Controller->AttachGameplay(
+			_session,
+			_characterGround.Get(),
+			_skillCatalog.Get());
+	}
+	_localGameplayActive = true;
 	return true;
+}
+
+void ACorsairsGameMode::FailClosedLocalActivation()
+{
+	DeactivateLocalGameplay();
+	ScheduleSessionLogoutAfterActivationFailure();
+}
+
+void ACorsairsGameMode::DeactivateLocalGameplay()
+{
+	_localGameplayActive = false;
+	APlayerController* Controller =
+		UGameplayStatics::GetPlayerController(this, 0);
+	if (ACorsairsPlayerController* CorsairsController =
+		Cast<ACorsairsPlayerController>(Controller))
+	{
+		CorsairsController->AttachGameplay(nullptr, nullptr, nullptr);
+	}
+	if (ACorsairsPlayerCharacter* Character = Controller != nullptr
+		? Cast<ACorsairsPlayerCharacter>(Controller->GetPawn())
+		: nullptr)
+	{
+		Character->AttachSession(nullptr);
+		Character->AttachCharacterGround(nullptr);
+	}
+
+	CleanupRemoteActors();
 }
 
 void ACorsairsGameMode::CleanupRemoteActors()
 {
-	for (TPair<int64, TObjectPtr<ACorsairsCharacter>>& Pair : WorldActors)
+	for (TPair<int64, TObjectPtr<ACorsairsCharacter>>& Pair : _worldActors)
 	{
 		if (Pair.Value != nullptr)
 		{
@@ -362,20 +434,20 @@ void ACorsairsGameMode::CleanupRemoteActors()
 			Pair.Value->Destroy();
 		}
 	}
-	WorldActors.Empty();
-	WorldActorNames.Empty();
-	WorldActorArchetypes.Empty();
+	_worldActors.Empty();
+	_worldActorNames.Empty();
+	_worldActorArchetypes.Empty();
 }
 
-void ACorsairsGameMode::ScheduleSessionLogoutAfterGroundFailure()
+void ACorsairsGameMode::ScheduleSessionLogoutAfterActivationFailure()
 {
 	UWorld* World = GetWorld();
-	if (World == nullptr || Session == nullptr)
+	if (World == nullptr || _session == nullptr)
 	{
 		return;
 	}
 
-	const TWeakObjectPtr<UCorsairsSession> FailedSession(Session);
+	const TWeakObjectPtr<UCorsairsSession> FailedSession(_session);
 	World->GetTimerManager().SetTimerForNextTick(
 		FTimerDelegate::CreateWeakLambda(
 			this,
@@ -395,14 +467,35 @@ bool ACorsairsGameMode::LoadCharacterGroundFromBytesForTests(
 	const TConstArrayView<uint8> Bytes,
 	FString& OutError)
 {
-	if (CharacterGround == nullptr)
+	if (_characterGround == nullptr)
 	{
-		CharacterGround = MakeUnique<FCorsairsCharacterGround>();
+		_characterGround = MakeUnique<FCorsairsCharacterGround>();
 	}
-	return CharacterGround->LoadFromBytes(
+	return _characterGround->LoadFromBytes(
 		TileWidth,
 		TileHeight,
 		Bytes,
+		OutError);
+}
+
+bool ACorsairsGameMode::LoadCharacterNavigationFromBytesForTests(
+	const int32 TileWidth,
+	const int32 TileHeight,
+	const TConstArrayView<uint8> HeightBytes,
+	const TConstArrayView<uint8> BlockBytes,
+	const TConstArrayView<uint8> RegionBytes,
+	FString& OutError)
+{
+	if (_characterGround == nullptr)
+	{
+		_characterGround = MakeUnique<FCorsairsCharacterGround>();
+	}
+	return _characterGround->LoadRuntimeFromBytes(
+		TileWidth,
+		TileHeight,
+		HeightBytes,
+		BlockBytes,
+		RegionBytes,
 		OutError);
 }
 
@@ -411,6 +504,7 @@ void ACorsairsGameMode::GroundCharacterForTests(
 	const FIntPoint SourcePosition)
 {
 	GroundCharacter(Character, SourcePosition);
+	_localGameplayActive = true;
 }
 
 ACorsairsCharacter* ACorsairsGameMode::SpawnRemoteCharacterForTests(
@@ -436,13 +530,24 @@ void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 			Error,
 			TEXT("появление персонажа %lld заблокировано ошибкой запуска: %s"),
 			Actor.WorldId,
-			*StartupError);
+			*_startupError);
+		return;
+	}
+	if (!_localGameplayActive)
+	{
 		return;
 	}
 
-	if (WorldActors.Contains(Actor.WorldId))
+	if (TObjectPtr<ACorsairsCharacter>* Existing = _worldActors.Find(Actor.WorldId))
 	{
-		return;
+		FCorsairsServerIdentity ExistingIdentity;
+		if (*Existing != nullptr &&
+			(*Existing)->TryGetServerIdentity(ExistingIdentity) &&
+			ExistingIdentity.Handle == Actor.Handle)
+		{
+			return;
+		}
+		HandleActorLeft(Actor.WorldId);
 	}
 
 	// ActorCenter переводит source-position через rigid Q=(-y,x).
@@ -482,30 +587,35 @@ void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 							   : Actor.Name);
 #endif
 
-	ResolveAndApplyAppearance(
-		Spawned,
-		Actor.TypeId,
-		Actor.Look,
-		Actor.Name,
-		Actor.WorldId);
+	if (!ResolveAndApplyAppearance(
+			Spawned,
+			Actor.TypeId,
+			Actor.Look,
+			Actor.Name,
+			Actor.WorldId))
+	{
+		Spawned->AttachCharacterGround(nullptr);
+		Spawned->Destroy();
+		return;
+	}
 
-	WorldActors.Add(Actor.WorldId, Spawned);
-	WorldActorNames.Add(Actor.WorldId, Actor.Name);
-	WorldActorArchetypes.Add(Actor.WorldId, Actor.TypeId);
+	_worldActors.Add(Actor.WorldId, Spawned);
+	_worldActorNames.Add(Actor.WorldId, Actor.Name);
+	_worldActorArchetypes.Add(Actor.WorldId, Actor.TypeId);
 }
 
 void ACorsairsGameMode::HandleActorLeft(int64 WorldId)
 {
-	if (TObjectPtr<ACorsairsCharacter>* Found = WorldActors.Find(WorldId))
+	if (TObjectPtr<ACorsairsCharacter>* Found = _worldActors.Find(WorldId))
 	{
 		if (*Found != nullptr)
 		{
 			(*Found)->AttachCharacterGround(nullptr);
 			(*Found)->Destroy();
 		}
-		WorldActors.Remove(WorldId);
-		WorldActorNames.Remove(WorldId);
-		WorldActorArchetypes.Remove(WorldId);
+		_worldActors.Remove(WorldId);
+		_worldActorNames.Remove(WorldId);
+		_worldActorArchetypes.Remove(WorldId);
 	}
 }
 
@@ -513,9 +623,9 @@ void ACorsairsGameMode::HandleActorLookChanged(
 	const int64 WorldId,
 	const FCorsairsCharacterLook& Look)
 {
-	if (Session != nullptr)
+	if (_session != nullptr)
 	{
-		const FCorsairsWorldActor LocalActor = Session->GetLocalActor();
+		const FCorsairsWorldActor LocalActor = _session->GetLocalActor();
 		if (LocalActor.WorldId == WorldId)
 		{
 			APlayerController* Controller =
@@ -535,7 +645,7 @@ void ACorsairsGameMode::HandleActorLookChanged(
 	}
 
 	const TObjectPtr<ACorsairsCharacter>* Found =
-		WorldActors.Find(WorldId);
+		_worldActors.Find(WorldId);
 	if (Found == nullptr || *Found == nullptr)
 	{
 		return;
@@ -543,16 +653,16 @@ void ACorsairsGameMode::HandleActorLookChanged(
 
 	const int32 ArchetypeId = Look.TypeId != 0
 		? Look.TypeId
-		: WorldActorArchetypes.FindRef(WorldId);
+		: _worldActorArchetypes.FindRef(WorldId);
 	if (Look.TypeId != 0)
 	{
-		WorldActorArchetypes.Add(WorldId, Look.TypeId);
+		_worldActorArchetypes.Add(WorldId, Look.TypeId);
 	}
 	ResolveAndApplyAppearance(
 		*Found,
 		ArchetypeId,
 		Look,
-		WorldActorNames.FindRef(WorldId),
+		_worldActorNames.FindRef(WorldId),
 		WorldId);
 }
 
@@ -563,7 +673,7 @@ bool ACorsairsGameMode::ResolveAndApplyAppearance(
 	const FString& ActorName,
 	const int64 WorldId)
 {
-	if (Character == nullptr || CharacterCatalog == nullptr)
+	if (Character == nullptr || _characterCatalog == nullptr)
 	{
 		return false;
 	}
@@ -573,7 +683,7 @@ bool ACorsairsGameMode::ResolveAndApplyAppearance(
 		: ActorName;
 	FCorsairsResolvedAppearance Appearance;
 	FString Error;
-	if (!CharacterCatalog->Resolve(
+	if (!_characterCatalog->Resolve(
 			ArchetypeId,
 			Look,
 			Appearance,

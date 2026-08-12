@@ -1363,6 +1363,117 @@ bool FCorsairsSessionItemNotificationsTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionActorIncarnationReplacementTest,
+	"Corsairs.Movement.Session.ActorIncarnationReplacement",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionActorIncarnationReplacementTest::RunTest(const FString&)
+{
+	// Мутации: безусловный Add оставляет дубликат; новый Handle не публикует
+	// уход старой инкарнации; повтор той же identity не обновляет snapshot.
+	UCorsairsSession* Session = NewObject<UCorsairsSession>();
+	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	TArray<FString> Events;
+	Session->SetActorLifecycleObserversForTests(
+		[&](const FCorsairsWorldActor& Actor)
+		{
+			Events.Add(FString::Printf(
+				TEXT("seen:%lld:%lld"),
+				Actor.WorldId,
+				Actor.Handle));
+		},
+		[&](const int64 WorldId)
+		{
+			Events.Add(FString::Printf(TEXT("left:%lld"), WorldId));
+		});
+
+	Msg::McChaBeginSeeMessage First = MakeActorSeen(
+		RemoteWorldId,
+		FIntPoint(2000, 3000),
+		300);
+	First.base.handle = 88001;
+	First.base.name = "First incarnation";
+	Deliver(Session, First);
+	Events.Reset();
+
+	Msg::McChaBeginSeeMessage SameIdentity = First;
+	SameIdentity.base.posX = 2050;
+	SameIdentity.base.posY = 3050;
+	SameIdentity.base.name = "Updated incarnation";
+	Deliver(Session, SameIdentity);
+	TestEqual(TEXT("same identity remains exactly once"),
+		Session->GetVisibleActors().Num(), 1);
+	if (Session->GetVisibleActors().Num() == 1)
+	{
+		TestEqual(TEXT("same identity replaces authoritative position"),
+			Session->GetVisibleActors()[0].Position,
+			FIntPoint(2050, 3050));
+		TestEqual(TEXT("same identity replaces authoritative name"),
+			Session->GetVisibleActors()[0].Name,
+			FString(TEXT("Updated incarnation")));
+	}
+	TestEqual(TEXT("same identity updates without lifecycle noise"),
+		Events.Num(), 0);
+
+	Events.Reset();
+	Msg::McChaBeginSeeMessage NewIdentity = SameIdentity;
+	NewIdentity.base.handle = 88002;
+	NewIdentity.base.posX = 2100;
+	NewIdentity.base.posY = 3100;
+	Deliver(Session, NewIdentity);
+	TestEqual(TEXT("new incarnation replaces rather than appends"),
+		Session->GetVisibleActors().Num(), 1);
+	if (Session->GetVisibleActors().Num() == 1)
+	{
+		TestEqual(TEXT("replacement exposes only the new handle"),
+			Session->GetVisibleActors()[0].Handle,
+			int64{88002});
+	}
+	TestEqual(TEXT("old incarnation leaves before one new publication"),
+		Events,
+		TArray<FString>{TEXT("left:88"), TEXT("seen:88:88002")});
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionEnterMapClearsVisibleActorsTest,
+	"Corsairs.Movement.Session.EnterMapClearsVisibleActors",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionEnterMapClearsVisibleActorsTest::RunTest(const FString&)
+{
+	// Мутация: ENTERMAP заменяет local snapshot, но оставляет актёров
+	// предыдущей карты и не сообщает их уход потребителям.
+	UCorsairsSession* Session = NewObject<UCorsairsSession>();
+	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	TArray<FString> Events;
+	Session->SetActorLifecycleObserversForTests(
+		[&](const FCorsairsWorldActor& Actor)
+		{
+			Events.Add(FString::Printf(TEXT("seen:%lld"), Actor.WorldId));
+		},
+		[&](const int64 WorldId)
+		{
+			Events.Add(FString::Printf(TEXT("left:%lld"), WorldId));
+		});
+	Deliver(Session, MakeActorSeen(88, FIntPoint(2000, 3000), 300));
+	Deliver(Session, MakeActorSeen(99, FIntPoint(2500, 3500), 350));
+	Events.Reset();
+
+	Deliver(Session, MakeEnterMap(FIntPoint(4000, 5000)));
+	TestEqual(TEXT("new ENTERMAP clears the previous visibility snapshot"),
+		Session->GetVisibleActors().Num(), 0);
+	TestEqual(TEXT("old actors leave in stable snapshot order"),
+		Events,
+		TArray<FString>{TEXT("left:88"), TEXT("left:99")});
+	TestEqual(TEXT("new ENTERMAP remains in world"),
+		Session->GetStage(), ECorsairsLoginStage::InWorld);
+	TestEqual(TEXT("new ENTERMAP installs the new local position"),
+		Session->GetConfirmedPosition(), FIntPoint(4000, 5000));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCorsairsSessionResetTest,
 	"Corsairs.Movement.Session.ResetOnDisconnectAndLogout",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

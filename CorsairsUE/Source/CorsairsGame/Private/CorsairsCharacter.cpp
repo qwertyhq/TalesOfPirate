@@ -95,7 +95,7 @@ void ACorsairsCharacter::AttachCharacterGround(
 bool ACorsairsCharacter::InitializeServerIdentity(
 	const FCorsairsServerIdentity& identity)
 {
-	if (identity.WorldId == 0)
+	if (identity.WorldId == 0 || identity.Handle == 0)
 	{
 		return false;
 	}
@@ -127,8 +127,7 @@ void ACorsairsCharacter::HandleServerMovementChanged(
 {
 	if (Event.Type == ECorsairsMovementEventType::AcceptedPath)
 	{
-		if (!Event.bServerDriven ||
-			!FMath::IsFinite(Event.MovementSpeedCmPerSecond) ||
+		if (!FMath::IsFinite(Event.MovementSpeedCmPerSecond) ||
 			Event.MovementSpeedCmPerSecond <= 0.0)
 		{
 			StopServerPathFollower();

@@ -2,9 +2,11 @@
 
 #include "CorsairsCharacter.h"
 #include "CorsairsGameMode.h"
+#include "CorsairsPlayerController.h"
 #include "CorsairsPlayerCharacter.h"
 
 #include "Components/CapsuleComponent.h"
+#include "CorsairsNet/include/CommandMessages.h"
 #include "CorsairsNet/include/Packet.h"
 #include "CorsairsSession.h"
 #include "Engine/World.h"
@@ -16,6 +18,7 @@
 namespace
 {
 	using Corsairs::Net::WPacket;
+	using Corsairs::Net::RPacket;
 
 	constexpr int64 LocalWorldId = 77;
 	constexpr double ServerSpeedCmPerSecond = 200.0;
@@ -77,6 +80,22 @@ namespace
 		Event.bServerDriven = true;
 		Event.MovementSpeedCmPerSecond = ServerSpeedCmPerSecond;
 		return Event;
+	}
+
+	void InstallMovementRoutingSkill(
+		UCorsairsSession* Session,
+		const int64 SkillId)
+	{
+		Corsairs::Net::Msg::McSynSkillBagMessage Message;
+		Message.worldId = LocalWorldId;
+		Message.skillBag.synType = 0;
+		Corsairs::Net::Msg::SkillEntry Skill;
+		Skill.id = SkillId;
+		Skill.level = 1;
+		Message.skillBag.skills.push_back(Skill);
+		WPacket Wire = Corsairs::Net::Msg::serialize(Message);
+		RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+		Session->HandlePacketForTests(Packet);
 	}
 
 	ACorsairsCharacter* FindRemoteAt(
@@ -160,13 +179,28 @@ namespace
 			FString GroundError;
 			// Один source-tile: (0..49,0..49)=10, (50..99,0..49)=20,
 			// (0..49,50..99)=30, (50..99,50..99)=40 cm.
-			const TArray<uint8> GroundBytes = {0x02, 0x04, 0x06, 0x08};
+			const TArray<uint8> GroundBytes = {
+				0x02, 0x04, 0x06, 0x08,
+				0x02, 0x04, 0x06, 0x08,
+				0x02, 0x04, 0x06, 0x08,
+				0x02, 0x04, 0x06, 0x08,
+			};
+			const TArray<uint8> HeightBytes = {
+				0x00, 0x80, 0x00, 0x80,
+				0x00, 0x80, 0x00, 0x80,
+			};
+			const TArray<uint8> RegionBytes = {
+				0x01, 0x00, 0x01, 0x00,
+				0x01, 0x00, 0x01, 0x00,
+			};
 			if (!Test->TestTrue(
-					TEXT("routing fixture loads ground"),
-					GameMode->LoadCharacterGroundFromBytesForTests(
-						1,
-						1,
+					TEXT("routing fixture loads navigation"),
+					GameMode->LoadCharacterNavigationFromBytesForTests(
+						2,
+						2,
+						HeightBytes,
 						GroundBytes,
+						RegionBytes,
 						GroundError)))
 			{
 				TestWorld.ForwardErrorMessages(Test);
@@ -190,22 +224,146 @@ namespace
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCorsairsGameModeDynamicLifecycleTest,
-	"Corsairs.Movement.Routing.GameModeDynamicLifecycle",
+	FCorsairsGameModeActorIncarnationReplacementTest,
+	"Corsairs.Movement.Routing.ActorIncarnationReplacement",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FCorsairsGameModeDynamicLifecycleTest::RunTest(const FString&)
+bool FCorsairsGameModeActorIncarnationReplacementTest::RunTest(const FString&)
 {
-	// Mutation: не добавить GameMode dynamic receiver, подписать дважды либо
-	// оставить receiver на сохранённой Session после EndPlay.
+	// Мутации: Contains(WorldId) глотает новую инкарнацию и повтор той же
+	// identity оставляет старые transform/metadata.
 	FMovementRoutingFixture Fixture;
 	if (!Fixture.SetUp(this))
 	{
 		return false;
 	}
 
-	const FCorsairsWorldActor RemoteState = {
-		88, TEXT("LifecycleRemote"), FIntPoint(0, 0), 0, 1};
+	FCorsairsWorldActor First;
+	First.WorldId = 8801;
+	First.Handle = 88001;
+	First.Name = TEXT("First incarnation");
+	First.Position = FIntPoint(20, 20);
+	First.Angle = 15;
+	First.TypeId = 1;
+	First.CtrlType = 4;
+	First.ChaId = 731;
+	Fixture.GameMode->HandleActorSeenForTests(First);
+	ACorsairsCharacter* OldRemote = FindRemoteAt(
+		Fixture.TestWorld.GetTestWorld(), Fixture.Local, First.Position);
+	if (!TestNotNull(TEXT("old incarnation exists"), OldRemote))
+	{
+		return false;
+	}
+
+	FCorsairsWorldActor Replacement = First;
+	Replacement.Handle = 88002;
+	Replacement.Name = TEXT("Second incarnation");
+	Replacement.Position = FIntPoint(70, 20);
+	Replacement.Angle = 95;
+	Fixture.GameMode->HandleActorSeenForTests(Replacement);
+	TestTrue(TEXT("new handle destroys the old UObject"),
+		OldRemote->IsActorBeingDestroyed());
+	TestEqual(TEXT("replacement keeps one entry in every registry"),
+		Fixture.GameMode->GetRemoteRegistryCountsForTests(),
+		FIntVector(1, 1, 1));
+	ACorsairsCharacter* NewRemote = FindRemoteAt(
+		Fixture.TestWorld.GetTestWorld(), Fixture.Local, Replacement.Position);
+	if (!TestNotNull(TEXT("new incarnation exists"), NewRemote))
+	{
+		return false;
+	}
+	TestTrue(TEXT("new incarnation uses another UObject"),
+		NewRemote != OldRemote);
+	FCorsairsServerIdentity Identity;
+	TestTrue(TEXT("new incarnation exposes server identity"),
+		NewRemote->TryGetServerIdentity(Identity));
+	TestEqual(TEXT("new incarnation exposes replacement handle"),
+		Identity.Handle, int64{88002});
+
+	Fixture.ForwardErrors(this);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsGameModeInWorldReentryCleanupTest,
+	"Corsairs.Movement.Routing.InWorldReentryCleansRemoteActors",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsGameModeInWorldReentryCleanupTest::RunTest(const FString&)
+{
+	// Мутация: HandleStageChanged очищает remote registry только при выходе
+	// из InWorld, поэтому ENTERMAP одной карты сразу в другую оставляет UObject.
+	FMovementRoutingFixture Fixture;
+	if (!Fixture.SetUp(this))
+	{
+		return false;
+	}
+
+	FCorsairsWorldActor Remote;
+	Remote.WorldId = 8801;
+	Remote.Handle = 88001;
+	Remote.Name = TEXT("Previous map remote");
+	Remote.Position = FIntPoint(20, 20);
+	Remote.TypeId = 1;
+	// Намеренно создаём registry-orphan без session DTO: только stage cleanup
+	// способен убрать его при InWorld -> InWorld.
+	Fixture.GameMode->HandleActorSeenForTests(Remote);
+	ACorsairsCharacter* OldRemote = FindRemoteAt(
+		Fixture.TestWorld.GetTestWorld(), Fixture.Local, Remote.Position);
+	if (!TestNotNull(TEXT("previous-map remote exists"), OldRemote))
+	{
+		return false;
+	}
+	TestEqual(TEXT("orphan отсутствует в session visibility"),
+		Fixture.Session->GetVisibleActors().Num(), 0);
+
+	FCorsairsWorldActor Local;
+	Local.WorldId = LocalWorldId;
+	Local.Handle = 7701;
+	Local.Name = TEXT("Reentered local");
+	Local.Position = FIntPoint(0, 0);
+	Local.TypeId = 1;
+	Local.Look.TypeId = 1;
+	Local.Look.HairId = 2000;
+	Local.Look.EquipIds.SetNumZeroed(CorsairsEquipSlotCount);
+	Local.Look.EquipIds[1] = 255;
+	Local.Look.EquipIds[2] = 289;
+	Local.Look.EquipIds[3] = 465;
+	Local.Look.EquipIds[4] = 641;
+	Fixture.Session->SetInWorldAndBroadcastForTests(Local, TEXT("garner"));
+
+	TestEqual(TEXT("InWorld to InWorld clears session visibility"),
+		Fixture.Session->GetVisibleActors().Num(), 0);
+	TestTrue(TEXT("InWorld to InWorld destroys previous-map UObject"),
+		OldRemote->IsActorBeingDestroyed());
+	TestEqual(TEXT("InWorld to InWorld empties all remote registries"),
+		Fixture.GameMode->GetRemoteRegistryCountsForTests(),
+		FIntVector::ZeroValue);
+	Fixture.ForwardErrors(this);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsGameModeDynamicLifecycleTest,
+	"Corsairs.Movement.Routing.GameModeDynamicLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsGameModeDynamicLifecycleTest::RunTest(const FString&)
+{
+	// Мутация: не добавить динамический получатель GameMode, подписать его
+	// дважды либо оставить получатель на сохранённой Session после EndPlay.
+	FMovementRoutingFixture Fixture;
+	if (!Fixture.SetUp(this))
+	{
+		return false;
+	}
+
+	FCorsairsWorldActor RemoteState;
+	RemoteState.WorldId = 88;
+	RemoteState.Handle = 8801;
+	RemoteState.Name = TEXT("LifecycleRemote");
+	RemoteState.Position = FIntPoint(0, 0);
+	RemoteState.TypeId = 1;
 	Fixture.GameMode->HandleActorSeenForTests(RemoteState);
 	ACorsairsCharacter* Remote = FindRemoteAt(
 		Fixture.TestWorld.GetTestWorld(), Fixture.Local, RemoteState.Position);
@@ -247,14 +405,75 @@ bool FCorsairsGameModeDynamicLifecycleTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsGameModeControllerClassTest,
+	"Corsairs.Movement.Routing.GameModeControllerClass",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsGameModeControllerClassTest::RunTest(const FString&)
+{
+	FMovementRoutingFixture Fixture;
+	if (!Fixture.SetUp(this))
+	{
+		return false;
+	}
+
+	TestTrue(
+		TEXT("GameMode использует точный игровой контроллер мыши"),
+		Fixture.GameMode->PlayerControllerClass.Get() ==
+			ACorsairsPlayerController::StaticClass());
+	Fixture.ForwardErrors(this);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsGameModeAppearanceFailureCleanupTest,
+	"Corsairs.Movement.Routing.AppearanceFailureCleansUp",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsGameModeAppearanceFailureCleanupTest::RunTest(const FString&)
+{
+	FMovementRoutingFixture Fixture;
+	if (!Fixture.SetUp(this))
+	{
+		return false;
+	}
+
+	FCorsairsWorldActor InvalidLocal;
+	InvalidLocal.WorldId = LocalWorldId;
+	InvalidLocal.Handle = 7701;
+	InvalidLocal.Name = TEXT("InvalidAppearance");
+	InvalidLocal.TypeId = MAX_int32;
+	InvalidLocal.Position = FIntPoint(0, 0);
+	AddExpectedError(
+		TEXT("вход в мир остановлен"),
+		EAutomationExpectedErrorFlags::Contains,
+		1);
+	Fixture.Session->SetInWorldAndBroadcastForTests(
+		InvalidLocal,
+		TEXT("garner"));
+	TestEqual(
+		TEXT("appearance failure is still in-world before deferred cleanup"),
+		Fixture.Session->GetStage(),
+		ECorsairsLoginStage::InWorld);
+
+	Fixture.TestWorld.TickTestWorld(0.1f);
+	TestEqual(
+		TEXT("appearance failure logs the session out on the next tick"),
+		Fixture.Session->GetStage(),
+		ECorsairsLoginStage::Idle);
+	Fixture.ForwardErrors(this);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCorsairsCharacterServerIdentityTest,
 	"Corsairs.Movement.Routing.CharacterServerIdentity",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FCorsairsCharacterServerIdentityTest::RunTest(const FString&)
 {
-	// Mutation: не привязать серверную identity к созданному персонажу либо
-	// вернуть старое значение output для персонажа, который сервер не создавал.
+	// Мутация: не привязать серверную identity к созданному персонажу либо
+	// вернуть старое значение результата для персонажа, которого сервер не создавал.
 	FMovementRoutingFixture fixture;
 	if (!fixture.SetUp(this))
 	{
@@ -320,6 +539,9 @@ bool FCorsairsCharacterServerIdentityTest::RunTest(const FString&)
 	FCorsairsServerIdentity invalidIdentity;
 	TestFalse(TEXT("zero world id cannot initialize identity"),
 		unbound->InitializeServerIdentity(invalidIdentity));
+	invalidIdentity.WorldId = 55;
+	TestFalse(TEXT("zero handle cannot initialize identity"),
+		unbound->InitializeServerIdentity(invalidIdentity));
 
 	const FIntVector registriesBeforeInvalid =
 		fixture.GameMode->GetRemoteRegistryCountsForTests();
@@ -337,6 +559,19 @@ bool FCorsairsCharacterServerIdentityTest::RunTest(const FString&)
 	TestTrue(
 		TEXT("invalid server identity leaves no live world actor"),
 		InvalidRemote == nullptr || InvalidRemote->IsActorBeingDestroyed());
+	invalidRemoteState.WorldId = 8802;
+	invalidRemoteState.Handle = 0;
+	invalidRemoteState.Position = FIntPoint(40, 40);
+	fixture.GameMode->HandleActorSeenForTests(invalidRemoteState);
+	TestEqual(TEXT("zero-handle actor is not registered"),
+		fixture.GameMode->GetRemoteRegistryCountsForTests(),
+		registriesBeforeInvalid);
+	InvalidRemote = FindRemoteAt(
+		fixture.TestWorld.GetTestWorld(),
+		fixture.Local,
+		invalidRemoteState.Position);
+	TestTrue(TEXT("zero-handle actor is destroyed before publication"),
+		InvalidRemote == nullptr || InvalidRemote->IsActorBeingDestroyed());
 	return true;
 }
 
@@ -347,8 +582,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FCorsairsLocalDeliveredOnceTest::RunTest(const FString&)
 {
-	// Mutation: GameMode forwards local events, the pawn starts manual paths,
-	// or a skill path ignores the event speed/authority lock.
+	// Мутация: GameMode пересылает локальные события, pawn начинает manual
+	// path либо skill path игнорирует скорость события и authority lock.
 	FMovementRoutingFixture Fixture;
 	if (!Fixture.SetUp(this))
 	{
@@ -367,16 +602,17 @@ bool FCorsairsLocalDeliveredOnceTest::RunTest(const FString&)
 		ServerSpeedCmPerSecond,
 		{FIntPoint(0, 0), FIntPoint(80, 0)}));
 	Fixture.TestWorld.TickTestWorld(0.1f);
-	TestEqual(TEXT("manual local AcceptedPath leaves pawn under prediction"),
-		Fixture.Local->GetActorLocation(), Start);
-	TestEqual(TEXT("manual local path never enters inherited follower"),
-		Fixture.Local->GetServerPathAcceptCountForTests(), 0);
+	TestEqual(TEXT("click AcceptedPath двигает pawn с серверной скоростью"),
+		Fixture.Local->GetActorLocation(), FVector(0.0, 20.0, Start.Z));
+	TestEqual(TEXT("click path входит в follower ровно один раз"),
+		Fixture.Local->GetServerPathAcceptCountForTests(), 1);
 
 	FCorsairsWorldActor Target;
 	Target.WorldId = 99;
 	Target.Position = FIntPoint(80, 0);
 	Target.Handle = 9099;
 	Fixture.Session->AddVisibleActorForTests(Target);
+	InstallMovementRoutingSkill(Fixture.Session, 26);
 	Fixture.Session->SetSendOverrideForTests([](WPacket&) { return true; });
 	TestEqual(TEXT("skill reserves server authority"),
 		static_cast<uint8>(Fixture.Session->UseSkillOn(26, Target.WorldId)),
@@ -394,8 +630,8 @@ bool FCorsairsLocalDeliveredOnceTest::RunTest(const FString&)
 	TestEqual(TEXT("one local server path transition advances by event speed"),
 		Fixture.Local->GetActorLocation(),
 		FVector(0.0, 20.0, Start.Z));
-	TestEqual(TEXT("local server path reaches inherited follower exactly once"),
-		Fixture.Local->GetServerPathAcceptCountForTests(), 1);
+	TestEqual(TEXT("skill path повторно входит в follower ровно один раз"),
+		Fixture.Local->GetServerPathAcceptCountForTests(), 2);
 	TestTrue(TEXT("skill lock stays active while follower moves"),
 		Fixture.Session->IsMovementAuthorityLocked());
 	Fixture.ForwardErrors(this);
@@ -409,18 +645,28 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FCorsairsRemoteByWorldIdTest::RunTest(const FString&)
 {
-	// Mutation: route by any actor rather than Event.WorldId, replay an invalid
-	// speed, fail to ground waypoint transforms, or fail to reconcile rejection.
+	// Мутация: маршрутизировать по любому actor вместо Event.WorldId, повторно
+	// использовать неверную speed, сломать ground-преобразование waypoint или
+	// не синхронизировать rejection.
 	FMovementRoutingFixture Fixture;
 	if (!Fixture.SetUp(this))
 	{
 		return false;
 	}
 
-	const FCorsairsWorldActor First = {
-		101, TEXT("FirstRemote"), FIntPoint(10, 10), 0, 1};
-	const FCorsairsWorldActor Second = {
-		202, TEXT("SecondRemote"), FIntPoint(20, 20), 123, 1};
+	FCorsairsWorldActor First;
+	First.WorldId = 101;
+	First.Handle = 10101;
+	First.Name = TEXT("FirstRemote");
+	First.Position = FIntPoint(10, 10);
+	First.TypeId = 1;
+	FCorsairsWorldActor Second;
+	Second.WorldId = 202;
+	Second.Handle = 20202;
+	Second.Name = TEXT("SecondRemote");
+	Second.Position = FIntPoint(20, 20);
+	Second.Angle = 123;
+	Second.TypeId = 1;
 	Fixture.GameMode->HandleActorSeenForTests(First);
 	Fixture.GameMode->HandleActorSeenForTests(Second);
 	ACorsairsCharacter* FirstRemote = FindRemoteAt(
@@ -499,7 +745,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FCorsairsUngroundedCharacterRigidBasisTest::RunTest(const FString&)
 {
-	// Mutation: в fallback-ветке без CharacterGround вернуть
+	// Мутация: в fallback-ветке без CharacterGround вернуть
 	// старое отражение F=(x,-y) вместо rigid Q=(-y,x).
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
 	if (!TestNotNull(TEXT("ungrounded character world created"), World))

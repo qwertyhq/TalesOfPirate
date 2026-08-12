@@ -1,6 +1,8 @@
 #include "CorsairsLoginHud.h"
 
 #include "CorsairsGameMode.h"
+#include "CorsairsPlayerController.h"
+#include "CorsairsSkillHudPresentation.h"
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
@@ -161,6 +163,121 @@ void ACorsairsLoginHud::DrawHUD()
 							 Font, NormalColour);
 		Item.EnableShadow(FLinearColor::Black);
 		Canvas->DrawItem(Item);
+		Y += LineHeight;
+		DrawSkillHud(Font, Y);
+		DrawNpcTalk(Font, Y);
+	}
+}
+
+void ACorsairsLoginHud::DrawNpcTalk(UFont* Font, float& InOutY) const
+{
+	const ACorsairsGameMode* GameMode = GetWorld() != nullptr
+		? GetWorld()->GetAuthGameMode<ACorsairsGameMode>()
+		: nullptr;
+	const UCorsairsSession* Session = GameMode != nullptr
+		? GameMode->GetSession()
+		: nullptr;
+	if (Session == nullptr)
+	{
+		return;
+	}
+	const FCorsairsNpcTalkPage& Page = Session->GetNpcTalkPage();
+	if (Page.NpcWorldId == 0 || Page.Text.IsEmpty())
+	{
+		return;
+	}
+
+	FCanvasTextItem Item(
+		FVector2D(MarginX, InOutY),
+		FText::FromString(FString::Printf(
+			TEXT("NPC %lld: %s"),
+			Page.NpcWorldId,
+			*Page.Text)),
+		Font,
+		SuccessColour);
+	Item.EnableShadow(FLinearColor::Black);
+	Canvas->DrawItem(Item);
+	InOutY += LineHeight;
+}
+
+void ACorsairsLoginHud::DrawSkillHud(UFont* Font, float& InOutY)
+{
+	const ACorsairsPlayerController* Controller =
+		Cast<ACorsairsPlayerController>(GetOwningPlayerController());
+	FCorsairsSkillHudPresentation Presentation;
+	if (Controller == nullptr ||
+		!Controller->BuildSkillHudPresentation(Presentation))
+	{
+		return;
+	}
+
+	for (const FCorsairsSkillHudSlot& Slot : Presentation.Slots)
+	{
+		const FString Line = Slot.bOccupied && Slot.bSupported
+			? FString::Printf(
+				TEXT("F%d: %s  ур.%d  состояние %d"),
+				Slot.Slot + 1,
+				*Slot.Name,
+				Slot.Level,
+				Slot.State)
+			: Slot.bOccupied && !Slot.Reason.IsEmpty()
+				? FString::Printf(
+					TEXT("F%d: %s — %s"),
+					Slot.Slot + 1,
+					*Slot.Name,
+					*Slot.Reason)
+				: FString::Printf(TEXT("F%d: %s"), Slot.Slot + 1, *Slot.Name);
+		FCanvasTextItem Item(
+			FVector2D(MarginX, InOutY),
+			FText::FromString(Line),
+			Font,
+			Slot.bSupported || !Slot.bOccupied ? NormalColour : FailureColour);
+		Item.EnableShadow(FLinearColor::Black);
+		Canvas->DrawItem(Item);
+		InOutY += LineHeight;
+	}
+	if (!Presentation.PreparedSkillName.IsEmpty())
+	{
+		const FString PreparedLine = Presentation.PreparedTargetType.IsEmpty()
+			? FString::Printf(
+				TEXT("Подготовлен навык: %s"),
+				*Presentation.PreparedSkillName)
+			: FString::Printf(
+				TEXT("Подготовлен навык: %s — цель: %s"),
+				*Presentation.PreparedSkillName,
+				*Presentation.PreparedTargetType);
+		FCanvasTextItem Item(
+			FVector2D(MarginX, InOutY),
+			FText::FromString(PreparedLine),
+			Font,
+			SuccessColour);
+		Item.EnableShadow(FLinearColor::Black);
+		Canvas->DrawItem(Item);
+		InOutY += LineHeight;
+	}
+	if (!Presentation.TargetName.IsEmpty())
+	{
+		FCanvasTextItem Item(
+			FVector2D(MarginX, InOutY),
+			FText::FromString(FString::Printf(
+				TEXT("Точная цель: %s"),
+				*Presentation.TargetName)),
+			Font,
+			NormalColour);
+		Item.EnableShadow(FLinearColor::Black);
+		Canvas->DrawItem(Item);
+		InOutY += LineHeight;
+	}
+	if (!Presentation.RejectionReason.IsEmpty())
+	{
+		FCanvasTextItem Item(
+			FVector2D(MarginX, InOutY),
+			FText::FromString(Presentation.RejectionReason),
+			Font,
+			FailureColour);
+		Item.EnableShadow(FLinearColor::Black);
+		Canvas->DrawItem(Item);
+		InOutY += LineHeight;
 	}
 }
 

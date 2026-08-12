@@ -746,6 +746,7 @@ bool FCorsairsCharacterGroundActivationFailureTest::RunTest(const FString&)
 
 	FCorsairsWorldActor Remote;
 	Remote.WorldId = 88;
+	Remote.Handle = 8801;
 	Remote.Name = TEXT("GroundFailureRemote");
 	Remote.Position = FIntPoint(0, 0);
 	Remote.TypeId = 1;
@@ -1026,6 +1027,7 @@ bool FCorsairsCharacterGroundEndPlayTest::RunTest(const FString&)
 
 	FCorsairsWorldActor RemoteState;
 	RemoteState.WorldId = 99;
+	RemoteState.Handle = 9901;
 	RemoteState.Name = TEXT("EndPlayRemote");
 	RemoteState.Position = FIntPoint(0, 0);
 	RemoteState.TypeId = 1;

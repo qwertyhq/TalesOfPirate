@@ -32,11 +32,11 @@ namespace
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCorsairsLegacyInputPossessedPawnMovesTest,
-	"Corsairs.Movement.LegacyInput.PossessedPawnMoves",
+	FCorsairsLegacyInputPossessedPawnDoesNotMoveTest,
+	"Corsairs.Movement.LegacyInput.PossessedPawnDoesNotMove",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FCorsairsLegacyInputPossessedPawnMovesTest::RunTest(const FString&)
+bool FCorsairsLegacyInputPossessedPawnDoesNotMoveTest::RunTest(const FString&)
 {
 	FTestWorldWrapper TestWorld;
 	TestTrue(
@@ -112,48 +112,71 @@ bool FCorsairsLegacyInputPossessedPawnMovesTest::RunTest(const FString&)
 	TestNotNull(
 		TEXT("normal pawn input component created"),
 		PawnInputComponent);
-	TestTrue(
-		TEXT("normal pawn input binds MoveForward"),
-		PawnInputComponent != nullptr && PawnInputComponent->AxisBindings.ContainsByPredicate(
-			[](const FInputAxisBinding& Binding)
-			{
-				return Binding.AxisName == TEXT("MoveForward");
-			}));
+	const auto HasAxisBinding = [PawnInputComponent](const FName Name)
+	{
+		return PawnInputComponent != nullptr &&
+			PawnInputComponent->AxisBindings.ContainsByPredicate(
+				[Name](const FInputAxisBinding& Binding)
+				{
+					return Binding.AxisName == Name;
+				});
+	};
+	TestFalse(
+		TEXT("production pawn does not bind MoveForward"),
+		HasAxisBinding(TEXT("MoveForward")));
+	TestFalse(
+		TEXT("production pawn does not bind MoveRight"),
+		HasAxisBinding(TEXT("MoveRight")));
+	TestFalse(
+		TEXT("production pawn does not bind Turn"),
+		HasAxisBinding(TEXT("Turn")));
+	TestFalse(
+		TEXT("production pawn does not bind LookUp"),
+		HasAxisBinding(TEXT("LookUp")));
 	TestTrue(TEXT("possessed pawn is locally controlled"), Pawn->IsLocallyControlled());
 	TestTrue(
 		TEXT("character movement remains in flying mode"),
 		MovementComponent != nullptr && MovementComponent->IsFlying());
 
 	const FVector Start = Pawn->GetActorLocation();
+	const FRotator StartControlRotation = PlayerController->GetControlRotation();
+	constexpr float DeltaSeconds = 1.0f / 60.0f;
 	PlayerController->InputKey(FInputKeyEventArgs(
 		nullptr,
 		INPUTDEVICEID_NONE,
 		EKeys::W,
 		IE_Pressed,
 		FPlatformTime::Cycles64()));
+	PlayerController->InputKey(FInputKeyEventArgs(
+		nullptr,
+		INPUTDEVICEID_NONE,
+		EKeys::MouseX,
+		1.0f,
+		DeltaSeconds,
+		1,
+		FPlatformTime::Cycles64()));
 
-	constexpr float DeltaSeconds = 1.0f / 60.0f;
-	PlayerController->PlayerTick(DeltaSeconds);
-	TestEqual(TEXT("W remains pressed"), PlayerInput->GetKeyValue(EKeys::W), 1.0f);
-	TestTrue(
-		TEXT("MoveForward binding adds pending movement input"),
-		Pawn->GetPendingMovementInputVector().SizeSquared() > 0.0);
-	TestWorld.TickTestWorld(DeltaSeconds);
-	TestTrue(
-		TEXT("character movement consumes the MoveForward input"),
-		Pawn->GetLastMovementInputVector().SizeSquared() > 0.0);
-	TestTrue(
-		TEXT("character movement changes the updated actor location"),
-		!Pawn->GetActorLocation().Equals(Start));
-	TestTrue(
-		TEXT("character movement produces velocity"),
-		MovementComponent != nullptr && MovementComponent->Velocity.SizeSquared() > 0.0);
-
-	for (int32 Tick = 1; Tick < 120; ++Tick)
+	for (int32 Tick = 0; Tick < 120; ++Tick)
 	{
 		PlayerController->PlayerTick(DeltaSeconds);
 		TestWorld.TickTestWorld(DeltaSeconds);
 	}
+
+	TestTrue(
+		TEXT("W creates no pending movement input"),
+		Pawn->GetPendingMovementInputVector().IsNearlyZero());
+	TestEqual(
+		TEXT("WASD does not move the possessed pawn"),
+		Pawn->GetActorLocation(),
+		Start);
+	TestTrue(
+		TEXT("free MouseX does not rotate camera"),
+		PlayerController->GetControlRotation().Equals(
+			StartControlRotation,
+			0.01));
+	TestTrue(
+		TEXT("legacy keys produce no velocity"),
+		MovementComponent != nullptr && MovementComponent->Velocity.IsNearlyZero());
 
 	PlayerController->InputKey(FInputKeyEventArgs(
 		nullptr,
@@ -161,11 +184,6 @@ bool FCorsairsLegacyInputPossessedPawnMovesTest::RunTest(const FString&)
 		EKeys::W,
 		IE_Released,
 		FPlatformTime::Cycles64()));
-
-	const FVector End = Pawn->GetActorLocation();
-	TestTrue(
-		TEXT("W moves possessed pawn through legacy MoveForward mapping"),
-		FVector::Dist2D(Start, End) > 100.0);
 
 	TestWorld.ForwardErrorMessages(this);
 	return true;

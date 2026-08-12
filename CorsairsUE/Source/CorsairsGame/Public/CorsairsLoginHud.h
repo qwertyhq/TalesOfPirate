@@ -58,6 +58,8 @@ public:
 
 private:
 	void DrawLoginForm(class UFont* Font);
+	void DrawSkillHud(class UFont* Font, float& InOutY);
+	void DrawNpcTalk(class UFont* Font, float& InOutY) const;
 
 	/** Что редактируется сейчас. Полей всего два, поэтому хватает флага. */
 	bool bEditingPassword = false;

@@ -4,12 +4,14 @@
 #include "CorsairsCharacterCatalog.h"
 #include "CorsairsCharacterGround.h"
 #include "CorsairsSession.h"
+#include "CorsairsSkillCatalog.h"
 #include "GameFramework/GameModeBase.h"
 
 #include "CorsairsGameMode.generated.h"
 
 class ACorsairsCharacter;
 class ACorsairsPlayerCharacter;
+class ACorsairsPlayerController;
 
 /**
  * Режим игры вертикального среза: подключается к серверу и ставит персонажа
@@ -48,16 +50,17 @@ public:
 	bool bAutoLogin = true;
 
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
-	UCorsairsSession* GetSession() const { return Session; }
+	UCorsairsSession* GetSession() const { return _session; }
 
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
 	bool IsStartupReady() const
 	{
-		return CharacterCatalog != nullptr && StartupError.IsEmpty();
+		return _characterCatalog != nullptr && _skillCatalog != nullptr &&
+			_startupError.IsEmpty();
 	}
 
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
-	FString GetStartupError() const { return StartupError; }
+	FString GetStartupError() const { return _startupError; }
 
 	/** Начинает вход с текущими Account и Password.
 	 *
@@ -72,6 +75,13 @@ public:
 		int32 TileHeight,
 		TConstArrayView<uint8> Bytes,
 		FString& OutError);
+	bool LoadCharacterNavigationFromBytesForTests(
+		int32 TileWidth,
+		int32 TileHeight,
+		TConstArrayView<uint8> HeightBytes,
+		TConstArrayView<uint8> BlockBytes,
+		TConstArrayView<uint8> RegionBytes,
+		FString& OutError);
 	void GroundCharacterForTests(
 		ACorsairsCharacter* Character,
 		FIntPoint SourcePosition);
@@ -82,9 +92,9 @@ public:
 	FIntVector GetRemoteRegistryCountsForTests() const
 	{
 		return FIntVector(
-			WorldActors.Num(),
-			WorldActorNames.Num(),
-			WorldActorArchetypes.Num());
+			_worldActors.Num(),
+			_worldActorNames.Num(),
+			_worldActorArchetypes.Num());
 	}
 #endif
 
@@ -126,15 +136,19 @@ private:
 		ACorsairsPlayerCharacter* Character,
 		const FString& MapName,
 		FIntPoint SourcePosition);
+	void FailClosedLocalActivation();
+	void DeactivateLocalGameplay();
 	void CleanupRemoteActors();
-	void ScheduleSessionLogoutAfterGroundFailure();
+	void ScheduleSessionLogoutAfterActivationFailure();
 
-	TUniquePtr<FCorsairsCharacterCatalog> CharacterCatalog;
-	TUniquePtr<FCorsairsCharacterGround> CharacterGround;
-	FString StartupError;
+	TUniquePtr<FCorsairsCharacterCatalog> _characterCatalog;
+	TUniquePtr<FCorsairsSkillCatalog> _skillCatalog;
+	TUniquePtr<FCorsairsCharacterGround> _characterGround;
+	FString _startupError;
+	bool _localGameplayActive = false;
 
 	UPROPERTY()
-	TObjectPtr<UCorsairsSession> Session;
+	TObjectPtr<UCorsairsSession> _session;
 
 	/** Кого сервер держит в поле зрения, по идентификатору в мире.
 	 *
@@ -142,8 +156,8 @@ private:
 	 *  искать его перебором всех актёров уровня на карте с сотней тысяч
 	 *  объектов недопустимо. */
 	UPROPERTY()
-	TMap<int64, TObjectPtr<ACorsairsCharacter>> WorldActors;
+	TMap<int64, TObjectPtr<ACorsairsCharacter>> _worldActors;
 
-	TMap<int64, FString> WorldActorNames;
-	TMap<int64, int32> WorldActorArchetypes;
+	TMap<int64, FString> _worldActorNames;
+	TMap<int64, int32> _worldActorArchetypes;
 };

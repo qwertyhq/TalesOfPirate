@@ -15,9 +15,8 @@ class USpringArmComponent;
  * Персонаж игрока: тело, камера и движение.
  *
  * Наследуется от ACharacter ради CharacterMovementComponent, капсулы и
- * стандартного input path. Высота берётся напрямую из half-meter block
- * raster без гравитации: сервер остаётся источником истины о положении, а
- * локальное движение служит предсказанием.
+ * стандартного компонента движения. Высота берётся из runtime heightfield
+ * без гравитации, а XY проигрывает только путь, подтверждённый сервером.
  *
  * Модель подбирается по типу персонажа из ответа на вход. Соответствие «тип ->
  * скелет и наборы кожи» лежит в таблице character_models игровых данных.
@@ -38,6 +37,8 @@ public:
 	void AttachSession(UCorsairsSession* InSession);
 	virtual void AttachCharacterGround(
 		const FCorsairsCharacterGround* InGround) override;
+	/** Применяет legacy zoom к SpringArm/FOV, не меняя yaw персонажа. */
+	void ApplyCameraZoom(double Zoom);
 
 #if !UE_BUILD_SHIPPING
 	void ApplyMovementAxisForProbe(FName AxisName, float Value);
@@ -62,24 +63,8 @@ private:
 	/** Один раз применяет профиль камеры после появления локального controller. */
 	void ApplyInitialCameraControlRotation();
 
-	/** Передаёт сессии текущую predicted position.
-	 *
-	 *  Сессия сама строит путь от последней подтверждённой сервером точки и
-	 *  применяет порог смещения. Результат socket send не меняет authoritative
-	 *  baseline до terminal event. */
-	void ReportMovement();
-
-	/** Передаёт нажатие экрану входа, пока тот принимает ввод.
-	 *
-	 *  Символы приходят через KeyPressed компонента ввода, а не через привязки
-	 *  действий: под каждую букву заводить действие бессмысленно, а UMG с его
-	 *  полями ввода потребовал бы ассета, который из кода не создать. */
-	void HandleTypedKey(FKey Key);
-
 	void MoveForward(float Value);
 	void MoveRight(float Value);
-	void TurnCamera(float Value);
-	void PitchCamera(float Value);
 	void UpdateMovementPredictionState();
 	void ApplyMovementPredictionLock(bool bLocked);
 	void ReportMovementSpeedProtocolError();
@@ -100,13 +85,12 @@ private:
 	bool bDiagnosticLogged = false;
 	bool bHasValidMovementSpeed = false;
 	bool bSessionMovementAuthorityLocked = false;
-	/** Explicit detach is fail-closed; an unattached test pawn keeps the
-	 *  characterized legacy-input behavior until a session is assigned. */
+	/** Явное отсоединение закрывает движение; тестовый pawn без сессии
+	 *  сохраняет исследуемое legacy-поведение ввода до подключения. */
 	bool bPredictionDisabledWithoutSession = false;
 	bool bPredictionLocked = false;
 	bool bMovementSpeedProtocolErrorReported = false;
 	bool bInitialCameraControlRotationApplied = false;
 	int64 LastMovementAuthorityEpoch = 0;
 
-	float TimeSinceReport = 0.0f;
 };

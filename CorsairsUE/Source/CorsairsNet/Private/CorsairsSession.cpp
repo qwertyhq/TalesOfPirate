@@ -751,6 +751,52 @@ void UCorsairsSession::ReportProtocolError(const FString& Message)
 #endif
 }
 
+void UCorsairsSession::ClearNpcTalkPage()
+{
+	if (_npcTalkPage.NpcWorldId == 0 &&
+		_npcTalkPage.Command == 0 &&
+		_npcTalkPage.Text.IsEmpty())
+	{
+		return;
+	}
+
+	_npcTalkPage = FCorsairsNpcTalkPage{};
+	PublishNpcTalkPageChanged();
+}
+
+void UCorsairsSession::PublishNpcTalkPageChanged()
+{
+	OnNpcTalkPageChanged.Broadcast(_npcTalkPage);
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestNpcTalkPageObserver)
+	{
+		TestNpcTalkPageObserver(_npcTalkPage);
+	}
+#endif
+}
+
+void UCorsairsSession::PublishActorSeen(const FCorsairsWorldActor& Actor)
+{
+	OnActorSeen.Broadcast(Actor);
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestActorSeenObserver)
+	{
+		TestActorSeenObserver(Actor);
+	}
+#endif
+}
+
+void UCorsairsSession::PublishActorLeft(const int64 ActorWorldId)
+{
+	OnActorLeft.Broadcast(ActorWorldId);
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestActorLeftObserver)
+	{
+		TestActorLeftObserver(ActorWorldId);
+	}
+#endif
+}
+
 void UCorsairsSession::ResetAuthoritativeState()
 {
 	const bool bSkillStateChanged =
@@ -774,6 +820,7 @@ void UCorsairsSession::ResetAuthoritativeState()
 			ChangedActors.Add(Actor);
 		}
 	}
+	ClearNpcTalkPage();
 
 	// Все поля очищены до первого callback: подписчик никогда не увидит
 	// частично сброшенный authoritative snapshot.
@@ -859,7 +906,15 @@ void UCorsairsSession::ApplyReducerEffects(
 
 bool UCorsairsSession::TalkToNpc(int64 NpcWorldId)
 {
-	if (Connection == nullptr || Stage != ECorsairsLoginStage::InWorld)
+	if (Stage != ECorsairsLoginStage::InWorld)
+	{
+		return false;
+	}
+	#if WITH_DEV_AUTOMATION_TESTS
+	if (!TestSendOverride && Connection == nullptr)
+	#else
+	if (Connection == nullptr)
+	#endif
 	{
 		return false;
 	}
@@ -870,6 +925,12 @@ bool UCorsairsSession::TalkToNpc(int64 NpcWorldId)
 	// мусор и промолчит.
 	Packet.WriteInt64(kNpcActionTalkPage);
 	Packet.WriteInt64(0);
+	#if WITH_DEV_AUTOMATION_TESTS
+	if (TestSendOverride)
+	{
+		return TestSendOverride(Packet);
+	}
+	#endif
 	return Connection->Send(Packet);
 }
 
@@ -1104,6 +1165,14 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		}
 
 		const auto& Data = Message.data.value();
+		TArray<int64> PreviousWorldIds;
+		PreviousWorldIds.Reserve(VisibleActors.Num());
+		for (const FCorsairsWorldActor& VisibleActor : VisibleActors)
+		{
+			PreviousWorldIds.AddUnique(VisibleActor.WorldId);
+		}
+		VisibleActors.Reset();
+		ClearNpcTalkPage();
 		FCorsairsWorldActor EnteredActor;
 		EnteredActor.WorldId = Data.baseInfo.worldId;
 		EnteredActor.HumanId = Data.baseInfo.commId;
@@ -1165,6 +1234,10 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		PublishMovementAuthorityIfChanged();
 		PublishSkillStateChanged();
 		PublishTargetPolicyChanged(LocalActor);
+		for (const int64 PreviousWorldId : PreviousWorldIds)
+		{
+			PublishActorLeft(PreviousWorldId);
+		}
 
 		SetStage(ECorsairsLoginStage::InWorld,
 				 FString::Printf(TEXT("карта %s, позиция (%d, %d)"),
@@ -1553,9 +1626,69 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 			Actor.TypeId = Actor.ChaId;
 		}
 
+		if (FCorsairsWorldActor* Existing = FindMutableActor(Actor.WorldId))
+		{
+			if (Existing->Handle == Actor.Handle)
+			{
+				// CHABEGINSEE — upsert по паре WorldId/Handle. Если старый
+				// клиент уже успел оставить дубликаты, тот же snapshot всё равно
+				// должен привести список к одной записи без lifecycle-шумов.
+				const int32 ExistingIndex = static_cast<int32>(Existing - VisibleActors.GetData());
+				int32 ReplacementIndex = ExistingIndex;
+				for (int32 Index = VisibleActors.Num() - 1; Index >= 0; --Index)
+				{
+					if (Index != ExistingIndex &&
+						VisibleActors[Index].WorldId == Actor.WorldId)
+					{
+						VisibleActors.RemoveAt(Index);
+						if (Index < ReplacementIndex)
+						{
+							--ReplacementIndex;
+						}
+					}
+				}
+				VisibleActors[ReplacementIndex] = Actor;
+				PublishTargetPolicyChanged(Actor);
+				return;
+			}
+
+			VisibleActors.RemoveAll(
+				[&Actor](const FCorsairsWorldActor& Candidate)
+				{
+					return Candidate.WorldId == Actor.WorldId;
+				});
+			if (_npcTalkPage.NpcWorldId == Actor.WorldId)
+			{
+				ClearNpcTalkPage();
+			}
+			PublishActorLeft(Actor.WorldId);
+		}
+
 		VisibleActors.Add(Actor);
-		OnActorSeen.Broadcast(Actor);
+		PublishActorSeen(Actor);
 		PublishTargetPolicyChanged(Actor);
+		return;
+	}
+
+	if (Cmd == CMD_MC_TALKPAGE)
+	{
+		Msg::McTalkInfoMessage Message;
+		Msg::deserialize(Packet, Message);
+		_npcTalkPage.NpcWorldId = Message.npcId;
+		_npcTalkPage.Command = Message.cmd;
+		_npcTalkPage.Text = ToFString(Message.text);
+		PublishNpcTalkPageChanged();
+		return;
+	}
+
+	if (Cmd == CMD_MC_CLOSETALK)
+	{
+		Msg::McCloseTalkMessage Message;
+		Msg::deserialize(Packet, Message);
+		if (_npcTalkPage.NpcWorldId == Message.npcId)
+		{
+			ClearNpcTalkPage();
+		}
 		return;
 	}
 
@@ -1566,7 +1699,11 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		const int64 WorldIdLeft = Message.worldId;
 		VisibleActors.RemoveAll([WorldIdLeft](const FCorsairsWorldActor& A)
 								{ return A.WorldId == WorldIdLeft; });
-		OnActorLeft.Broadcast(WorldIdLeft);
+		if (_npcTalkPage.NpcWorldId == WorldIdLeft)
+		{
+			ClearNpcTalkPage();
+		}
+		PublishActorLeft(WorldIdLeft);
 		return;
 	}
 
@@ -1617,6 +1754,7 @@ void UCorsairsSession::SetInWorldForTests(
 	LocalActor.HumanId = InWorldId;
 	LocalActor.Position = Spawn;
 	VisibleActors.Reset();
+	ClearNpcTalkPage();
 	Attributes.Reset();
 	_defaultSkillId = 0;
 	_skillBag.Reset();
@@ -1633,9 +1771,17 @@ void UCorsairsSession::SetInWorldAndBroadcastForTests(
 	const FCorsairsWorldActor& InLocalActor,
 	const FString& InMapName)
 {
+	TArray<int64> PreviousWorldIds;
+	PreviousWorldIds.Reserve(VisibleActors.Num());
+	for (const FCorsairsWorldActor& VisibleActor : VisibleActors)
+	{
+		PreviousWorldIds.AddUnique(VisibleActor.WorldId);
+	}
+
 	WorldId = InLocalActor.WorldId;
 	LocalActor = InLocalActor;
 	VisibleActors.Reset();
+	ClearNpcTalkPage();
 	_defaultSkillId = 0;
 	_skillBag.Reset();
 	_shortcuts.Reset();
@@ -1646,6 +1792,10 @@ void UCorsairsSession::SetInWorldAndBroadcastForTests(
 	++ActionReducerGeneration;
 	ActionReducer.EnterWorld(WorldId, SpawnPosition);
 	PublishMovementAuthorityIfChanged();
+	for (const int64 PreviousWorldId : PreviousWorldIds)
+	{
+		PublishActorLeft(PreviousWorldId);
+	}
 	SetStage(
 		ECorsairsLoginStage::InWorld,
 		FString::Printf(
@@ -1685,10 +1835,24 @@ void UCorsairsSession::SetTargetPolicyObserverForTests(
 	TestTargetPolicyObserver = MoveTemp(Observer);
 }
 
+void UCorsairsSession::SetNpcTalkPageObserverForTests(
+	TFunction<void(const FCorsairsNpcTalkPage&)> Observer)
+{
+	TestNpcTalkPageObserver = MoveTemp(Observer);
+}
+
 void UCorsairsSession::SetTargetPolicyReentrantObserverForTests(
 	TFunction<void(const FCorsairsWorldActor&)> Observer)
 {
 	TestTargetPolicyReentrantObserver = MoveTemp(Observer);
+}
+
+void UCorsairsSession::SetActorLifecycleObserversForTests(
+	TFunction<void(const FCorsairsWorldActor&)> SeenObserver,
+	TFunction<void(int64)> LeftObserver)
+{
+	TestActorSeenObserver = MoveTemp(SeenObserver);
+	TestActorLeftObserver = MoveTemp(LeftObserver);
 }
 
 void UCorsairsSession::HandlePacketForTests(RPacket& Packet)

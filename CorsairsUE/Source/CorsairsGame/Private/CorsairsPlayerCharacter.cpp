@@ -3,7 +3,6 @@
 #include "Camera/CameraComponent.h"
 #include "CorsairsCameraProfile.h"
 #include "CorsairsCharacterGround.h"
-#include "CorsairsLoginHud.h"
 #include "CorsairsSession.h"
 #include "Components/CapsuleComponent.h"
 #include "Camera/PlayerCameraManager.h"
@@ -18,12 +17,6 @@ namespace
 	constexpr float CapsuleHalfHeight = 88.0f;
 	constexpr float CapsuleRadius = 34.0f;
 
-	/** Как часто сообщать серверу о движении и с какого смещения.
-	 *
-	 *  Отправка каждый кадр забила бы канал сообщениями о сдвиге в сантиметр,
-	 *  а редкая — рассинхронизировала бы положение. Полсекунды и метр
-	 *  соответствуют шагу, с которым двигался оригинальный клиент. */
-	constexpr float ReportInterval = 0.5f;
 	/** Переводит rigid UE basis обратно в source-координаты.
 	 *
 	 *  Клетка занимает 100 единиц карты и 100 сантиметров UE, поэтому
@@ -38,7 +31,7 @@ namespace
 
 ACorsairsPlayerCharacter::ACorsairsPlayerCharacter()
 {
-	// Тик нужен для периодической отправки положения серверу.
+	// Тик проигрывает подтверждённый путь и удерживает персонажа на heightfield.
 	PrimaryActorTick.bCanEverTick = true;
 
 	GetCapsuleComponent()->InitCapsuleSize(CapsuleRadius, CapsuleHalfHeight);
@@ -87,7 +80,6 @@ void ACorsairsPlayerCharacter::AttachSession(UCorsairsSession* InSession)
 
 	Session = InSession;
 	bPredictionDisabledWithoutSession = Session == nullptr;
-	TimeSinceReport = 0.0f;
 	bHasValidMovementSpeed = false;
 	bSessionMovementAuthorityLocked = false;
 	bMovementSpeedProtocolErrorReported = false;
@@ -176,6 +168,41 @@ void ACorsairsPlayerCharacter::ApplyInitialCameraControlRotation()
 	bInitialCameraControlRotationApplied = true;
 }
 
+void ACorsairsPlayerCharacter::ApplyCameraZoom(const double Zoom)
+{
+	const auto Profile = Corsairs::Game::Camera::LegacyDefaultProfile();
+	const double AspectRatio = FollowCamera != nullptr &&
+		FollowCamera->AspectRatio > 0.0f
+		? static_cast<double>(FollowCamera->AspectRatio)
+		: 16.0 / 9.0;
+	const auto Rig = Corsairs::Game::Camera::DeriveRig(
+		Profile,
+		AspectRatio,
+		Zoom);
+	if (CameraBoom != nullptr)
+	{
+		CameraBoom->TargetArmLength = Rig.ArmLengthCm;
+	}
+	if (FollowCamera != nullptr)
+	{
+		FollowCamera->FieldOfView = Rig.HorizontalFovDegrees;
+	}
+	if (APlayerController* PlayerController =
+		Cast<APlayerController>(GetController()))
+	{
+		const FRotator Current = PlayerController->GetControlRotation();
+		PlayerController->SetControlRotation(FRotator(
+			Rig.PitchDegrees,
+			Current.Yaw,
+			0.0));
+		if (PlayerController->PlayerCameraManager != nullptr)
+		{
+			PlayerController->PlayerCameraManager->ViewPitchMin = Rig.PitchDegrees;
+			PlayerController->PlayerCameraManager->ViewPitchMax = Rig.PitchDegrees;
+		}
+	}
+}
+
 void ACorsairsPlayerCharacter::EndPlay(
 	const EEndPlayReason::Type EndPlayReason)
 {
@@ -259,108 +286,11 @@ void ACorsairsPlayerCharacter::Tick(float DeltaSeconds)
 	}
 
 	Super::Tick(DeltaSeconds);
-
-	TimeSinceReport += DeltaSeconds;
-	if (TimeSinceReport >= ReportInterval)
-	{
-		TimeSinceReport = 0.0f;
-		ReportMovement();
-	}
-}
-
-void ACorsairsPlayerCharacter::ReportMovement()
-{
-	UpdateMovementPredictionState();
-	if (Session != nullptr && !bHasValidMovementSpeed)
-	{
-		ReportMovementSpeedProtocolError();
-	}
-	if (!MovementInputGate.AllowsPrediction())
-	{
-		return;
-	}
-	if (Session == nullptr || Session->GetStage() != ECorsairsLoginStage::InWorld)
-	{
-		return;
-	}
-
-	const FIntPoint Current = ToMapCoordinates(GetActorLocation());
-	Session->SubmitPredictedPosition(Current);
 }
 
 void ACorsairsPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
-
-	// Привязки по осям, а не через EnhancedInput: последний требует ассетов
-	// действий, которых в коде не создать, а на этом этапе важно, чтобы
-	// персонаж поехал без ручной настройки в редакторе.
-	PlayerInputComponent->BindAxis(TEXT("MoveForward"), this,
-								   &ACorsairsPlayerCharacter::MoveForward);
-	PlayerInputComponent->BindAxis(TEXT("MoveRight"), this,
-								   &ACorsairsPlayerCharacter::MoveRight);
-	PlayerInputComponent->BindAxis(TEXT("Turn"), this,
-								   &ACorsairsPlayerCharacter::TurnCamera);
-	PlayerInputComponent->BindAxis(TEXT("LookUp"), this,
-								   &ACorsairsPlayerCharacter::PitchCamera);
-
-	// Клавиши для экрана входа. Перебираются буквы, цифры и служебные:
-	// заводить действие под каждую бессмысленно, а UMG с полями ввода
-	// потребовал бы ассета, который из кода не создать.
-	TArray<FKey> TypedKeys;
-	for (TCHAR Letter = 'A'; Letter <= 'Z'; ++Letter)
-	{
-		TypedKeys.Add(FKey(*FString::Chr(Letter)));
-	}
-	for (TCHAR Digit = '0'; Digit <= '9'; ++Digit)
-	{
-		TypedKeys.Add(FKey(*FString::Chr(Digit)));
-	}
-	TypedKeys.Append({EKeys::BackSpace, EKeys::Tab, EKeys::Enter});
-
-	for (const FKey& Key : TypedKeys)
-	{
-		FInputKeyBinding Binding(FInputChord(Key, false, false, false, false), IE_Pressed);
-		Binding.bConsumeInput = false;
-		Binding.KeyDelegate.GetDelegateForManualSet().BindLambda(
-			[this, Key]() { HandleTypedKey(Key); });
-		PlayerInputComponent->KeyBindings.Emplace(MoveTemp(Binding));
-	}
-}
-
-void ACorsairsPlayerCharacter::HandleTypedKey(FKey Key)
-{
-	ACorsairsLoginHud* Hud = Controller != nullptr
-		? Cast<ACorsairsLoginHud>(Cast<APlayerController>(Controller)->GetHUD())
-		: nullptr;
-	if (Hud == nullptr || !Hud->IsAcceptingInput())
-	{
-		return;
-	}
-
-	if (Key == EKeys::BackSpace)
-	{
-		Hud->EraseCharacter();
-		return;
-	}
-	if (Key == EKeys::Tab)
-	{
-		Hud->NextField();
-		return;
-	}
-	if (Key == EKeys::Enter)
-	{
-		Hud->SubmitLogin();
-		return;
-	}
-
-	// Имя клавиши совпадает с символом для букв и цифр. Регистр приводится к
-	// нижнему: учётные записи в базе записаны строчными.
-	const FString Name = Key.GetFName().ToString();
-	if (Name.Len() == 1)
-	{
-		Hud->AppendCharacter(Name.ToLower());
-	}
 }
 
 void ACorsairsPlayerCharacter::MoveForward(float Value)
@@ -401,16 +331,6 @@ void ACorsairsPlayerCharacter::MoveRight(float Value)
 
 	const FRotator YawOnly(0.0f, Controller->GetControlRotation().Yaw, 0.0f);
 	AddMovementInput(FRotationMatrix(YawOnly).GetUnitAxis(EAxis::Y), Value);
-}
-
-void ACorsairsPlayerCharacter::TurnCamera(float Value)
-{
-	AddControllerYawInput(Value);
-}
-
-void ACorsairsPlayerCharacter::PitchCamera(float Value)
-{
-	AddControllerPitchInput(Value);
 }
 
 void ACorsairsPlayerCharacter::UpdateMovementPredictionState()
@@ -482,14 +402,7 @@ void ACorsairsPlayerCharacter::HandleMovementChanged(
 
 	if (Event.Type == ECorsairsMovementEventType::AcceptedPath)
 	{
-		if (Event.bServerDriven)
-		{
-			HandleServerMovementChanged(Event);
-		}
-		else
-		{
-			StopServerPathFollower();
-		}
+		HandleServerMovementChanged(Event);
 		return;
 	}
 

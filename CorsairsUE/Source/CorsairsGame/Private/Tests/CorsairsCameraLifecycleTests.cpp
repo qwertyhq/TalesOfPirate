@@ -9,6 +9,8 @@
 #include "Engine/World.h"
 #include "Camera/PlayerCameraManager.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/SpringArmComponent.h"
+#include "Camera/CameraComponent.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
@@ -114,6 +116,35 @@ bool FCorsairsCameraLifecycleAfterPossessionTest::RunTest(const FString&)
 			RotationAfterRestart.Yaw,
 			UserRotation.Yaw,
 			0.01f));
+
+	Pawn->ApplyCameraZoom(0.0);
+	USpringArmComponent* Boom =
+		Pawn->FindComponentByClass<USpringArmComponent>();
+	UCameraComponent* Camera = Pawn->FindComponentByClass<UCameraComponent>();
+	TestNotNull(TEXT("camera boom exists"), Boom);
+	TestNotNull(TEXT("follow camera exists"), Camera);
+	if (Boom != nullptr && Camera != nullptr)
+	{
+		const Corsairs::Game::Camera::FCameraRig ZoomZeroRig =
+			Corsairs::Game::Camera::DeriveRig(Profile, 16.0 / 9.0, 0.0);
+		TestTrue(TEXT("zoom updates spring arm"), FMath::IsNearlyEqual(
+			Boom->TargetArmLength,
+			static_cast<float>(ZoomZeroRig.ArmLengthCm),
+			0.01f));
+		TestTrue(TEXT("zoom updates camera FOV"), FMath::IsNearlyEqual(
+			Camera->FieldOfView,
+			static_cast<float>(ZoomZeroRig.HorizontalFovDegrees),
+			0.01f));
+	}
+	TestTrue(TEXT("zoom preserves user yaw"), FMath::IsNearlyEqual(
+		Controller->GetControlRotation().Yaw,
+		UserRotation.Yaw,
+		0.01f));
+	TestTrue(TEXT("zoom applies derived fixed pitch"), FMath::IsNearlyEqual(
+		Controller->GetControlRotation().Pitch,
+		static_cast<float>(Corsairs::Game::Camera::DeriveRig(
+			Profile, 16.0 / 9.0, 0.0).PitchDegrees),
+		0.01f));
 
 	TestWorld.ForwardErrorMessages(this);
 	return true;

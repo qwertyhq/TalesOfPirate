@@ -79,6 +79,25 @@ struct FCorsairsShortcutEntry
 	int64 GridId = 0;
 };
 
+/** Последняя страница разговора с NPC, пришедшая от сервера. */
+USTRUCT(BlueprintType)
+struct FCorsairsNpcTalkPage
+{
+	GENERATED_BODY()
+
+	/** Идентификатор NPC из McTalkInfoMessage.npcId. */
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int64 NpcWorldId = 0;
+
+	/** Номер/команда страницы из McTalkInfoMessage.cmd. */
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int64 Command = 0;
+
+	/** Текст страницы без потери содержимого wire-пакета. */
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	FString Text;
+};
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCorsairsActorSeen,
 											const FCorsairsWorldActor&, Actor);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCorsairsActorLeft, int64, WorldId);
@@ -104,6 +123,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 	FCorsairsTargetPolicyChanged,
 	const FCorsairsWorldActor&,
 	Actor);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+	FCorsairsNpcTalkPageChanged,
+	const FCorsairsNpcTalkPage&,
+	Page);
 
 /** Стадия входа. Именно она определяет, что показывать на экране. */
 UENUM(BlueprintType)
@@ -180,6 +203,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Corsairs")
 	const TArray<FCorsairsShortcutEntry>& GetShortcuts() const { return _shortcuts; }
 
+	/** Последняя страница разговора; нулевой NpcWorldId означает, что диалог закрыт. */
+	UFUNCTION(BlueprintPure, Category = "Corsairs")
+	const FCorsairsNpcTalkPage& GetNpcTalkPage() const { return _npcTalkPage; }
+
 	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
 	FCorsairsLoginStageChanged OnStageChanged;
 
@@ -209,6 +236,9 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
 	FCorsairsTargetPolicyChanged OnTargetPolicyChanged;
+
+	UPROPERTY(BlueprintAssignable, Category = "Corsairs")
+	FCorsairsNpcTalkPageChanged OnNpcTalkPageChanged;
 
 	/** Отправляет серверу путь движения.
 	 *
@@ -387,8 +417,13 @@ public:
 		TFunction<void()> Observer);
 	void SetTargetPolicyObserverForTests(
 		TFunction<void(const FCorsairsWorldActor&)> Observer);
+	void SetNpcTalkPageObserverForTests(
+		TFunction<void(const FCorsairsNpcTalkPage&)> Observer);
 	void SetTargetPolicyReentrantObserverForTests(
 		TFunction<void(const FCorsairsWorldActor&)> Observer);
+	void SetActorLifecycleObserversForTests(
+		TFunction<void(const FCorsairsWorldActor&)> SeenObserver,
+		TFunction<void(int64)> LeftObserver);
 	void HandlePacketForTests(
 		Corsairs::Net::RPacket& Packet);
 	void HandleConnectionStateForTests(
@@ -427,6 +462,10 @@ private:
 	void PublishMovementAuthorityIfChanged();
 	void PublishSkillStateChanged();
 	void PublishTargetPolicyChanged(FCorsairsWorldActor Actor);
+	void PublishNpcTalkPageChanged();
+	void PublishActorSeen(const FCorsairsWorldActor& Actor);
+	void PublishActorLeft(int64 ActorWorldId);
+	void ClearNpcTalkPage();
 	void ResetAuthoritativeState();
 	void ReportProtocolError(const FString& Message);
 
@@ -460,6 +499,7 @@ private:
 	int64 _defaultSkillId = 0;
 	TArray<FCorsairsSkillEntry> _skillBag;
 	TArray<FCorsairsShortcutEntry> _shortcuts;
+	FCorsairsNpcTalkPage _npcTalkPage;
 
 	/** Ищет цель в поле зрения. Удар адресуется парой «идентификатор +
 	 *  handle», и handle берётся отсюда: у сущностей вроде NPC старший бит
@@ -481,5 +521,8 @@ private:
 	TFunction<void()> TestSkillStateObserver;
 	TFunction<void(const FCorsairsWorldActor&)> TestTargetPolicyObserver;
 	TFunction<void(const FCorsairsWorldActor&)> TestTargetPolicyReentrantObserver;
+	TFunction<void(const FCorsairsNpcTalkPage&)> TestNpcTalkPageObserver;
+	TFunction<void(const FCorsairsWorldActor&)> TestActorSeenObserver;
+	TFunction<void(int64)> TestActorLeftObserver;
 #endif
 };
