@@ -40,7 +40,6 @@
 ```cpp
 enum class ECorsairsSkillTargetMode : uint8
 {
-    Self,
     Entity,
     Ground,
     Unsupported,
