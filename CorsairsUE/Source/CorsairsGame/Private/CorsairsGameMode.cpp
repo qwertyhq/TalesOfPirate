@@ -464,6 +464,17 @@ void ACorsairsGameMode::HandleActorSeen(const FCorsairsWorldActor& Actor)
 	{
 		return;
 	}
+	FCorsairsServerIdentity identity;
+	identity.WorldId = Actor.WorldId;
+	identity.Handle = Actor.Handle;
+	identity.CtrlType = Actor.CtrlType;
+	identity.ChaId = Actor.ChaId;
+	if (!Spawned->InitializeServerIdentity(identity))
+	{
+		Spawned->AttachCharacterGround(nullptr);
+		Spawned->Destroy();
+		return;
+	}
 
 #if WITH_EDITOR
 	Spawned->SetActorLabel(Actor.Name.IsEmpty()

@@ -84,6 +84,36 @@ void ACorsairsCharacter::AttachCharacterGround(
 	CharacterGround = InGround;
 }
 
+bool ACorsairsCharacter::InitializeServerIdentity(
+	const FCorsairsServerIdentity& identity)
+{
+	if (identity.WorldId == 0)
+	{
+		return false;
+	}
+	if (_hasServerIdentity)
+	{
+		return _serverIdentity == identity;
+	}
+
+	_serverIdentity = identity;
+	_hasServerIdentity = true;
+	return true;
+}
+
+bool ACorsairsCharacter::TryGetServerIdentity(
+	FCorsairsServerIdentity& outIdentity) const
+{
+	outIdentity = FCorsairsServerIdentity{};
+	if (!_hasServerIdentity)
+	{
+		return false;
+	}
+
+	outIdentity = _serverIdentity;
+	return true;
+}
+
 void ACorsairsCharacter::HandleServerMovementChanged(
 	const FCorsairsMovementEvent& Event)
 {

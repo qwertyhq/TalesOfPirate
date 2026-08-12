@@ -247,6 +247,93 @@ bool FCorsairsGameModeDynamicLifecycleTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsCharacterServerIdentityTest,
+	"Corsairs.Movement.Routing.CharacterServerIdentity",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsCharacterServerIdentityTest::RunTest(const FString&)
+{
+	// Mutation: не привязать серверную identity к созданному персонажу либо
+	// вернуть старое значение output для персонажа, который сервер не создавал.
+	FMovementRoutingFixture fixture;
+	if (!fixture.SetUp(this))
+	{
+		return false;
+	}
+
+	FCorsairsWorldActor remoteState;
+	remoteState.WorldId = 8801;
+	remoteState.Name = TEXT("IdentityRemote");
+	remoteState.Position = FIntPoint(20, 20);
+	remoteState.TypeId = 1;
+	remoteState.CtrlType = 4;
+	remoteState.ChaId = 731;
+	remoteState.Handle = 990011;
+	fixture.GameMode->HandleActorSeenForTests(remoteState);
+	ACorsairsCharacter* remote = Cast<ACorsairsCharacter>(FindRemoteAt(
+		fixture.TestWorld.GetTestWorld(), fixture.Local, remoteState.Position));
+	if (!TestNotNull(TEXT("server-created character exists"), remote))
+	{
+		return false;
+	}
+
+	FCorsairsServerIdentity identity;
+	TestTrue(TEXT("server-created character exposes identity"),
+		remote->TryGetServerIdentity(identity));
+	TestEqual(TEXT("identity preserves world id"),
+		identity.WorldId, static_cast<int64>(8801));
+	TestEqual(TEXT("identity preserves handle"),
+		identity.Handle, static_cast<int64>(990011));
+	TestEqual(TEXT("identity preserves control type"), identity.CtrlType, 4);
+	TestEqual(TEXT("identity preserves character id"), identity.ChaId, 731);
+	TestTrue(TEXT("exact identity initialization is idempotent"),
+		remote->InitializeServerIdentity(identity));
+	FCorsairsServerIdentity otherIdentity = identity;
+	otherIdentity.Handle = 990012;
+	TestFalse(TEXT("different identity cannot replace the first one"),
+		remote->InitializeServerIdentity(otherIdentity));
+	TestTrue(TEXT("rejected replacement preserves identity"),
+		remote->TryGetServerIdentity(identity));
+	TestEqual(TEXT("rejected replacement preserves handle"),
+		identity.Handle, static_cast<int64>(990011));
+
+	ACorsairsCharacter* unbound =
+		fixture.TestWorld.GetTestWorld()->SpawnActor<ACorsairsCharacter>(
+			ACorsairsCharacter::StaticClass(),
+			FVector::ZeroVector,
+			FRotator::ZeroRotator,
+			AlwaysSpawnParameters());
+	if (!TestNotNull(TEXT("unbound character exists"), unbound))
+	{
+		return false;
+	}
+	identity.WorldId = 1;
+	identity.Handle = 2;
+	identity.CtrlType = 3;
+	identity.ChaId = 4;
+	TestFalse(TEXT("unbound character has no server identity"),
+		unbound->TryGetServerIdentity(identity));
+	TestEqual(TEXT("failed lookup clears world id"), identity.WorldId, int64{0});
+	TestEqual(TEXT("failed lookup clears handle"), identity.Handle, int64{0});
+	TestEqual(TEXT("failed lookup clears control type"), identity.CtrlType, 0);
+	TestEqual(TEXT("failed lookup clears character id"), identity.ChaId, 0);
+	FCorsairsServerIdentity invalidIdentity;
+	TestFalse(TEXT("zero world id cannot initialize identity"),
+		unbound->InitializeServerIdentity(invalidIdentity));
+
+	const FIntVector registriesBeforeInvalid =
+		fixture.GameMode->GetRemoteRegistryCountsForTests();
+	FCorsairsWorldActor invalidRemoteState = remoteState;
+	invalidRemoteState.WorldId = 0;
+	invalidRemoteState.Position = FIntPoint(30, 30);
+	fixture.GameMode->HandleActorSeenForTests(invalidRemoteState);
+	TestEqual(TEXT("invalid server identity is not registered"),
+		fixture.GameMode->GetRemoteRegistryCountsForTests(),
+		registriesBeforeInvalid);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCorsairsLocalDeliveredOnceTest,
 	"Corsairs.Movement.Routing.LocalDeliveredOnce",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
