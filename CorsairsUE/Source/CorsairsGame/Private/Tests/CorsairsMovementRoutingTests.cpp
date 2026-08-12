@@ -330,6 +330,13 @@ bool FCorsairsCharacterServerIdentityTest::RunTest(const FString&)
 	TestEqual(TEXT("invalid server identity is not registered"),
 		fixture.GameMode->GetRemoteRegistryCountsForTests(),
 		registriesBeforeInvalid);
+	ACorsairsCharacter* InvalidRemote = FindRemoteAt(
+		fixture.TestWorld.GetTestWorld(),
+		fixture.Local,
+		invalidRemoteState.Position);
+	TestTrue(
+		TEXT("invalid server identity leaves no live world actor"),
+		InvalidRemote == nullptr || InvalidRemote->IsActorBeingDestroyed());
 	return true;
 }
 
