@@ -102,4 +102,10 @@ struct FCorsairsWorldActor
 
 	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
 	FCorsairsTargetPolicy TargetPolicy;
+
+	/** Идентификатор основного персонажа человека. Общий для его human/boat
+	 *  representations и не обязан совпадать с WorldId текущей сущности. Поле
+	 *  добавлено в хвост DTO, чтобы не менять смысл старых aggregate fixtures. */
+	UPROPERTY(BlueprintReadOnly, Category = "Corsairs")
+	int64 HumanId = 0;
 };

@@ -567,8 +567,16 @@ void UCorsairsSession::PublishSkillStateChanged()
 }
 
 void UCorsairsSession::PublishTargetPolicyChanged(
-	const FCorsairsWorldActor& Actor)
+	FCorsairsWorldActor Actor)
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestTargetPolicyReentrantObserver)
+	{
+		TestTargetPolicyReentrantObserver(Actor);
+	}
+#endif
+	// Делегат получает ссылку на локальный snapshot, а не на элемент массива:
+	// reentrant callback может очистить или перевыделить VisibleActors.
 	OnTargetPolicyChanged.Broadcast(Actor);
 #if WITH_DEV_AUTOMATION_TESTS
 	if (TestTargetPolicyObserver)
@@ -944,6 +952,7 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 		const auto& Data = Message.data.value();
 		FCorsairsWorldActor EnteredActor;
 		EnteredActor.WorldId = Data.baseInfo.worldId;
+		EnteredActor.HumanId = Data.baseInfo.commId;
 		EnteredActor.Name = ToFString(Data.baseInfo.name);
 		EnteredActor.Position = FIntPoint(
 			static_cast<int32>(Data.baseInfo.posX),
@@ -1278,11 +1287,32 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 	{
 		Msg::McGuildInfoMessage Message;
 		Msg::deserialize(Packet, Message);
-		if (FCorsairsWorldActor* Actor =
-				FindMutableActorIncludingLocal(Message.charId))
+		TArray<FCorsairsWorldActor*> MatchingActors;
+		if (LocalActor.WorldId != 0 && LocalActor.HumanId == Message.charId)
+		{
+			MatchingActors.Add(&LocalActor);
+		}
+		for (FCorsairsWorldActor& Actor : VisibleActors)
+		{
+			if (Actor.HumanId == Message.charId)
+			{
+				MatchingActors.Add(&Actor);
+			}
+		}
+
+		TArray<FCorsairsWorldActor> Snapshots;
+		Snapshots.Reserve(MatchingActors.Num());
+		for (FCorsairsWorldActor* Actor : MatchingActors)
 		{
 			Actor->TargetPolicy.GuildId = Message.guildId;
-			PublishTargetPolicyChanged(*Actor);
+		}
+		for (const FCorsairsWorldActor* Actor : MatchingActors)
+		{
+			Snapshots.Add(*Actor);
+		}
+		for (const FCorsairsWorldActor& Snapshot : Snapshots)
+		{
+			PublishTargetPolicyChanged(Snapshot);
 		}
 		return;
 	}
@@ -1338,6 +1368,7 @@ void UCorsairsSession::HandlePacket(RPacket& Packet)
 
 		FCorsairsWorldActor Actor;
 		Actor.WorldId = Message.base.worldId;
+		Actor.HumanId = Message.base.commId;
 		Actor.Name = ToFString(Message.base.name);
 		Actor.Position = FIntPoint(static_cast<int32>(Message.base.posX),
 								   static_cast<int32>(Message.base.posY));
@@ -1429,6 +1460,7 @@ void UCorsairsSession::SetInWorldForTests(
 	SpawnPosition = Spawn;
 	LocalActor = FCorsairsWorldActor{};
 	LocalActor.WorldId = InWorldId;
+	LocalActor.HumanId = InWorldId;
 	LocalActor.Position = Spawn;
 	VisibleActors.Reset();
 	Attributes.Reset();
@@ -1497,6 +1529,12 @@ void UCorsairsSession::SetTargetPolicyObserverForTests(
 	TFunction<void(const FCorsairsWorldActor&)> Observer)
 {
 	TestTargetPolicyObserver = MoveTemp(Observer);
+}
+
+void UCorsairsSession::SetTargetPolicyReentrantObserverForTests(
+	TFunction<void(const FCorsairsWorldActor&)> Observer)
+{
+	TestTargetPolicyReentrantObserver = MoveTemp(Observer);
 }
 
 void UCorsairsSession::HandlePacketForTests(RPacket& Packet)

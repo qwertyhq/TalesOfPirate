@@ -357,6 +357,8 @@ public:
 		TFunction<void()> Observer);
 	void SetTargetPolicyObserverForTests(
 		TFunction<void(const FCorsairsWorldActor&)> Observer);
+	void SetTargetPolicyReentrantObserverForTests(
+		TFunction<void(const FCorsairsWorldActor&)> Observer);
 	void HandlePacketForTests(
 		Corsairs::Net::RPacket& Packet);
 	void HandleConnectionStateForTests(
@@ -385,7 +387,7 @@ private:
 		const FCorsairsReducerEffects& Effects);
 	void PublishMovementAuthorityIfChanged();
 	void PublishSkillStateChanged();
-	void PublishTargetPolicyChanged(const FCorsairsWorldActor& Actor);
+	void PublishTargetPolicyChanged(FCorsairsWorldActor Actor);
 	void ResetAuthoritativeState();
 	void ReportProtocolError(const FString& Message);
 
@@ -439,5 +441,6 @@ private:
 	TFunction<void(bool, int64)> TestMovementAuthorityObserver;
 	TFunction<void()> TestSkillStateObserver;
 	TFunction<void(const FCorsairsWorldActor&)> TestTargetPolicyObserver;
+	TFunction<void(const FCorsairsWorldActor&)> TestTargetPolicyReentrantObserver;
 #endif
 };
