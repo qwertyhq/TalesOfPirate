@@ -326,7 +326,7 @@ bool FCorsairsRemoteByWorldIdTest::RunTest(const FString&)
 	const FCorsairsWorldActor First = {
 		101, TEXT("FirstRemote"), FIntPoint(10, 10), 0, 1};
 	const FCorsairsWorldActor Second = {
-		202, TEXT("SecondRemote"), FIntPoint(20, 20), 1230, 1};
+		202, TEXT("SecondRemote"), FIntPoint(20, 20), 123, 1};
 	Fixture.GameMode->HandleActorSeenForTests(First);
 	Fixture.GameMode->HandleActorSeenForTests(Second);
 	ACorsairsCharacter* FirstRemote = FindRemoteAt(

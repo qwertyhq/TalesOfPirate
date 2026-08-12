@@ -422,6 +422,7 @@ private:
 	 *  handle», и handle берётся отсюда: у сущностей вроде NPC старший бит
 	 *  идентификатора установлен, и одного его серверу мало. */
 	const FCorsairsWorldActor* FindActor(int64 TargetWorldId) const;
+	FCorsairsWorldActor* FindMutableActor(int64 TargetWorldId);
 
 	FString PendingAccount;
 	FString PendingPasswordHash;

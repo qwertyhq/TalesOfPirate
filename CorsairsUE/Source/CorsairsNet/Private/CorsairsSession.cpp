@@ -222,10 +222,21 @@ double UCorsairsSession::GetMovementSpeedCmPerSecond() const
 	return Speed != nullptr ? static_cast<double>(*Speed) : 0.0;
 }
 
-const FCorsairsWorldActor* UCorsairsSession::FindActor(int64 TargetWorldId) const
+const FCorsairsWorldActor* UCorsairsSession::FindActor(
+	const int64 TargetWorldId) const
 {
 	return VisibleActors.FindByPredicate(
 		[TargetWorldId](const FCorsairsWorldActor& A) { return A.WorldId == TargetWorldId; });
+}
+
+FCorsairsWorldActor* UCorsairsSession::FindMutableActor(
+	const int64 TargetWorldId)
+{
+	return VisibleActors.FindByPredicate(
+		[TargetWorldId](const FCorsairsWorldActor& A)
+		{
+			return A.WorldId == TargetWorldId;
+		});
 }
 
 ECorsairsActionRequestResult UCorsairsSession::UseSkillOn(
@@ -504,15 +515,20 @@ void UCorsairsSession::ApplyReducerEffects(
 	if (Effects.Movement.IsSet())
 	{
 		FCorsairsMovementEvent Event = Effects.Movement.GetValue();
+		FCorsairsWorldActor* RemoteActor = nullptr;
 		if (Event.bLocal)
 		{
 			Event.MovementSpeedCmPerSecond =
 				GetMovementSpeedCmPerSecond();
 		}
-		else if (const FCorsairsWorldActor* Actor = FindActor(Event.WorldId))
+		else
 		{
-			Event.MovementSpeedCmPerSecond =
-				Actor->MovementSpeedCmPerSecond;
+			RemoteActor = FindMutableActor(Event.WorldId);
+			if (RemoteActor != nullptr)
+			{
+				Event.MovementSpeedCmPerSecond =
+					RemoteActor->MovementSpeedCmPerSecond;
+			}
 		}
 
 		if (Event.bServerDriven &&
@@ -524,6 +540,13 @@ void UCorsairsSession::ApplyReducerEffects(
 		}
 		else
 		{
+			// Позиция должна измениться до broadcast: обработчик мира уже
+			// начнёт визуальное движение, а следующий UseSkillOn обязан видеть
+			// тот же подтверждённый сервером endpoint, а не точку появления.
+			if (RemoteActor != nullptr)
+			{
+				RemoteActor->Position = Event.Endpoint;
+			}
 			OnMovementChanged.Broadcast(Event);
 #if WITH_DEV_AUTOMATION_TESTS
 			if (TestMovementObserver)

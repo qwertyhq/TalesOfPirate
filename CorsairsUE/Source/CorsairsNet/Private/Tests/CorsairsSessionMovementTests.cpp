@@ -55,6 +55,13 @@ const uint8 RemotePathBytes[] = {
 	0x1C, 0x0C, 0x00, 0x00,
 };
 
+const uint8 SpawnToMovedRemoteBytes[] = {
+	0xE8, 0x03, 0x00, 0x00,
+	0xD0, 0x07, 0x00, 0x00,
+	0x34, 0x08, 0x00, 0x00,
+	0x1C, 0x0C, 0x00, 0x00,
+};
+
 template <typename MessageType>
 void Deliver(UCorsairsSession* Session, const MessageType& Message)
 {
@@ -390,6 +397,90 @@ bool FCorsairsSessionEnterMapAndSkillOriginTest::RunTest(const FString&)
 	TestTrue(
 		TEXT("skill path starts at reducer confirmation, not spawn"),
 		bSkillWireMatches);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionSkillUsesMovedTargetTest,
+	"Corsairs.Movement.Session.SkillUsesMovedTarget",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionSkillUsesMovedTargetTest::RunTest(const FString&)
+{
+	// Мутация: уведомить мир о движении до обновления адресуемого состояния.
+	// Вложенная атака тогда всё ещё пойдёт к исходной точке CHABEGINSEE.
+	UCorsairsSession* Session = CreateSkillSession();
+	bool bSkillUsesMovedPosition = false;
+	Session->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+			const bool bHeaderMatches =
+				Packet.GetCmd() == CMD_CM_BEGINACTION &&
+				Packet.ReadInt64() == LocalWorldId &&
+				Packet.ReadInt64() == 1 &&
+				Packet.ReadInt64() == Msg::ActionType::SKILL &&
+				Packet.ReadInt64() == 2 &&
+				Packet.ReadInt64() == 1;
+			uint16 WaypointCount = 0;
+			const char* Waypoints = Packet.ReadSequence(WaypointCount);
+			bSkillUsesMovedPosition = bHeaderMatches &&
+				SameBytes(
+					Waypoints,
+					WaypointCount,
+					SpawnToMovedRemoteBytes,
+					UE_ARRAY_COUNT(SpawnToMovedRemoteBytes)) &&
+				Packet.ReadInt64() == 26 &&
+				Packet.ReadInt64() == RemoteWorldId &&
+				Packet.ReadInt64() == 9009 + RemoteWorldId;
+			return true;
+		});
+	bool bObserverCalled = false;
+	bool bPositionUpdatedBeforeObserver = false;
+	ECorsairsActionRequestResult NestedSkillResult =
+		ECorsairsActionRequestResult::Invalid;
+	Session->SetEventObserversForTests(
+		[&](const FCorsairsMovementEvent& Event)
+		{
+			if (Event.WorldId != RemoteWorldId)
+			{
+				return;
+			}
+			bObserverCalled = true;
+			const FCorsairsWorldActor* MovedTarget =
+				Session->GetVisibleActors().FindByPredicate(
+					[](const FCorsairsWorldActor& Actor)
+					{
+						return Actor.WorldId == RemoteWorldId;
+					});
+			bPositionUpdatedBeforeObserver = MovedTarget != nullptr &&
+				MovedTarget->Position == FIntPoint(2100, 3100);
+			NestedSkillResult = Session->UseSkillOn(26, RemoteWorldId);
+		},
+		TFunction<void(const FString&)>(),
+		TFunction<void(ECorsairsLoginStage)>());
+
+	Deliver(
+		Session,
+		MakeMove(
+			RemoteWorldId,
+			90,
+			0,
+			RemotePathBytes,
+			UE_ARRAY_COUNT(RemotePathBytes)));
+
+	TestTrue(TEXT("remote movement observer is called"), bObserverCalled);
+	TestTrue(
+		TEXT("target position is current inside movement observer"),
+		bPositionUpdatedBeforeObserver);
+	TestResult(
+		this,
+		TEXT("nested skill against moved target is sent"),
+		NestedSkillResult,
+		ECorsairsActionRequestResult::Sent);
+	TestTrue(
+		TEXT("skill approaches the latest remote endpoint"),
+		bSkillUsesMovedPosition);
 	return true;
 }
 
