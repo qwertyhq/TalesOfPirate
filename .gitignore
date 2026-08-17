@@ -15,6 +15,23 @@
 *.sqlite-wal
 *.sqlite-shm
 tools/AssetConverter/build/
+**/build-linux/
+
+# LuaJIT: продукты сборки — собираются локально под свою платформу,
+# закоммиченные чужие бинарники ломают сборку и плодят мусорный дифф (PIR-12).
+# Правила намеренно узкие (только под деревом LuaJIT), чтобы не зацепить
+# вендоренные библиотеки в других местах репозитория.
+sources/Libraries/LuaJIT/src/*.o
+sources/Libraries/LuaJIT/src/*.a
+sources/Libraries/LuaJIT/src/*.so
+sources/Libraries/LuaJIT/src/*.dylib
+sources/Libraries/LuaJIT/src/host/*.o
+sources/Libraries/LuaJIT/src/luajit
+sources/Libraries/LuaJIT/src/host/minilua
+sources/Libraries/LuaJIT/src/host/buildvm
+# msvcbuild-продукт, сносится линуксовым `make clean`; поставляемые для
+# клиента библиотеки лежат в src/x86 и src/x64 и остаются трекаемыми.
+sources/Libraries/LuaJIT/src/lua51.lib
 
 # Unreal Engine
 CorsairsUE/Binaries/
