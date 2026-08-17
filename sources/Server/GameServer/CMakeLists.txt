@@ -125,11 +125,20 @@ endif()
 # Указываем статическую библиотеку напрямую: find_library предпочитает .dylib,
 # и бинарник получал зависимость от /usr/local/lib/libluajit-5.1.2.dylib,
 # которой в системе нет.
+# Продукты сборки LuaJIT в репозиторий не коммитятся (PIR-12), поэтому на
+# чистом клоне собираем библиотеку один раз здесь, на этапе configure.
 set(LUAJIT_LIBRARY "${SOURCES_ROOT}/Libraries/LuaJIT/src/libluajit.a")
 if(NOT EXISTS "${LUAJIT_LIBRARY}")
-    message(FATAL_ERROR
-        "libluajit.a не найдена. Соберите её:\n"
-        "  MACOSX_DEPLOYMENT_TARGET=15.0 make -C Libraries/LuaJIT/src")
+    message(STATUS "libluajit.a не найден — собираю LuaJIT (make -C Libraries/LuaJIT/src)")
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env MACOSX_DEPLOYMENT_TARGET=15.0
+                make -C "${SOURCES_ROOT}/Libraries/LuaJIT/src" -j4
+        RESULT_VARIABLE LUAJIT_MAKE_RESULT)
+    if(NOT LUAJIT_MAKE_RESULT EQUAL 0 OR NOT EXISTS "${LUAJIT_LIBRARY}")
+        message(FATAL_ERROR
+            "Не удалось собрать LuaJIT. Соберите вручную:\n"
+            "  MACOSX_DEPLOYMENT_TARGET=15.0 make -C Libraries/LuaJIT/src")
+    endif()
 endif()
 target_link_libraries(GameServer PRIVATE "${LUAJIT_LIBRARY}")
 
