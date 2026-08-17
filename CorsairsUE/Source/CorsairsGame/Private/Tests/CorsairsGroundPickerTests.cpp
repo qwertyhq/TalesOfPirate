@@ -14,7 +14,7 @@ TArray<uint8> FlatBlock(const int32 Width, const int32 Height)
 	return Bytes;
 }
 
-TArray<uint8> FlatHeight(const int32 Width, const int32 Height)
+TArray<uint8> GpFlatHeight(const int32 Width, const int32 Height)
 {
 	TArray<uint8> Bytes;
 	Bytes.Init(0, Width * Height * 2);
@@ -23,7 +23,7 @@ TArray<uint8> FlatHeight(const int32 Width, const int32 Height)
 
 TArray<uint8> RampHeight()
 {
-	TArray<uint8> Bytes = FlatHeight(4, 4);
+	TArray<uint8> Bytes = GpFlatHeight(4, 4);
 	const auto SetRawHeight = [&Bytes](const int32 Index, const int32 RawHeight)
 	{
 		const uint16 Encoded = static_cast<uint16>(
@@ -38,7 +38,7 @@ TArray<uint8> RampHeight()
 	return Bytes;
 }
 
-TArray<uint8> LandRegion(const int32 Width, const int32 Height)
+TArray<uint8> GpLandRegion(const int32 Width, const int32 Height)
 {
 	TArray<uint8> Bytes;
 	Bytes.Init(1, Width * Height * 2);
@@ -61,7 +61,7 @@ bool FCorsairsGroundPickerRampTest::RunTest(const FString&)
 	FCorsairsCharacterGround Ground;
 	FString Error;
 	TestTrue(TEXT("ramp runtime ground loads"), Ground.LoadRuntimeFromBytes(
-		4, 4, RampHeight(), FlatBlock(4, 4), LandRegion(4, 4), Error));
+		4, 4, RampHeight(), FlatBlock(4, 4), GpLandRegion(4, 4), Error));
 
 	FVector2d SourcePoint = FVector2d::ZeroVector;
 	double HeightCm = -1.0;
@@ -83,7 +83,7 @@ bool FCorsairsGroundPickerRejectsRayMissAndOobTest::RunTest(const FString&)
 	FCorsairsCharacterGround Ground;
 	FString Error;
 	TestTrue(TEXT("flat runtime ground loads"), Ground.LoadRuntimeFromBytes(
-		4, 4, FlatHeight(4, 4), FlatBlock(4, 4), LandRegion(4, 4), Error));
+		4, 4, GpFlatHeight(4, 4), FlatBlock(4, 4), GpLandRegion(4, 4), Error));
 	FVector2d SourcePoint = FVector2d::ZeroVector;
 	double HeightCm = 0.0;
 	TestFalse(TEXT("upward ray misses heightfield"),
@@ -107,7 +107,7 @@ bool FCorsairsGroundPickerFlatInverseQTest::RunTest(const FString&)
 	FCorsairsCharacterGround Ground;
 	FString Error;
 	TestTrue(TEXT("flat runtime ground loads"), Ground.LoadRuntimeFromBytes(
-		4, 4, FlatHeight(4, 4), FlatBlock(4, 4), LandRegion(4, 4), Error));
+		4, 4, GpFlatHeight(4, 4), FlatBlock(4, 4), GpLandRegion(4, 4), Error));
 
 	FVector2d SourcePoint = FVector2d::ZeroVector;
 	double HeightCm = -1.0;

@@ -245,7 +245,13 @@ def main(report):
         for skill_id in ATTACK_SKILLS:
             session.say(f"&skill {skill_id},1")
             pump(session, 2.0)
-            result = session.use_skill_on(skill_id, mons.world_id)
+            # У сервера два идентификатора сущности: мир и ключ. Уходит пара
+            # целиком, иначе сервер откажет удару.
+            result = session.use_skill_on(
+                skill_id,
+                mons.world_id,
+                mons.handle,
+                [session.get_local_actor().position, mons.position])
             if not action_sent(report, f"умение {skill_id}", result):
                 continue
             pump(session, 8.0)
@@ -261,12 +267,20 @@ def main(report):
     pump(session, 2.0)
 
     # ── торговля ────────────────────────────────────────────────────────
+    # Поле боя чаще всего пустое: торговцы живут у точки спавна. Чтобы сделка
+    # не зависела от того, кого принесло сюда предыдущим прогоном, возвращаемся
+    # к рождению и торгуем там.
+    session.say(f"&move {HOME_X},{HOME_Y}")
+    pump(session, 5.0)
     session.say("&make 641,1")
     pump(session, 4.0)
-    goods = next((g for g, i in session.get_kitbag().items() if i == 641), None)
+    kitbag = session.get_kitbag()
+    report.line(f"сумка после make: {dict(kitbag)}")
+    goods = next((g for g, i in kitbag.items() if i == 641), None)
     # Перебираем нескольких: не всякий NPC торгует, и отказ одного ничего не
     # говорит о механике сделки.
     traders = by_distance(session, CTRL_NPC)[:4]
+    report.line(f"торговцы в поле: {[t.name for t in traders]}")
     sold = False
     if goods is None or not traders:
         report.warn("продавать нечего или некому — торговля не проверяется")

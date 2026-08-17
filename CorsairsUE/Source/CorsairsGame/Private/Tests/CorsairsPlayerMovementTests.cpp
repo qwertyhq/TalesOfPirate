@@ -136,7 +136,7 @@ TArray<FIntPoint> ReadMovePath(WPacket& Wire)
 	return Path;
 }
 
-int32 CountMovementBindings(
+int32 PmCountMovementBindings(
 	const UCorsairsSession* Session,
 	const ACorsairsPlayerCharacter* Pawn)
 {
@@ -151,7 +151,7 @@ int32 CountMovementBindings(
 	return Count;
 }
 
-int32 CountAuthorityBindings(
+int32 PmCountAuthorityBindings(
 	const UCorsairsSession* Session,
 	const ACorsairsPlayerCharacter* Pawn)
 {
@@ -475,7 +475,7 @@ bool FCorsairsPlayerSessionAuthorityRollbackTest::RunTest(const FString&)
 	Session->AddVisibleActorForTests(Target);
 	InstallPlayerMovementSkill(Session, 26);
 	TestEqual(TEXT("pawn has one production authority listener"),
-		CountAuthorityBindings(Session, Pawn), 1);
+		PmCountAuthorityBindings(Session, Pawn), 1);
 
 	int32 SkillTransportAttempts = 0;
 	Session->SetSendOverrideForTests(
@@ -550,11 +550,11 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 	Pawn->AttachSession(Session);
 	TestEqual(
 		TEXT("reattach leaves exactly one delegate receiver"),
-		CountMovementBindings(Session, Pawn),
+		PmCountMovementBindings(Session, Pawn),
 		1);
 	TestEqual(
 		TEXT("reattach leaves exactly one authority receiver"),
-		CountAuthorityBindings(Session, Pawn),
+		PmCountAuthorityBindings(Session, Pawn),
 		1);
 	Pawn->SetActorLocation(FVector(-279000.0, 224000.0, 321.0));
 	Pawn->GetCharacterMovement()->Velocity = FVector(120.0, 80.0, 0.0);
@@ -599,14 +599,14 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 	Pawn->AttachSession(Replacement);
 	TestFalse(
 		TEXT("reattach detaches the previous session"),
-		CountMovementBindings(Session, Pawn) > 0);
+		PmCountMovementBindings(Session, Pawn) > 0);
 	TestEqual(
 		TEXT("replacement has one receiver after repeated attach"),
-		CountMovementBindings(Replacement, Pawn),
+		PmCountMovementBindings(Replacement, Pawn),
 		1);
 	TestEqual(
 		TEXT("replacement has one authority receiver after repeated attach"),
-		CountAuthorityBindings(Replacement, Pawn),
+		PmCountAuthorityBindings(Replacement, Pawn),
 		1);
 
 	FCorsairsMovementEvent ReplacementTerminal;
@@ -624,10 +624,10 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 	World->DestroyActor(Pawn);
 	TestFalse(
 		TEXT("EndPlay removes movement delegate"),
-		CountMovementBindings(Replacement, Pawn) > 0);
+		PmCountMovementBindings(Replacement, Pawn) > 0);
 	TestFalse(
 		TEXT("EndPlay removes authority delegate"),
-		CountAuthorityBindings(Replacement, Pawn) > 0);
+		PmCountAuthorityBindings(Replacement, Pawn) > 0);
 	TestWorld.ForwardErrorMessages(this);
 	return true;
 }
