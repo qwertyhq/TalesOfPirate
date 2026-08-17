@@ -21,24 +21,29 @@ public class CorsairsGame : ModuleRules
 			"Json",
 			"JsonUtilities",
 		});
-
 		PrivateDependencyModuleNames.Add("AssetRegistry");
+
+		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL");
+
+		RuntimeDependencies.Add("$(ProjectDir)/Data/skills.json", StagedFileType.UFS);
 
 		// Source-only Editor builds remain valid before Task 7 has generated
 		// runtime terrain data. Packaging acceptance independently requires all
 		// three files and audits their exact UFS members.
 		string ProjectRoot = Path.GetFullPath(Path.Combine(ModuleDirectory, "..", ".."));
-		if (File.Exists(Path.Combine(ProjectRoot, "Data", "character_map.json")))
+		RegisterDataIfPresent(ProjectRoot, "Data/character_map.json");
+		RegisterDataIfPresent(ProjectRoot, "Data/Heights/garner.height.r16");
+		RegisterDataIfPresent(ProjectRoot, "Data/Heights/garner.block.raw");
+		RegisterDataIfPresent(ProjectRoot, "Data/Heights/garner.region.raw");
+		RegisterDataIfPresent(ProjectRoot, "Data/Heights/garner.terrain.json");
+		RegisterDataIfPresent(ProjectRoot, "Data/Heights/garner.runtime.json");
+	}
+
+	private void RegisterDataIfPresent(string projectRoot, string relativePath)
+	{
+		if (File.Exists(Path.Combine(projectRoot, relativePath.Replace('/', Path.DirectorySeparatorChar))))
 		{
-			RuntimeDependencies.Add("$(ProjectDir)/Data/character_map.json", StagedFileType.UFS);
-		}
-		if (File.Exists(Path.Combine(ProjectRoot, "Data", "Heights", "garner.block.raw")))
-		{
-			RuntimeDependencies.Add("$(ProjectDir)/Data/Heights/garner.block.raw", StagedFileType.UFS);
-		}
-		if (File.Exists(Path.Combine(ProjectRoot, "Data", "Heights", "garner.terrain.json")))
-		{
-			RuntimeDependencies.Add("$(ProjectDir)/Data/Heights/garner.terrain.json", StagedFileType.UFS);
+			RuntimeDependencies.Add("$(ProjectDir)/" + relativePath, StagedFileType.UFS);
 		}
 	}
 }

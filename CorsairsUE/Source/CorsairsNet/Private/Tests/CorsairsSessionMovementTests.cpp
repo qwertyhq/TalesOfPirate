@@ -55,6 +55,13 @@ const uint8 RemotePathBytes[] = {
 	0x1C, 0x0C, 0x00, 0x00,
 };
 
+const uint8 SpawnToMovedRemoteBytes[] = {
+	0xE8, 0x03, 0x00, 0x00,
+	0xD0, 0x07, 0x00, 0x00,
+	0x34, 0x08, 0x00, 0x00,
+	0x1C, 0x0C, 0x00, 0x00,
+};
+
 template <typename MessageType>
 void Deliver(UCorsairsSession* Session, const MessageType& Message)
 {
@@ -84,6 +91,10 @@ Msg::McEnterMapMessage MakeEnterMap(
 	Data.baseInfo.posY = Position.Y;
 	Data.baseInfo.handle = 7007;
 	Data.baseInfo.look.typeId = 1;
+	Msg::SkillEntry Skill;
+	Skill.id = 26;
+	Skill.level = 1;
+	Data.skillBag.skills.push_back(Skill);
 	Data.attr.attrs.push_back({1, 1234});
 	if (Speed.IsSet())
 	{
@@ -175,6 +186,14 @@ UCorsairsSession* CreateSkillSession()
 {
 	UCorsairsSession* Session = NewObject<UCorsairsSession>();
 	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	Msg::McSynSkillBagMessage SkillBag;
+	SkillBag.worldId = LocalWorldId;
+	SkillBag.skillBag.synType = 0;
+	Msg::SkillEntry Skill;
+	Skill.id = 26;
+	Skill.level = 1;
+	SkillBag.skillBag.skills.push_back(Skill);
+	Deliver(Session, SkillBag);
 	Session->SetMovementSpeedForTests(static_cast<int64>(LocalSpeed));
 	Deliver(
 		Session,
@@ -299,6 +318,321 @@ bool FCorsairsSessionSerializesAtomicBeginActionTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionStrictMoveWireTest,
+	"Corsairs.Net.Session.StrictMoveWire",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionStrictMoveWireTest::RunTest(const FString&)
+{
+	UCorsairsSession* Invalid = NewObject<UCorsairsSession>();
+	Invalid->SetInWorldForTests(LocalWorldId, Spawn);
+	int32 InvalidSendCount = 0;
+	Invalid->SetSendOverrideForTests(
+		[&](WPacket&)
+		{
+			++InvalidSendCount;
+			return true;
+		});
+	TestResult(this, TEXT("одна точка отклонена"),
+		Invalid->SendMovePath({Spawn}),
+		ECorsairsActionRequestResult::Invalid);
+	TArray<FIntPoint> TooLong;
+	TooLong.SetNum(33);
+	TestResult(this, TEXT("33 точки отклонены"),
+		Invalid->SendMovePath(TooLong),
+		ECorsairsActionRequestResult::Invalid);
+	TestEqual(TEXT("невалидные пути не отправляются"), InvalidSendCount, 0);
+
+	UCorsairsSession* Minimum = NewObject<UCorsairsSession>();
+	Minimum->SetInWorldForTests(LocalWorldId, Spawn);
+	bool bMinimumWireMatches = false;
+	Minimum->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+			const bool bHeaderMatches =
+				Packet.GetCmd() == CMD_CM_BEGINACTION &&
+				Packet.ReadInt64() == LocalWorldId &&
+				Packet.ReadInt64() == 1 &&
+				Packet.ReadInt64() == Msg::ActionType::MOVE;
+			uint16 Count = 0;
+			const char* Bytes = Packet.ReadSequence(Count);
+			bMinimumWireMatches = bHeaderMatches &&
+				SameBytes(
+					Bytes,
+					Count,
+					SpawnToFirstEndpointBytes,
+					UE_ARRAY_COUNT(SpawnToFirstEndpointBytes));
+			return true;
+		});
+	TestResult(this, TEXT("две точки отправлены"),
+		Minimum->SendMovePath({Spawn, FIntPoint(1300, 2400)}),
+		ECorsairsActionRequestResult::Sent);
+	TestTrue(TEXT("две точки имеют точные wire bytes"),
+		bMinimumWireMatches);
+
+	UCorsairsSession* Maximum = NewObject<UCorsairsSession>();
+	Maximum->SetInWorldForTests(LocalWorldId, Spawn);
+	TArray<FIntPoint> MaximumPath;
+	for (int32 Index = 0; Index < 32; ++Index)
+	{
+		MaximumPath.Emplace(1000 + Index * 50, 2000 - Index * 25);
+	}
+	bool bMaximumWireMatches = false;
+	Maximum->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+			const bool bHeaderMatches =
+				Packet.GetCmd() == CMD_CM_BEGINACTION &&
+				Packet.ReadInt64() == LocalWorldId &&
+				Packet.ReadInt64() == 1 &&
+				Packet.ReadInt64() == Msg::ActionType::MOVE;
+			uint16 Count = 0;
+			const char* Bytes = Packet.ReadSequence(Count);
+			bMaximumWireMatches = bHeaderMatches &&
+				Count == 256 &&
+				FMemory::Memcmp(
+					Bytes,
+					MaximumPath.GetData(),
+					Count) == 0;
+			return true;
+		});
+	TestResult(this, TEXT("32 точки отправлены"),
+		Maximum->SendMovePath(MaximumPath),
+		ECorsairsActionRequestResult::Sent);
+	TestTrue(TEXT("32 точки занимают точные 256 wire bytes"),
+		bMaximumWireMatches);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionEndActiveActionTest,
+	"Corsairs.Net.Session.EndActiveAction",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionEndActiveActionTest::RunTest(const FString&)
+{
+	UCorsairsSession* Session = NewObject<UCorsairsSession>();
+	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	int32 MoveSendCount = 0;
+	int32 CancelSendCount = 0;
+	bool bCancelIsCommandOnly = false;
+	Session->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+			if (Packet.GetCmd() == CMD_CM_ENDACTION)
+			{
+				++CancelSendCount;
+				bCancelIsCommandOnly = Packet.PayloadLength() == 0;
+			}
+			else if (Packet.GetCmd() == CMD_CM_BEGINACTION)
+			{
+				++MoveSendCount;
+			}
+			return true;
+		});
+	TestResult(this, TEXT("MOVE резервирует действие"),
+		Session->SendMovePath({Spawn, FIntPoint(1300, 2400)}),
+		ECorsairsActionRequestResult::Sent);
+	TestTrue(TEXT("Session публикует наличие active action"),
+		Session->HasActiveAction());
+	TestFalse(TEXT("до EndActiveAction cancel не pending"),
+		Session->IsCancelPending());
+	TestTrue(TEXT("первая отмена отправлена"), Session->EndActiveAction());
+	TestTrue(TEXT("после EndActiveAction cancel pending"),
+		Session->IsCancelPending());
+	TestFalse(TEXT("повторная отмена до terminal занята"),
+		Session->EndActiveAction());
+	TestResult(this, TEXT("новый BEGIN до terminal занят"),
+		Session->SendMovePath({Spawn, FIntPoint(1400, 2400)}),
+		ECorsairsActionRequestResult::Busy);
+	TestEqual(TEXT("ENDACTION отправлен один раз"), CancelSendCount, 1);
+	TestEqual(TEXT("до terminal второй MOVE не отправлен"), MoveSendCount, 1);
+	TestTrue(TEXT("ENDACTION не содержит payload"), bCancelIsCommandOnly);
+
+	Deliver(
+		Session,
+		MakeMove(
+			LocalWorldId,
+			1,
+			1,
+			Endpoint1500Bytes,
+			UE_ARRAY_COUNT(Endpoint1500Bytes)));
+	TestResult(this, TEXT("после terminal новый BEGIN разрешён"),
+		Session->SendMovePath(
+			{FIntPoint(1500, 1000), FIntPoint(1700, 1000)}),
+		ECorsairsActionRequestResult::Sent);
+	TestEqual(TEXT("после terminal отправлен второй MOVE"), MoveSendCount, 2);
+	TestTrue(TEXT("после нового BEGIN active seam снова поднят"),
+		Session->HasActiveAction());
+	TestFalse(TEXT("terminal очистил прежнюю cancel reservation"),
+		Session->IsCancelPending());
+
+	UCorsairsSession* Retry = NewObject<UCorsairsSession>();
+	Retry->SetInWorldForTests(LocalWorldId, Spawn);
+	bool bFailCancel = true;
+	int32 RetryCancelCount = 0;
+	Retry->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			if (Wire.GetCmd() == CMD_CM_ENDACTION)
+			{
+				++RetryCancelCount;
+				return !bFailCancel;
+			}
+			return true;
+		});
+	Retry->SendMovePath({Spawn, FIntPoint(1300, 2400)});
+	TestFalse(TEXT("transport failure отмены возвращает false"),
+		Retry->EndActiveAction());
+	bFailCancel = false;
+	TestTrue(TEXT("rollback разрешает retry отмены"),
+		Retry->EndActiveAction());
+	TestEqual(TEXT("retry делает ровно вторую попытку"), RetryCancelCount, 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionReentrantCancelBeforeSkillTransportTest,
+	"Corsairs.Net.Session.ReentrantCancelBeforeSkillTransport",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionReentrantCancelBeforeSkillTransportTest::RunTest(
+	const FString&)
+{
+	// Мутация: считать ту же пару пакета и фазы достаточной после уведомления
+	// о блокировке. Тогда слушатель успевает отправить ENDACTION, а следом
+	// уходит BEGIN навыка.
+	UCorsairsSession* Session = CreateSkillSession();
+	int32 SkillBeginCount = 0;
+	int32 CancelCount = 0;
+	int32 ItemBeginCount = 0;
+	Session->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			if (Wire.GetCmd() == CMD_CM_ENDACTION)
+			{
+				++CancelCount;
+				return true;
+			}
+
+			RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+			if (Packet.GetCmd() == CMD_CM_BEGINACTION)
+			{
+				Packet.ReadInt64();
+				Packet.ReadInt64();
+				const int64 ActionType = Packet.ReadInt64();
+				if (ActionType == Msg::ActionType::SKILL)
+				{
+					++SkillBeginCount;
+				}
+				else if (ActionType == Msg::ActionType::ITEM_PICK)
+				{
+					++ItemBeginCount;
+				}
+			}
+			return true;
+		});
+
+	bool bCancelAccepted = false;
+	Session->SetMovementAuthorityObserverForTests(
+		[&](const bool bLocked, const int64)
+		{
+			if (bLocked)
+			{
+				bCancelAccepted = Session->EndActiveAction();
+			}
+		});
+
+	TestResult(this, TEXT("локально отменённый outer Skill не считается Sent"),
+		Session->UseSkillOn(26, RemoteWorldId),
+		ECorsairsActionRequestResult::TransportFailed);
+	TestTrue(TEXT("reentrant cancel принят"), bCancelAccepted);
+	TestEqual(TEXT("unsent Skill не требует ENDACTION"), CancelCount, 0);
+	TestEqual(TEXT("после локальной отмены Skill BEGIN не отправлен"),
+		SkillBeginCount, 0);
+	TestFalse(TEXT("локальная отмена освобождает active action"),
+		Session->HasActiveAction());
+	TestFalse(TEXT("локальная отмена не ждёт server terminal"),
+		Session->IsCancelPending());
+	TestResult(this, TEXT("после локальной отмены новый BEGIN разрешён"),
+		Session->PickUpItem(901, 902),
+		ECorsairsActionRequestResult::Sent);
+	TestEqual(TEXT("следующий BEGIN отправлен ровно раз"), ItemBeginCount, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionReentrantCommittedMovementStateTest,
+	"Corsairs.Net.Session.ReentrantCommittedMovementState",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionReentrantCommittedMovementStateTest::RunTest(
+	const FString&)
+{
+	UCorsairsSession* Session = NewObject<UCorsairsSession>();
+	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	ECorsairsActionRequestResult NestedResult =
+		ECorsairsActionRequestResult::Invalid;
+	int32 ItemSendCount = 0;
+	Session->SetEventObserversForTests(
+		[&](const FCorsairsMovementEvent& Event)
+		{
+			if (Event.bLocal &&
+				Event.Type == ECorsairsMovementEventType::Terminal)
+			{
+				NestedResult = Session->PickUpItem(901, 902);
+			}
+		},
+		TFunction<void(const FString&)>(),
+		TFunction<void(ECorsairsLoginStage)>());
+	Session->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+			if (Packet.GetCmd() != CMD_CM_BEGINACTION)
+			{
+				return true;
+			}
+			Packet.ReadInt64();
+			const int64 PacketId = Packet.ReadInt64();
+			const int64 ActionType = Packet.ReadInt64();
+			if (ActionType == Msg::ActionType::MOVE)
+			{
+				Deliver(
+					Session,
+					MakeMove(
+						LocalWorldId,
+						PacketId,
+						1,
+						Endpoint1500Bytes,
+						UE_ARRAY_COUNT(Endpoint1500Bytes)));
+				return false;
+			}
+			if (ActionType == Msg::ActionType::ITEM_PICK)
+			{
+				++ItemSendCount;
+			}
+			return true;
+		});
+
+	TestResult(this, TEXT("outer transport failure остаётся явным"),
+		Session->SendMovePath({Spawn, FIntPoint(1300, 2400)}),
+		ECorsairsActionRequestResult::TransportFailed);
+	TestResult(this, TEXT("observer видит уже завершённый MOVE"),
+		NestedResult, ECorsairsActionRequestResult::Sent);
+	TestEqual(TEXT("вложенный action отправлен ровно раз"), ItemSendCount, 1);
+	TestResult(this, TEXT("вложенный committed action не затёрт rollback"),
+		Session->PickUpItem(903, 904),
+		ECorsairsActionRequestResult::Busy);
+	TestEqual(TEXT("terminal confirmation пережила outer rollback"),
+		Session->GetConfirmedPosition(), FIntPoint(1500, 1000));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCorsairsSessionEnterMapAndSkillOriginTest,
 	"Corsairs.Movement.Session.EnterMapAndSkillOrigin",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -390,6 +724,90 @@ bool FCorsairsSessionEnterMapAndSkillOriginTest::RunTest(const FString&)
 	TestTrue(
 		TEXT("skill path starts at reducer confirmation, not spawn"),
 		bSkillWireMatches);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionSkillUsesMovedTargetTest,
+	"Corsairs.Movement.Session.SkillUsesMovedTarget",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionSkillUsesMovedTargetTest::RunTest(const FString&)
+{
+	// Мутация: уведомить мир о движении до обновления адресуемого состояния.
+	// Вложенная атака тогда всё ещё пойдёт к исходной точке CHABEGINSEE.
+	UCorsairsSession* Session = CreateSkillSession();
+	bool bSkillUsesMovedPosition = false;
+	Session->SetSendOverrideForTests(
+		[&](WPacket& Wire)
+		{
+			RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+			const bool bHeaderMatches =
+				Packet.GetCmd() == CMD_CM_BEGINACTION &&
+				Packet.ReadInt64() == LocalWorldId &&
+				Packet.ReadInt64() == 1 &&
+				Packet.ReadInt64() == Msg::ActionType::SKILL &&
+				Packet.ReadInt64() == 2 &&
+				Packet.ReadInt64() == 1;
+			uint16 WaypointCount = 0;
+			const char* Waypoints = Packet.ReadSequence(WaypointCount);
+			bSkillUsesMovedPosition = bHeaderMatches &&
+				SameBytes(
+					Waypoints,
+					WaypointCount,
+					SpawnToMovedRemoteBytes,
+					UE_ARRAY_COUNT(SpawnToMovedRemoteBytes)) &&
+				Packet.ReadInt64() == 26 &&
+				Packet.ReadInt64() == RemoteWorldId &&
+				Packet.ReadInt64() == 9009 + RemoteWorldId;
+			return true;
+		});
+	bool bObserverCalled = false;
+	bool bPositionUpdatedBeforeObserver = false;
+	ECorsairsActionRequestResult NestedSkillResult =
+		ECorsairsActionRequestResult::Invalid;
+	Session->SetEventObserversForTests(
+		[&](const FCorsairsMovementEvent& Event)
+		{
+			if (Event.WorldId != RemoteWorldId)
+			{
+				return;
+			}
+			bObserverCalled = true;
+			const FCorsairsWorldActor* MovedTarget =
+				Session->GetVisibleActors().FindByPredicate(
+					[](const FCorsairsWorldActor& Actor)
+					{
+						return Actor.WorldId == RemoteWorldId;
+					});
+			bPositionUpdatedBeforeObserver = MovedTarget != nullptr &&
+				MovedTarget->Position == FIntPoint(2100, 3100);
+			NestedSkillResult = Session->UseSkillOn(26, RemoteWorldId);
+		},
+		TFunction<void(const FString&)>(),
+		TFunction<void(ECorsairsLoginStage)>());
+
+	Deliver(
+		Session,
+		MakeMove(
+			RemoteWorldId,
+			90,
+			0,
+			RemotePathBytes,
+			UE_ARRAY_COUNT(RemotePathBytes)));
+
+	TestTrue(TEXT("remote movement observer is called"), bObserverCalled);
+	TestTrue(
+		TEXT("target position is current inside movement observer"),
+		bPositionUpdatedBeforeObserver);
+	TestResult(
+		this,
+		TEXT("nested skill against moved target is sent"),
+		NestedSkillResult,
+		ECorsairsActionRequestResult::Sent);
+	TestTrue(
+		TEXT("skill approaches the latest remote endpoint"),
+		bSkillUsesMovedPosition);
 	return true;
 }
 
@@ -941,6 +1359,117 @@ bool FCorsairsSessionItemNotificationsTest::RunTest(const FString&)
 		ECorsairsActionRequestResult::Sent);
 	TestEqual(TEXT("manual input sends only after item terminal"),
 		KitbagSends, 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionActorIncarnationReplacementTest,
+	"Corsairs.Movement.Session.ActorIncarnationReplacement",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionActorIncarnationReplacementTest::RunTest(const FString&)
+{
+	// Мутации: безусловный Add оставляет дубликат; новый Handle не публикует
+	// уход старой инкарнации; повтор той же identity не обновляет snapshot.
+	UCorsairsSession* Session = NewObject<UCorsairsSession>();
+	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	TArray<FString> Events;
+	Session->SetActorLifecycleObserversForTests(
+		[&](const FCorsairsWorldActor& Actor)
+		{
+			Events.Add(FString::Printf(
+				TEXT("seen:%lld:%lld"),
+				Actor.WorldId,
+				Actor.Handle));
+		},
+		[&](const int64 WorldId)
+		{
+			Events.Add(FString::Printf(TEXT("left:%lld"), WorldId));
+		});
+
+	Msg::McChaBeginSeeMessage First = MakeActorSeen(
+		RemoteWorldId,
+		FIntPoint(2000, 3000),
+		300);
+	First.base.handle = 88001;
+	First.base.name = "First incarnation";
+	Deliver(Session, First);
+	Events.Reset();
+
+	Msg::McChaBeginSeeMessage SameIdentity = First;
+	SameIdentity.base.posX = 2050;
+	SameIdentity.base.posY = 3050;
+	SameIdentity.base.name = "Updated incarnation";
+	Deliver(Session, SameIdentity);
+	TestEqual(TEXT("same identity remains exactly once"),
+		Session->GetVisibleActors().Num(), 1);
+	if (Session->GetVisibleActors().Num() == 1)
+	{
+		TestEqual(TEXT("same identity replaces authoritative position"),
+			Session->GetVisibleActors()[0].Position,
+			FIntPoint(2050, 3050));
+		TestEqual(TEXT("same identity replaces authoritative name"),
+			Session->GetVisibleActors()[0].Name,
+			FString(TEXT("Updated incarnation")));
+	}
+	TestEqual(TEXT("same identity updates without lifecycle noise"),
+		Events.Num(), 0);
+
+	Events.Reset();
+	Msg::McChaBeginSeeMessage NewIdentity = SameIdentity;
+	NewIdentity.base.handle = 88002;
+	NewIdentity.base.posX = 2100;
+	NewIdentity.base.posY = 3100;
+	Deliver(Session, NewIdentity);
+	TestEqual(TEXT("new incarnation replaces rather than appends"),
+		Session->GetVisibleActors().Num(), 1);
+	if (Session->GetVisibleActors().Num() == 1)
+	{
+		TestEqual(TEXT("replacement exposes only the new handle"),
+			Session->GetVisibleActors()[0].Handle,
+			int64{88002});
+	}
+	TestEqual(TEXT("old incarnation leaves before one new publication"),
+		Events,
+		TArray<FString>{TEXT("left:88"), TEXT("seen:88:88002")});
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsSessionEnterMapClearsVisibleActorsTest,
+	"Corsairs.Movement.Session.EnterMapClearsVisibleActors",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsSessionEnterMapClearsVisibleActorsTest::RunTest(const FString&)
+{
+	// Мутация: ENTERMAP заменяет local snapshot, но оставляет актёров
+	// предыдущей карты и не сообщает их уход потребителям.
+	UCorsairsSession* Session = NewObject<UCorsairsSession>();
+	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	TArray<FString> Events;
+	Session->SetActorLifecycleObserversForTests(
+		[&](const FCorsairsWorldActor& Actor)
+		{
+			Events.Add(FString::Printf(TEXT("seen:%lld"), Actor.WorldId));
+		},
+		[&](const int64 WorldId)
+		{
+			Events.Add(FString::Printf(TEXT("left:%lld"), WorldId));
+		});
+	Deliver(Session, MakeActorSeen(88, FIntPoint(2000, 3000), 300));
+	Deliver(Session, MakeActorSeen(99, FIntPoint(2500, 3500), 350));
+	Events.Reset();
+
+	Deliver(Session, MakeEnterMap(FIntPoint(4000, 5000)));
+	TestEqual(TEXT("new ENTERMAP clears the previous visibility snapshot"),
+		Session->GetVisibleActors().Num(), 0);
+	TestEqual(TEXT("old actors leave in stable snapshot order"),
+		Events,
+		TArray<FString>{TEXT("left:88"), TEXT("left:99")});
+	TestEqual(TEXT("new ENTERMAP remains in world"),
+		Session->GetStage(), ECorsairsLoginStage::InWorld);
+	TestEqual(TEXT("new ENTERMAP installs the new local position"),
+		Session->GetConfirmedPosition(), FIntPoint(4000, 5000));
 	return true;
 }
 

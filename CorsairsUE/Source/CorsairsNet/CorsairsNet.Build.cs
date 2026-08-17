@@ -47,6 +47,10 @@ public class CorsairsNet : ModuleRules
 		// точечно здесь: переписывать 13 864 строки протокола под коды возврата
 		// значит потерять гарантию совместимости с сервером.
 		bEnableExceptions = true;
+		// Общий wire-контракт клиента и GameServer всегда включает PacketId в
+		// BEGIN/NOTIACTION. Макрос должен быть публичным: CommandMessages.h
+		// разбирается и в потребляющем модуле CorsairsGame.
+		PublicDefinitions.Add("defPROTOCOL_HAVE_PACKETID=1");
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{

@@ -2,19 +2,22 @@
 
 #include "CorsairsPlayerCharacter.h"
 
+#include "CorsairsNet/include/CommandMessages.h"
 #include "CorsairsNet/include/Packet.h"
 #include "CorsairsSession.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/SpringArmComponent.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
 namespace
 {
 using Corsairs::Net::WPacket;
+using Corsairs::Net::RPacket;
 
-constexpr int64 LocalWorldId = 77;
+constexpr int64 PlayerMovementLocalWorldId = 77;
 constexpr int64 MovementSpeed = 450;
 constexpr uint16 BeginActionCommand = 6;
 const FIntPoint Spawn(223325, 278475);
@@ -26,7 +29,7 @@ void BroadcastLocalEvent(
 	const bool bRequireNeutral = false)
 {
 	FCorsairsMovementEvent Event;
-	Event.WorldId = LocalWorldId;
+	Event.WorldId = PlayerMovementLocalWorldId;
 	Event.Type = Type;
 	Event.Waypoints = {Endpoint};
 	Event.Endpoint = Endpoint;
@@ -202,22 +205,37 @@ bool CreatePossessedPawn(
 	Pawn->SetActorLocation(FVector(-Spawn.Y, Spawn.X, 321.0));
 
 	Session = NewObject<UCorsairsSession>(World);
-	Session->SetInWorldForTests(LocalWorldId, Spawn);
+	Session->SetInWorldForTests(PlayerMovementLocalWorldId, Spawn);
 	Session->SetMovementSpeedForTests(MovementSpeed);
 	Pawn->AttachSession(Session);
 	return true;
 }
+
+void InstallPlayerMovementSkill(
+	UCorsairsSession* Session,
+	const int64 SkillId)
+{
+	Corsairs::Net::Msg::McSynSkillBagMessage Message;
+	Message.worldId = PlayerMovementLocalWorldId;
+	Message.skillBag.synType = 0;
+	Corsairs::Net::Msg::SkillEntry Skill;
+	Skill.id = SkillId;
+	Skill.level = 1;
+	Message.skillBag.skills.push_back(Skill);
+	WPacket Wire = Corsairs::Net::Msg::serialize(Message);
+	RPacket Packet(Wire.Data(), Wire.GetPacketSize());
+	Session->HandlePacketForTests(Packet);
+}
 } // namespace
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCorsairsPlayerFirstSegmentFromSpawnTest,
-	"Corsairs.Movement.Pawn.FirstSegmentFromSpawn",
+	FCorsairsPlayerTimerDoesNotSendPredictedMoveTest,
+	"Corsairs.Movement.Pawn.TimerDoesNotSendPredictedMove",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FCorsairsPlayerFirstSegmentFromSpawnTest::RunTest(const FString&)
+bool FCorsairsPlayerTimerDoesNotSendPredictedMoveTest::RunTest(const FString&)
 {
-	// Mutation: вернуть initial-report discard или начинать первый MOVE с
-	// текущей predicted position вместо reducer-confirmed spawn.
+	// Мутация: вернуть периодический SubmitPredictedPosition из Tick.
 	FTestWorldWrapper TestWorld;
 	ACorsairsPlayerCharacter* Pawn = nullptr;
 	UCorsairsSession* Session = nullptr;
@@ -235,20 +253,15 @@ bool FCorsairsPlayerFirstSegmentFromSpawnTest::RunTest(const FString&)
 		});
 	const FIntPoint Current(223525, 278575);
 	Pawn->SetActorLocation(FVector(-Current.Y, Current.X, 321.0));
-	Pawn->Tick(0.51f);
-
-	TestEqual(TEXT("first timer report sends one path"), SentPaths.Num(), 1);
-	if (SentPaths.Num() == 1)
+	for (int32 Tick = 0; Tick < 20; ++Tick)
 	{
-		TestEqual(TEXT("first path has two distinct points"), SentPaths[0].Num(), 2);
-		if (SentPaths[0].Num() == 2)
-		{
-			TestEqual(TEXT("first path starts at server spawn"), SentPaths[0][0], Spawn);
-			TestEqual(TEXT("first path ends at predicted position"), SentPaths[0][1], Current);
-		}
+		Pawn->Tick(0.51f);
 	}
+
+	TestEqual(TEXT("production timer sends no predicted MOVE"),
+		SentPaths.Num(), 0);
 	TestEqual(
-		TEXT("positive ATTR_MSPD configures flying speed"),
+		TEXT("positive ATTR_MSPD still configures path playback speed"),
 		Pawn->GetCharacterMovement()->MaxFlySpeed,
 		static_cast<float>(MovementSpeed));
 	TestWorld.ForwardErrorMessages(this);
@@ -262,9 +275,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FCorsairsPlayerHeldInputNoPacketFloodTest::RunTest(const FString&)
 {
-	// Mutation: MoveForward returns on zero before recording it, unlocking
-	// clears the latch, held input bypasses the gate, либо zero ATTR_MSPD
-	// оставляет ранее выставленную скорость валидной.
+	// Мутация: MoveForward перестаёт записывать ноль до раннего выхода,
+	// снятие блокировки очищает latch, удержание обходит gate либо нулевой
+	// ATTR_MSPD оставляет прежнюю скорость валидной.
 	FTestWorldWrapper TestWorld;
 	ACorsairsPlayerCharacter* Pawn = nullptr;
 	UCorsairsSession* Session = nullptr;
@@ -321,9 +334,9 @@ bool FCorsairsPlayerHeldInputNoPacketFloodTest::RunTest(const FString&)
 	Pawn->SetActorLocation(FVector(-Spawn.Y, Spawn.X + 200, 321.0));
 	Pawn->Tick(0.51f);
 	TestEqual(
-		TEXT("neutral and re-press sends exactly one MOVE"),
+		TEXT("production timer stays silent after neutral and re-press"),
 		SendCount,
-		SendsAfterReject + 1);
+		SendsAfterReject);
 
 	Pawn->ConsumeMovementInputVector();
 	Pawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 0.0f);
@@ -348,9 +361,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FCorsairsPlayerAuthorityTransitionRaceTest::RunTest(const FString&)
 {
-	// Mutation: poll Session authority only from axis callbacks, omit report
-	// gating, or forget stop/consume on a rising combined lock. A skill that
-	// reserves and finishes between samples then leaks held prediction/MOVE.
+	// Мутация: проверять authority только в axis callbacks или забыть
+	// stop/consume на rising lock. Навык между samples тогда пропускает
+	// удерживаемый probe input после снятия блокировки.
 	FTestWorldWrapper SkillWorld;
 	ACorsairsPlayerCharacter* SkillPawn = nullptr;
 	UCorsairsSession* SkillSession = nullptr;
@@ -395,8 +408,8 @@ bool FCorsairsPlayerAuthorityTransitionRaceTest::RunTest(const FString&)
 	SkillPawn->ApplyMovementAxisForProbe(TEXT("MoveRight"), 0.0f);
 	SkillPawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
 	SkillPawn->Tick(0.51f);
-	TestEqual(TEXT("neutral and re-press permit exactly one MOVE"),
-		SkillSendCount, 1);
+	TestEqual(TEXT("neutral and re-press do not restore timer MOVE"),
+		SkillSendCount, 0);
 	SkillWorld.ForwardErrorMessages(this);
 
 	FTestWorldWrapper SpeedWorld;
@@ -420,10 +433,6 @@ bool FCorsairsPlayerAuthorityTransitionRaceTest::RunTest(const FString&)
 	SpeedPawn->GetCharacterMovement()->Velocity =
 		FVector(300.0, 125.0, 0.0);
 	const FVector BeforeZeroSpeed = SpeedPawn->GetActorLocation();
-	AddExpectedError(
-		TEXT("ATTR_MSPD"),
-		EAutomationExpectedErrorFlags::Contains,
-		1);
 	SpeedSession->SetMovementSpeedForTests(0);
 	for (int32 Tick = 0; Tick < 120; ++Tick)
 	{
@@ -448,9 +457,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FCorsairsPlayerSessionAuthorityRollbackTest::RunTest(const FString&)
 {
-	// Mutation: remove Session's production dynamic Broadcast or the pawn's
-	// AddDynamic binding. Direct delegate tests still pass, but a real
-	// UseSkillOn transport rollback then fails to stop/latch held prediction.
+	// Мутация: убрать production Broadcast сессии или AddDynamic персонажа.
+	// Прямой delegate-тест тогда проходит, но реальный rollback UseSkillOn
+	// больше не останавливает и не защёлкивает probe input.
 	FTestWorldWrapper TestWorld;
 	ACorsairsPlayerCharacter* Pawn = nullptr;
 	UCorsairsSession* Session = nullptr;
@@ -464,6 +473,7 @@ bool FCorsairsPlayerSessionAuthorityRollbackTest::RunTest(const FString&)
 	Target.Position = FIntPoint(224000, 279000);
 	Target.Handle = 9088;
 	Session->AddVisibleActorForTests(Target);
+	InstallPlayerMovementSkill(Session, 26);
 	TestEqual(TEXT("pawn has one production authority listener"),
 		CountAuthorityBindings(Session, Pawn), 1);
 
@@ -514,8 +524,8 @@ bool FCorsairsPlayerSessionAuthorityRollbackTest::RunTest(const FString&)
 	Pawn->ApplyMovementAxisForProbe(TEXT("MoveRight"), 0.0f);
 	Pawn->ApplyMovementAxisForProbe(TEXT("MoveForward"), 1.0f);
 	Pawn->Tick(0.51f);
-	TestEqual(TEXT("real rollback neutral/re-press sends one MOVE"),
-		MoveSendCount, 1);
+	TestEqual(TEXT("real rollback does not restore timer MOVE"),
+		MoveSendCount, 0);
 	TestWorld.ForwardErrorMessages(this);
 	return true;
 }
@@ -527,7 +537,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 {
-	// Mutation: не снять старый AddDynamic при reattach, перепутать знак Y,
+	// Мутация: не снять старый AddDynamic при reattach, перепутать знак Y,
 	// не погасить velocity/input либо применить manual AcceptedPath как follower.
 	FTestWorldWrapper TestWorld;
 	ACorsairsPlayerCharacter* Pawn = nullptr;
@@ -568,7 +578,7 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 
 	const FVector Reconciled = Pawn->GetActorLocation();
 	FCorsairsMovementEvent ManualAccepted;
-	ManualAccepted.WorldId = LocalWorldId;
+	ManualAccepted.WorldId = PlayerMovementLocalWorldId;
 	ManualAccepted.Type = ECorsairsMovementEventType::AcceptedPath;
 	ManualAccepted.Waypoints = {Terminal, FIntPoint(224500, 279500)};
 	ManualAccepted.Endpoint = ManualAccepted.Waypoints.Last();
@@ -577,13 +587,13 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 	ManualAccepted.MovementSpeedCmPerSecond = MovementSpeed;
 	Session->OnMovementChanged.Broadcast(ManualAccepted);
 	TestEqual(
-		TEXT("manual AcceptedPath never moves the pawn"),
+		TEXT("manual AcceptedPath starts from current point without teleport"),
 		Pawn->GetActorLocation(),
 		Reconciled);
 
 	UWorld* World = TestWorld.GetTestWorld();
 	UCorsairsSession* Replacement = NewObject<UCorsairsSession>(World);
-	Replacement->SetInWorldForTests(LocalWorldId, Terminal);
+	Replacement->SetInWorldForTests(PlayerMovementLocalWorldId, Terminal);
 	Replacement->SetMovementSpeedForTests(MovementSpeed);
 	Pawn->AttachSession(Replacement);
 	Pawn->AttachSession(Replacement);
@@ -600,7 +610,7 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 		1);
 
 	FCorsairsMovementEvent ReplacementTerminal;
-	ReplacementTerminal.WorldId = LocalWorldId;
+	ReplacementTerminal.WorldId = PlayerMovementLocalWorldId;
 	ReplacementTerminal.Type = ECorsairsMovementEventType::Terminal;
 	ReplacementTerminal.Endpoint = FIntPoint(223900, 278900);
 	ReplacementTerminal.bLocal = true;
@@ -618,6 +628,56 @@ bool FCorsairsPlayerReconcilesTerminalExactlyTest::RunTest(const FString&)
 	TestFalse(
 		TEXT("EndPlay removes authority delegate"),
 		CountAuthorityBindings(Replacement, Pawn) > 0);
+	TestWorld.ForwardErrorMessages(this);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsPlayerPlaysAcceptedClickPathTest,
+	"Corsairs.Movement.Pawn.PlaysAcceptedClickPath",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsPlayerPlaysAcceptedClickPathTest::RunTest(const FString&)
+{
+	// Мутация: оставить manual AcceptedPath в старом WASD-режиме, где он
+	// останавливал follower и ждал локального prediction.
+	FTestWorldWrapper TestWorld;
+	ACorsairsPlayerCharacter* Pawn = nullptr;
+	UCorsairsSession* Session = nullptr;
+	if (!CreatePossessedPawn(this, TestWorld, Pawn, Session))
+	{
+		return false;
+	}
+
+	USpringArmComponent* Boom =
+		Pawn->FindComponentByClass<USpringArmComponent>();
+	TestNotNull(TEXT("camera boom remains attached to pawn"), Boom);
+	if (Boom == nullptr)
+	{
+		return false;
+	}
+
+	const FVector PawnStart = Pawn->GetActorLocation();
+	const FVector BoomStart = Boom->GetComponentLocation();
+	FCorsairsMovementEvent Accepted;
+	Accepted.WorldId = PlayerMovementLocalWorldId;
+	Accepted.PacketId = 700;
+	Accepted.Type = ECorsairsMovementEventType::AcceptedPath;
+	Accepted.Waypoints = {Spawn, FIntPoint(Spawn.X + 400, Spawn.Y)};
+	Accepted.Endpoint = Accepted.Waypoints.Last();
+	Accepted.bLocal = true;
+	Accepted.bServerDriven = false;
+	Accepted.MovementSpeedCmPerSecond = 200.0;
+	Session->OnMovementChanged.Broadcast(Accepted);
+
+	Pawn->Tick(0.5f);
+	const FVector PawnDelta = Pawn->GetActorLocation() - PawnStart;
+	const FVector BoomDelta = Boom->GetComponentLocation() - BoomStart;
+	TestTrue(TEXT("accepted click path advances pawn without teleport"),
+		PawnDelta.Y > 90.0 && PawnDelta.Y < 110.0);
+	TestTrue(TEXT("attached camera follows the same world displacement"),
+		BoomDelta.Equals(PawnDelta, 0.01));
+
 	TestWorld.ForwardErrorMessages(this);
 	return true;
 }

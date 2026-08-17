@@ -13,9 +13,17 @@ enum class ECorsairsBodyPart : uint8
 	Count
 };
 
+enum class ECorsairsAnimationPolicy : uint8
+{
+	Loop = 0,
+	StaticReferencePose
+};
+
 struct FCorsairsResolvedAppearance
 {
 	bool bModular = false;
+	ECorsairsAnimationPolicy AnimationPolicy =
+		ECorsairsAnimationPolicy::Loop;
 	FSoftObjectPath DriverMesh;
 	FSoftObjectPath Animation;
 	TStaticArray<FSoftObjectPath,
@@ -39,6 +47,8 @@ private:
 	{
 		int32 ModalType = 0;
 		int32 ModuleIndex = 0;
+		ECorsairsAnimationPolicy AnimationPolicy =
+			ECorsairsAnimationPolicy::Loop;
 		FSoftObjectPath DriverMesh;
 		FSoftObjectPath Animation;
 		TStaticArray<int32, 5> DefaultItemIds = {0, 0, 0, 0, 0};

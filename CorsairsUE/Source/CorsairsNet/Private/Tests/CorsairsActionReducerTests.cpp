@@ -175,6 +175,149 @@ bool FCorsairsReducerReservesBeforeSendTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCorsairsReducerCancelLifecycleTest,
+	"Corsairs.Net.ActionReducer.CancelLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCorsairsReducerCancelLifecycleTest::RunTest(const FString&)
+{
+	FCorsairsActionReducer Reducer;
+	Reducer.EnterWorld(LocalWorldId, ManualStart);
+	const FCorsairsPendingMove PendingMove{
+		MovePacketId,
+		ManualStart,
+		ManualEndpointA,
+	};
+	Reducer.Begin(
+		MovePacketId,
+		ECorsairsBeginActionType::Move,
+		PendingMove,
+		[]() { return true; });
+	TestTrue(TEXT("MOVE виден как active action"),
+		Reducer.HasActiveAction());
+	TestFalse(TEXT("до запроса отмена не pending"),
+		Reducer.IsCancelPending());
+
+	int32 CancelSendCount = 0;
+	ECorsairsActionRequestResult NestedCancel =
+		ECorsairsActionRequestResult::Invalid;
+	const ECorsairsActionRequestResult FirstCancel = Reducer.RequestCancel(
+		[&]()
+		{
+			++CancelSendCount;
+			NestedCancel = Reducer.RequestCancel(
+				[&]()
+				{
+					++CancelSendCount;
+					return true;
+				});
+			return true;
+		});
+	TestEqual(TEXT("первая отмена отправлена"),
+		static_cast<uint8>(FirstCancel),
+		static_cast<uint8>(ECorsairsActionRequestResult::Sent));
+	TestEqual(TEXT("reentrant повтор видит reservation"),
+		static_cast<uint8>(NestedCancel),
+		static_cast<uint8>(ECorsairsActionRequestResult::Busy));
+	TestEqual(TEXT("первая отмена вызывает transport один раз"),
+		CancelSendCount, 1);
+	TestTrue(TEXT("успешная отмена остаётся pending до terminal"),
+		Reducer.IsCancelPending());
+
+	const ECorsairsActionRequestResult RepeatedCancel = Reducer.RequestCancel(
+		[&]()
+		{
+			++CancelSendCount;
+			return true;
+		});
+	TestEqual(TEXT("повторная отмена до terminal занята"),
+		static_cast<uint8>(RepeatedCancel),
+		static_cast<uint8>(ECorsairsActionRequestResult::Busy));
+	TestEqual(TEXT("повторная отмена не достигает transport"),
+		CancelSendCount, 1);
+
+	Reducer.OnMove(
+		LocalWorldId,
+		MovePacketId,
+		MoveArrive,
+		ManualEndpointAPath());
+	TestFalse(TEXT("terminal завершает active action"),
+		Reducer.GetActiveAction().IsSet());
+	TestFalse(TEXT("terminal очищает read-only active seam"),
+		Reducer.HasActiveAction());
+	TestFalse(TEXT("terminal очищает cancel pending seam"),
+		Reducer.IsCancelPending());
+	TestEqual(TEXT("без active action отмена невалидна"),
+		static_cast<uint8>(Reducer.RequestCancel([]() { return true; })),
+		static_cast<uint8>(ECorsairsActionRequestResult::Invalid));
+
+	constexpr int64 RetryPacketId = MovePacketId + 1;
+	const FCorsairsPendingMove RetryMove{
+		RetryPacketId,
+		ManualEndpointA,
+		ManualEndpointB,
+	};
+	Reducer.Begin(
+		RetryPacketId,
+		ECorsairsBeginActionType::Move,
+		RetryMove,
+		[]() { return true; });
+	TestEqual(TEXT("ошибка transport отмены явная"),
+		static_cast<uint8>(Reducer.RequestCancel([]() { return false; })),
+		static_cast<uint8>(ECorsairsActionRequestResult::TransportFailed));
+	int32 RetryCount = 0;
+	TestEqual(TEXT("после rollback отмену можно повторить"),
+		static_cast<uint8>(Reducer.RequestCancel(
+			[&]()
+			{
+				++RetryCount;
+				return true;
+			})),
+		static_cast<uint8>(ECorsairsActionRequestResult::Sent));
+	TestEqual(TEXT("retry достигает transport ровно раз"), RetryCount, 1);
+
+	FCorsairsActionReducer QueueDuringFailedCancel;
+	QueueDuringFailedCancel.EnterWorld(LocalWorldId, ManualStart);
+	QueueDuringFailedCancel.Begin(
+		MovePacketId,
+		ECorsairsBeginActionType::Move,
+		PendingMove,
+		[]() { return true; });
+	bool bQueueMutationApplied = false;
+	TestEqual(TEXT("cancel transport failure остаётся явным после queue mutation"),
+		static_cast<uint8>(QueueDuringFailedCancel.RequestCancel(
+			[&]()
+			{
+				bQueueMutationApplied =
+					QueueDuringFailedCancel.QueueEndpoint(ManualEndpointB);
+				return false;
+			})),
+		static_cast<uint8>(ECorsairsActionRequestResult::TransportFailed));
+	TestTrue(TEXT("callback действительно изменил независимую queue"),
+		bQueueMutationApplied);
+	TestEqual(TEXT("независимая queue mutation сохранена"),
+		QueueDuringFailedCancel.GetQueuedEndpoint().GetValue(),
+		ManualEndpointB);
+	TestFalse(TEXT("failed cancel очищает только свою reservation"),
+		QueueDuringFailedCancel.IsCancelPending());
+	TestEqual(TEXT("после failed cancel retry не Busy"),
+		static_cast<uint8>(QueueDuringFailedCancel.RequestCancel(
+			[]() { return true; })),
+		static_cast<uint8>(ECorsairsActionRequestResult::Sent));
+
+	Reducer.Reset();
+	Reducer.EnterWorld(LocalWorldId, ManualStart);
+	TestEqual(TEXT("reset освобождает cancel reservation"),
+		static_cast<uint8>(Reducer.Begin(
+			SkillPacketId,
+			ECorsairsBeginActionType::Skill,
+			TOptional<FCorsairsPendingMove>(),
+			[]() { return true; })),
+		static_cast<uint8>(ECorsairsActionRequestResult::Sent));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCorsairsReducerRollsBackFailedSendTest,
 	"Corsairs.Movement.Reducer.RollsBackFailedSend",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -209,6 +352,39 @@ bool FCorsairsReducerRollsBackFailedSendTest::RunTest(const FString&)
 	TestEqual(TEXT("confirmed position is unchanged"),
 		Reducer.GetConfirmedPosition(),
 		SpawnPosition);
+
+	FCorsairsActionReducer QueueMutation;
+	QueueMutation.EnterWorld(LocalWorldId, SpawnPosition);
+	bool bBeginQueueMutationApplied = false;
+	const ECorsairsActionRequestResult QueueMutationResult =
+		QueueMutation.Begin(
+			MovePacketId,
+			ECorsairsBeginActionType::Move,
+			PendingMove,
+			[&]()
+			{
+				bBeginQueueMutationApplied =
+					QueueMutation.QueueEndpoint(ManualEndpointB);
+				return false;
+			});
+	TestTrue(TEXT("Begin callback действительно изменил queue"),
+		bBeginQueueMutationApplied);
+	TestEqual(TEXT("failed Begin после queue mutation сообщает transport"),
+		static_cast<uint8>(QueueMutationResult),
+		static_cast<uint8>(ECorsairsActionRequestResult::TransportFailed));
+	TestFalse(TEXT("failed Begin не оставляет unsent active reservation"),
+		QueueMutation.HasActiveAction());
+	TestFalse(TEXT("failed Begin не оставляет unsent pending MOVE"),
+		QueueMutation.GetPendingMove().IsSet());
+	TestFalse(TEXT("failed Begin откатывает queue своей reservation"),
+		QueueMutation.GetQueuedEndpoint().IsSet());
+	TestEqual(TEXT("после failed Begin следующий action не Busy"),
+		static_cast<uint8>(QueueMutation.Begin(
+			SkillPacketId,
+			ECorsairsBeginActionType::Skill,
+			TOptional<FCorsairsPendingMove>(),
+			[]() { return true; })),
+		static_cast<uint8>(ECorsairsActionRequestResult::Sent));
 
 	bool bObservedMovement = false;
 	FIntPoint ObservedEndpoint = FIntPoint::ZeroValue;
@@ -247,16 +423,16 @@ bool FCorsairsReducerRollsBackFailedSendTest::RunTest(const FString&)
 	TestEqual(TEXT("reentrant transport failure is reported"),
 		static_cast<uint8>(ReentrantResult),
 		static_cast<uint8>(ECorsairsActionRequestResult::TransportFailed));
-	TestFalse(TEXT("reentrant rollback clears active action"),
+	TestTrue(TEXT("reentrant committed action survives outer rollback"),
 		Reducer.GetActiveAction().IsSet());
 	TestFalse(TEXT("reentrant rollback clears pending move"),
 		Reducer.GetPendingMove().IsSet());
 	TestFalse(TEXT("reentrant rollback clears queued endpoint"),
 		Reducer.GetQueuedEndpoint().IsSet());
-	TestEqual(TEXT("reentrant rollback restores confirmed position"),
+	TestEqual(TEXT("reentrant committed endpoint survives outer rollback"),
 		Reducer.GetConfirmedPosition(),
-		SpawnPosition);
-	TestFalse(TEXT("reentrant rollback restores movement authority lock"),
+		FIntPoint(300, 400));
+	TestTrue(TEXT("reentrant committed skill keeps authority lock"),
 		Reducer.IsMovementAuthorityLocked());
 	return true;
 }

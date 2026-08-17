@@ -113,6 +113,8 @@ void FCorsairsActionReducer::Reset()
 	_pendingMove.Reset();
 	_queuedEndpoint.Reset();
 	_lastCompletedMove.Reset();
+	_beginReservationToken.Reset();
+	_cancelReservationToken.Reset();
 }
 
 ECorsairsActionRequestResult FCorsairsActionReducer::Begin(
@@ -135,7 +137,7 @@ ECorsairsActionRequestResult FCorsairsActionReducer::Begin(
 		return ECorsairsActionRequestResult::Invalid;
 	}
 
-	const FCorsairsActionReducer PreviousState = *this;
+	const TOptional<FIntPoint> PreviousQueuedEndpoint = _queuedEndpoint;
 
 	_activeAction = FCorsairsActiveBeginAction{
 		PacketId,
@@ -147,10 +149,79 @@ ECorsairsActionRequestResult FCorsairsActionReducer::Begin(
 	{
 		_queuedEndpoint.Reset();
 	}
+	const uint64 ReservationToken = ++_nextReservationToken;
+	_beginReservationToken = ReservationToken;
 
 	if (!Send())
 	{
-		*this = PreviousState;
+		// QueueEndpoint и другие изменения вне жизненного цикла действия не
+		// подменяют эту бронь BEGIN. Серверное событие или локальная отмена
+		// сбрасывают её маркер, поэтому их состояние сохраняется.
+		if (_beginReservationToken.IsSet() &&
+			_beginReservationToken.GetValue() == ReservationToken &&
+			_activeAction.IsSet() &&
+			_activeAction->PacketId == PacketId &&
+			_activeAction->ActionType == ActionType)
+		{
+			_activeAction.Reset();
+			_pendingMove.Reset();
+			_queuedEndpoint = PreviousQueuedEndpoint;
+			_beginReservationToken.Reset();
+		}
+		return ECorsairsActionRequestResult::TransportFailed;
+	}
+	if (_beginReservationToken.IsSet() &&
+		_beginReservationToken.GetValue() == ReservationToken)
+	{
+		_beginReservationToken.Reset();
+	}
+
+	return ECorsairsActionRequestResult::Sent;
+}
+
+ECorsairsActionRequestResult FCorsairsActionReducer::RequestCancel(
+	TFunctionRef<bool()> SendCancel)
+{
+	if (!_activeAction.IsSet())
+	{
+		return ECorsairsActionRequestResult::Invalid;
+	}
+
+	// Пока BEGIN ещё не дошёл до транспорта, серверу нечего отменять. Такой
+	// запрос атомарно поглощает локальную бронь и не создаёт пару
+	// ENDACTION -> BEGIN в неверном порядке.
+	if (_beginReservationToken.IsSet())
+	{
+		_beginReservationToken.Reset();
+		_cancelReservationToken.Reset();
+		_activeAction.Reset();
+		_pendingMove.Reset();
+		_queuedEndpoint.Reset();
+		return ECorsairsActionRequestResult::Sent;
+	}
+	if (_cancelReservationToken.IsSet())
+	{
+		return ECorsairsActionRequestResult::Busy;
+	}
+
+	const int64 CancelledPacketId = _activeAction->PacketId;
+	const ECorsairsBeginActionType CancelledActionType =
+		_activeAction->ActionType;
+	const uint64 ReservationToken = ++_nextReservationToken;
+	_cancelReservationToken = ReservationToken;
+	if (!SendCancel())
+	{
+		// Независимое изменение очереди или фазы не превращает неотправленную
+		// отмену в ожидающую. Завершение или сброс меняет само действие и уже
+		// очищает маркер.
+		if (_cancelReservationToken.IsSet() &&
+			_cancelReservationToken.GetValue() == ReservationToken &&
+			_activeAction.IsSet() &&
+			_activeAction->PacketId == CancelledPacketId &&
+			_activeAction->ActionType == CancelledActionType)
+		{
+			_cancelReservationToken.Reset();
+		}
 		return ECorsairsActionRequestResult::TransportFailed;
 	}
 
@@ -258,6 +329,7 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnMove(
 		if (bOn)
 		{
 			_activeAction->Phase = ECorsairsActionPhase::ServerMove;
+			_beginReservationToken.Reset();
 		}
 		else
 		{
@@ -269,6 +341,8 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnMove(
 			_activeAction.Reset();
 			_pendingMove.Reset();
 			_queuedEndpoint.Reset();
+			_beginReservationToken.Reset();
+			_cancelReservationToken.Reset();
 			_lastCompletedMove = FCorsairsCompletedMove{
 				WorldId,
 				PacketId,
@@ -283,15 +357,19 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnMove(
 		if (bOn)
 		{
 			_activeAction->Phase = ECorsairsActionPhase::ServerMove;
+			_beginReservationToken.Reset();
 		}
 		else if (bInRange)
 		{
 			_activeAction->Phase = ECorsairsActionPhase::Fight;
+			_beginReservationToken.Reset();
 		}
 		else
 		{
 			_activeAction.Reset();
 			_queuedEndpoint.Reset();
+			_beginReservationToken.Reset();
+			_cancelReservationToken.Reset();
 		}
 		if (bTerminal)
 		{
@@ -326,10 +404,13 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnSkillSource(
 	if (FightState == 0)
 	{
 		_activeAction->Phase = ECorsairsActionPhase::Fight;
+		_beginReservationToken.Reset();
 	}
 	else
 	{
 		_activeAction.Reset();
+		_beginReservationToken.Reset();
+		_cancelReservationToken.Reset();
 	}
 	return Effects;
 }
@@ -364,6 +445,8 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnItemNotification(
 	}
 
 	_activeAction.Reset();
+	_beginReservationToken.Reset();
+	_cancelReservationToken.Reset();
 	return Effects;
 }
 
@@ -401,6 +484,8 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnFailedAction(
 		_activeAction.Reset();
 		_pendingMove.Reset();
 		_queuedEndpoint.Reset();
+		_beginReservationToken.Reset();
+		_cancelReservationToken.Reset();
 		return Effects;
 	}
 
@@ -435,6 +520,8 @@ FCorsairsReducerEffects FCorsairsActionReducer::OnFailedAction(
 		_queuedEndpoint.Reset();
 	}
 	_activeAction.Reset();
+	_beginReservationToken.Reset();
+	_cancelReservationToken.Reset();
 	return Effects;
 }
 
@@ -458,6 +545,16 @@ const TOptional<FCorsairsPendingMove>&
 const TOptional<FIntPoint>& FCorsairsActionReducer::GetQueuedEndpoint() const
 {
 	return _queuedEndpoint;
+}
+
+bool FCorsairsActionReducer::HasActiveAction() const
+{
+	return _activeAction.IsSet();
+}
+
+bool FCorsairsActionReducer::IsCancelPending() const
+{
+	return _cancelReservationToken.IsSet();
 }
 
 bool FCorsairsActionReducer::IsMovementAuthorityLocked() const

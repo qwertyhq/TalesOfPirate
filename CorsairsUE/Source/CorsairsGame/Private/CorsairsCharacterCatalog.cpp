@@ -42,6 +42,40 @@ namespace
 		return true;
 	}
 
+	bool ReadAnimationPolicy(
+		const TSharedPtr<FJsonObject>& Object,
+		const FString& Path,
+		ECorsairsAnimationPolicy& OutPolicy,
+		FString& OutError)
+	{
+		FString Value;
+		if (!ReadRequiredString(
+			Object,
+			Path,
+			TEXT("animationPolicy"),
+			Value,
+			OutError))
+		{
+			return false;
+		}
+		if (Value == TEXT("loop"))
+		{
+			OutPolicy = ECorsairsAnimationPolicy::Loop;
+			return true;
+		}
+		if (Value == TEXT("staticReferencePose"))
+		{
+			OutPolicy = ECorsairsAnimationPolicy::StaticReferencePose;
+			return true;
+		}
+
+		OutError = FString::Printf(
+			TEXT("%s.animationPolicy: unsupported value %s"),
+			*Path,
+			*Value);
+		return false;
+	}
+
 	const FSoftObjectPath* FindItemMesh(
 		const TMap<int32, TMap<int32, FSoftObjectPath>>& ItemMeshes,
 		int32 ItemId,
@@ -121,10 +155,19 @@ bool FCorsairsCharacterCatalog::Load(const FString& JsonPath, FString& OutError)
 		FString StaticMesh;
 		if (!ReadRequiredInt(*CharacterObject, CharacterPath, TEXT("modalType"), Entry.ModalType, OutError) ||
 			!ReadRequiredInt(*CharacterObject, CharacterPath, TEXT("moduleIndex"), Entry.ModuleIndex, OutError) ||
+			!ReadAnimationPolicy(*CharacterObject, CharacterPath, Entry.AnimationPolicy, OutError) ||
 			!ReadRequiredString(*CharacterObject, CharacterPath, TEXT("driverMesh"), DriverMesh, OutError) ||
 			!ReadRequiredString(*CharacterObject, CharacterPath, TEXT("animation"), Animation, OutError) ||
 			!ReadRequiredString(*CharacterObject, CharacterPath, TEXT("staticMesh"), StaticMesh, OutError))
 		{
+			return false;
+		}
+		if (Entry.ModalType == 1 &&
+			Entry.AnimationPolicy != ECorsairsAnimationPolicy::Loop)
+		{
+			OutError = FString::Printf(
+				TEXT("%s.animationPolicy: modular character must loop"),
+				*CharacterPath);
 			return false;
 		}
 
@@ -243,6 +286,7 @@ bool FCorsairsCharacterCatalog::Resolve(
 
 	OutAppearance.DriverMesh = Entry->DriverMesh;
 	OutAppearance.Animation = Entry->Animation;
+	OutAppearance.AnimationPolicy = Entry->AnimationPolicy;
 	if (Entry->ModalType != 1)
 	{
 		OutAppearance.StaticMesh = Entry->StaticMesh;

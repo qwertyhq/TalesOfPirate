@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Durably install the two Garner runtime terrain files from a Task 7 manifest."""
+"""Durably install Garner block/region/metadata while preserving height."""
 
 from __future__ import annotations
 
@@ -49,6 +49,18 @@ _RETIRED_JOURNAL_NAME = _JOURNAL_NAME + ".retired"
 _JOURNAL_AUTH_NAME = _JOURNAL_NAME + ".retired-auth"
 _LOCK_NAME = ".garner-runtime-install.lock"
 _RETIRED_LOCK_NAME = _LOCK_NAME + ".retired"
+_RUNTIME_CONTRACT_NAME = "garner.runtime.json"
+_INSTALL_KEYS = ("block", "region", "metadata")
+_INSTALL_LEAVES = {
+    "block": "garner.block.raw",
+    "region": "garner.region.raw",
+    "metadata": "garner.terrain.json",
+}
+_MANIFEST_FILE_KEYS = {
+    "block": "block",
+    "region": "region",
+    "metadata": "terrainMetadata",
+}
 
 
 class InstallError(RuntimeError):
@@ -186,6 +198,49 @@ def _hash(value: Any, pointer: str) -> str:
     if not _SHA256.fullmatch(text):
         raise InstallError(f"INVALID_HASH {pointer}: expected lowercase SHA-256")
     return text
+
+
+def _validate_runtime_contract(target_root: Path) -> dict[str, Any]:
+    contract_path = target_root / _RUNTIME_CONTRACT_NAME
+    _physical_regular(contract_path, "/runtimeContract")
+    contract, _ = _load_strict_json(contract_path)
+    _require_keys(
+        contract,
+        {"schemaVersion", "map", "gridWidth", "gridHeight", "files"},
+        "/runtimeContract",
+    )
+    if (_integer(contract["schemaVersion"], "/runtimeContract/schemaVersion") != 1 or
+            _string(contract["map"], "/runtimeContract/map") != "garner" or
+            _integer(contract["gridWidth"], "/runtimeContract/gridWidth") != 4096 or
+            _integer(contract["gridHeight"], "/runtimeContract/gridHeight") != 4096):
+        raise InstallError("invalid runtime contract header")
+    files = _require_keys(
+        contract["files"],
+        {"height", "block", "region", "terrainMetadata"},
+        "/runtimeContract/files",
+    )
+    expected_names = {
+        "height": "garner.height.r16",
+        "block": "garner.block.raw",
+        "region": "garner.region.raw",
+        "terrainMetadata": "garner.terrain.json",
+    }
+    for key, expected_name in expected_names.items():
+        item = _require_keys(
+            files[key], {"name", "sha256", "sizeBytes"},
+            f"/runtimeContract/files/{key}")
+        if _string(item["name"], f"/runtimeContract/files/{key}/name") != expected_name:
+            raise InstallError(f"invalid runtime contract file name for {key}")
+        _hash(item["sha256"], f"/runtimeContract/files/{key}/sha256")
+        if _integer(item["sizeBytes"], f"/runtimeContract/files/{key}/sizeBytes") == 0:
+            raise InstallError(f"invalid runtime contract file size for {key}")
+    height = target_root / expected_names["height"]
+    info = _physical_regular(height, "/runtimeContract/files/height")
+    expected_height = files["height"]
+    if (info.st_size != expected_height["sizeBytes"] or
+            _sha256_file(height) != expected_height["sha256"]):
+        raise InstallError("runtime height does not match preserved contract")
+    return contract
 
 
 def _normalized_relative(text: Any, pointer: str) -> PurePosixPath:
@@ -1919,7 +1974,8 @@ def _parse_journal_impl(raw: bytes, target_root: Path) -> dict[str, Any]:
     if _integer(journal["version"], "/journal/version") != 1:
         raise InstallError("invalid install journal version", status="RECOVERY_REQUIRED")
     if journal["phase"] not in (
-        "SNAPSHOT", "PREPARED", "BLOCK_REPLACED", "PAIR_REPLACED", "COMMITTED"
+        "SNAPSHOT", "PREPARED", "BLOCK_REPLACED", "REGION_REPLACED",
+        "METADATA_REPLACED", "TRIPLE_REPLACED", "PAIR_REPLACED", "COMMITTED"
     ):
         raise InstallError("invalid install journal phase", status="RECOVERY_REQUIRED")
     transaction_id = _string(
@@ -1949,7 +2005,7 @@ def _parse_journal_impl(raw: bytes, target_root: Path) -> dict[str, Any]:
         raise InstallError(
             "install journal retired mapping mismatch",
             status="RECOVERY_REQUIRED")
-    entries = _require_keys(journal["entries"], {"block", "metadata"},
+    entries = _require_keys(journal["entries"], set(_INSTALL_KEYS),
                             "/journal/entries")
     for key, entry_value in entries.items():
         entry = _require_keys(
@@ -1971,8 +2027,7 @@ def _parse_journal_impl(raw: bytes, target_root: Path) -> dict[str, Any]:
             path = Path(_string(entry[path_key], f"/journal/entries/{key}/{path_key}"))
             if not _direct_child(target_root, path):
                 raise InstallError("install journal path escape", status="RECOVERY_REQUIRED")
-        expected_target = target_root / (
-            "garner.block.raw" if key == "block" else "garner.terrain.json")
+        expected_target = target_root / _INSTALL_LEAVES[key]
         expected_stage = target_root / (
             f".garner-runtime-install.stage.{transaction_id}.{key}")
         expected_mappings = {
@@ -2379,7 +2434,7 @@ def _recover_transaction(
                 "committed runtime pair does not match journal",
                 status="RECOVERY_REQUIRED", recovery_paths=(source,))
     else:
-        for key in ("block", "metadata"):
+        for key in _INSTALL_KEYS:
             entry = entries[key]
             target = Path(entry["target"])
             exists, digest, mode, _ = _path_state(target)
@@ -2461,8 +2516,7 @@ def _recover_transaction(
                 recovery_fault(
                     "INSTALL_RECOVERY_AFTER_MODE_STAGE_FLUSH", (source, backup))
                 recovery_fault(
-                    "INSTALL_RECOVERY_BLOCK_REPLACE" if key == "block"
-                    else "INSTALL_RECOVERY_METADATA_REPLACE",
+                    "INSTALL_RECOVERY_" + key.upper() + "_REPLACE",
                     (source, backup),
                 )
                 durable_fs.replace_same_volume(rollback, target)
@@ -2483,8 +2537,7 @@ def _recover_transaction(
                         f"unexpected absent-prior target {target}",
                         status="RECOVERY_REQUIRED", recovery_paths=(source,))
                 recovery_fault(
-                    "INSTALL_RECOVERY_BLOCK_REPLACE" if key == "block"
-                    else "INSTALL_RECOVERY_METADATA_REPLACE",
+                    "INSTALL_RECOVERY_" + key.upper() + "_REPLACE",
                     (source,),
                 )
                 _remove_recorded_owned(
@@ -2613,6 +2666,7 @@ def install_runtime_map_data(
         _recover_transaction(
             durable_fs, target_root, journal_path, retired_journal, fault,
             recovery_context)
+        runtime_contract = _validate_runtime_contract(target_root)
         validated = validate_manifest(manifest_path)
         _run_fault(fault, "INSTALL_AFTER_MANIFEST_VALIDATE")
         post_validate_identities = {
@@ -2625,22 +2679,26 @@ def install_runtime_map_data(
                 "run output physical identity changed after manifest validation")
         sources = {
             "block": validated.paths["block"],
+            "region": validated.paths["region"],
             "metadata": validated.paths["terrainMetadata"],
         }
         targets = {
             "block": target_root / "garner.block.raw",
+            "region": target_root / "garner.region.raw",
             "metadata": target_root / "garner.terrain.json",
-        }
-        manifest_file_keys = {
-            "block": "block",
-            "metadata": "terrainMetadata",
         }
         intended: dict[str, tuple[str, int, int]] = {}
         for key, source in sources.items():
-            manifest_file = validated.data["files"][manifest_file_keys[key]]
+            manifest_key = _MANIFEST_FILE_KEYS[key]
+            manifest_file = validated.data["files"][manifest_key]
+            runtime_file = runtime_contract["files"][manifest_key]
             expected_hash = manifest_file["sha256"]
             expected_size = manifest_file["sizeBytes"]
-            info = _physical_regular(source, f"/files/{manifest_file_keys[key]}/path")
+            if (runtime_file["sha256"] != expected_hash or
+                    runtime_file["sizeBytes"] != expected_size):
+                raise InstallError(
+                    f"runtime contract disagrees with retained {manifest_key}")
+            info = _physical_regular(source, f"/files/{manifest_key}/path")
             if info.st_size != expected_size or _sha256_file(source) != expected_hash:
                 raise InstallError(
                     f"source changed after manifest validation: {source}")
@@ -2649,7 +2707,7 @@ def install_runtime_map_data(
         if all(
             _path_state(targets[key])[:3] ==
             (True, intended[key][0], intended[key][1])
-            for key in ("block", "metadata")
+            for key in _INSTALL_KEYS
         ):
             durable_fs.retire_lock(lock, fault)
             return "NOOP"
@@ -2665,7 +2723,7 @@ def install_runtime_map_data(
             "journalRetired": retired_journal.as_posix(),
             "entries": {},
         }
-        for key in ("block", "metadata"):
+        for key in _INSTALL_KEYS:
             target = targets[key]
             exists, digest, mode, _ = _path_state(target)
             journal["entries"][key] = {
@@ -2708,19 +2766,20 @@ def install_runtime_map_data(
         try:
             for key, point in (
                 ("block", "INSTALL_AFTER_BLOCK_STAGE_FLUSH"),
+                ("region", "INSTALL_AFTER_REGION_STAGE_FLUSH"),
                 ("metadata", "INSTALL_AFTER_METADATA_STAGE_FLUSH"),
             ):
                 entry = journal["entries"][key]
                 stage = Path(entry["stage"])
                 source_info = _physical_regular(
-                    sources[key], f"/files/{manifest_file_keys[key]}/path")
+                    sources[key], f"/files/{_MANIFEST_FILE_KEYS[key]}/path")
                 if (source_info.st_size != entry["intendedSize"] or
                         _sha256_file(sources[key]) != entry["intendedSha256"]):
                     raise InstallError(
                         f"source changed after manifest validation: {sources[key]}")
                 _copy_owned(durable_fs, sources[key], stage, entry["intendedMode"])
                 if (_physical_identity(sources[key]) !=
-                        validated.identities[manifest_file_keys[key]] or
+                        validated.identities[_MANIFEST_FILE_KEYS[key]] or
                         _sha256_file(stage) != entry["intendedSha256"] or
                         _observable_mode(stage.stat()) != entry["intendedMode"]):
                     raise DurableFsError(f"stage verification failed {stage}")
@@ -2729,7 +2788,7 @@ def install_runtime_map_data(
                     durable_fs, journal_path, journal)
                 durable_fs.flush_file(stage)
                 _run_fault(fault, point)
-            for key in ("block", "metadata"):
+            for key in _INSTALL_KEYS:
                 entry = journal["entries"][key]
                 if entry["priorExists"]:
                     backup = Path(entry["backup"])
@@ -2788,38 +2847,35 @@ def install_runtime_map_data(
                 durable_fs, journal_path, journal)
             _run_fault(fault, "INSTALL_AFTER_PREPARED_JOURNAL_DURABLE")
 
-            _run_fault(fault, "INSTALL_BEFORE_BLOCK_REPLACE")
-            if not _matches_prior_snapshot(journal["entries"]["block"]):
-                raise DurableFsError(
-                    "runtime block target changed before replacement")
-            durable_fs.replace_same_volume(
-                Path(journal["entries"]["block"]["stage"]), targets["block"])
-            _run_fault(fault, "INSTALL_AFTER_BLOCK_REPLACE")
-            durable_fs.sync_directory_or_equivalent(target_root)
-            _run_fault(fault, "INSTALL_AFTER_BLOCK_REPLACE_DURABILITY_BARRIER")
-            journal["phase"] = "BLOCK_REPLACED"
-            journal_identity, journal_bytes = _write_journal(
-                durable_fs, journal_path, journal)
-            _run_fault(fault, "INSTALL_AFTER_BLOCK_REPLACED_JOURNAL_DURABLE")
+            for key in _INSTALL_KEYS:
+                upper_key = key.upper()
+                _run_fault(fault, f"INSTALL_BEFORE_{upper_key}_REPLACE")
+                if not _matches_prior_snapshot(journal["entries"][key]):
+                    raise DurableFsError(
+                        f"runtime {key} target changed before replacement")
+                durable_fs.replace_same_volume(
+                    Path(journal["entries"][key]["stage"]), targets[key])
+                _run_fault(fault, f"INSTALL_AFTER_{upper_key}_REPLACE")
+                durable_fs.sync_directory_or_equivalent(target_root)
+                _run_fault(
+                    fault,
+                    f"INSTALL_AFTER_{upper_key}_REPLACE_DURABILITY_BARRIER")
+                journal["phase"] = f"{upper_key}_REPLACED"
+                journal_identity, journal_bytes = _write_journal(
+                    durable_fs, journal_path, journal)
+                _run_fault(
+                    fault,
+                    f"INSTALL_AFTER_{upper_key}_REPLACED_JOURNAL_DURABLE")
 
-            _run_fault(fault, "INSTALL_BEFORE_METADATA_REPLACE")
-            if not _matches_prior_snapshot(journal["entries"]["metadata"]):
-                raise DurableFsError(
-                    "runtime metadata target changed before replacement")
-            durable_fs.replace_same_volume(
-                Path(journal["entries"]["metadata"]["stage"]), targets["metadata"])
-            _run_fault(fault, "INSTALL_AFTER_METADATA_REPLACE")
-            durable_fs.sync_directory_or_equivalent(target_root)
-            _run_fault(fault, "INSTALL_AFTER_METADATA_REPLACE_DURABILITY_BARRIER")
-            journal["phase"] = "PAIR_REPLACED"
+            journal["phase"] = "TRIPLE_REPLACED"
             journal_identity, journal_bytes = _write_journal(
                 durable_fs, journal_path, journal)
             _run_fault(fault, "INSTALL_AFTER_PAIR_REPLACED_JOURNAL_DURABLE")
             if not all(_verify_entry(
                     journal["entries"][key], True,
                     journal["entries"][key]["stageIdentity"])
-                       for key in ("block", "metadata")):
-                raise DurableFsError("installed pair verification failed")
+                       for key in _INSTALL_KEYS):
+                raise DurableFsError("installed navigation triple verification failed")
             _run_fault(fault, "INSTALL_AFTER_PAIR_VERIFY")
             journal["phase"] = "COMMITTED"
             journal_identity, journal_bytes = _write_journal(

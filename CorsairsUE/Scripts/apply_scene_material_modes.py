@@ -149,6 +149,35 @@ _EXPRESSION_COUNT_BY_MODE = {
 }
 
 
+def plan_master_usages(mode):
+    """Возвращает shader permutations для каждого owned parent."""
+    if mode not in MASTER_PATHS:
+        raise ValueError(f"неподдерживаемый legacy material mode: {mode!r}")
+    usages = {"skeletal_mesh"}
+    if mode in ("opaque", "masked"):
+        usages.add("nanite")
+    return usages
+
+
+def _master_usage_enums():
+    return {
+        "skeletal_mesh": unreal.MaterialUsage.MATUSAGE_SKELETAL_MESH,
+        "nanite": unreal.MaterialUsage.MATUSAGE_NANITE,
+    }
+
+
+def _apply_master_usages(library, material, mode, path):
+    expected = plan_master_usages(mode)
+    for name, usage in _master_usage_enums().items():
+        library.set_base_material_usage(material, usage, name in expected)
+        actual = library.has_material_usage(material, usage)
+        if actual != (name in expected):
+            raise RuntimeError(
+                f"material usage не сохранился: {path}: "
+                f"{name}={actual}/{name in expected}"
+            )
+
+
 def plan_material_graph(mode):
     """Описывает общую VertexColor-aware цепочку пяти legacy parents."""
     if mode not in MASTER_PATHS:
@@ -897,6 +926,7 @@ def _configure_master(mode, material):
                                  unreal.MaterialShadingModel.MSM_UNLIT)
     material.set_editor_property("two_sided", True)
     material.set_editor_property("opacity_mask_clip_value", 0.5)
+    _apply_master_usages(library, material, mode, path)
     _delete_material_expressions(library, material, path)
 
     graph = _MaterialGraph(material, path)
@@ -1150,6 +1180,14 @@ def _verify_master_readback(masters):
             raise RuntimeError(f"cold readback parent не Unlit: {path}")
         if not material.get_editor_property("two_sided"):
             raise RuntimeError(f"cold readback parent не Two Sided: {path}")
+        expected_usages = plan_master_usages(mode)
+        for name, usage in _master_usage_enums().items():
+            actual = library.has_material_usage(material, usage)
+            if actual != (name in expected_usages):
+                raise RuntimeError(
+                    f"cold readback usage неверен: {path}: "
+                    f"{name}={actual}/{name in expected_usages}"
+                )
 
         expressions = list(library.get_material_expressions(material))
         expected_expression_count = (
@@ -1188,6 +1226,7 @@ def _verify_master_readback(masters):
             "path": material.get_path_name(),
             "expressions": len(expressions),
             "cpd": len(cpd_indices),
+            "usages": sorted(expected_usages),
         }
     return details
 

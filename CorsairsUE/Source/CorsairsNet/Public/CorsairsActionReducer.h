@@ -118,6 +118,8 @@ public:
 		ECorsairsBeginActionType ActionType,
 		const TOptional<FCorsairsPendingMove>& Move,
 		TFunctionRef<bool()> Send);
+	ECorsairsActionRequestResult RequestCancel(
+		TFunctionRef<bool()> SendCancel);
 	bool QueueEndpoint(FIntPoint Endpoint);
 	FCorsairsReducerEffects OnMove(
 		int64 WorldId,
@@ -141,6 +143,8 @@ public:
 		GetActiveAction() const;
 	const TOptional<FCorsairsPendingMove>& GetPendingMove() const;
 	const TOptional<FIntPoint>& GetQueuedEndpoint() const;
+	bool HasActiveAction() const;
+	bool IsCancelPending() const;
 	bool IsMovementAuthorityLocked() const;
 
 private:
@@ -150,4 +154,7 @@ private:
 	TOptional<FCorsairsPendingMove> _pendingMove;
 	TOptional<FIntPoint> _queuedEndpoint;
 	TOptional<FCorsairsCompletedMove> _lastCompletedMove;
+	uint64 _nextReservationToken = 0;
+	TOptional<uint64> _beginReservationToken;
+	TOptional<uint64> _cancelReservationToken;
 };

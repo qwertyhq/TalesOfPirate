@@ -335,6 +335,40 @@ bool FCorsairsCharacterActorTest::RunTest(const FString&)
 			Part->GetSingleNodeInstance());
 	}
 
+	FCorsairsResolvedAppearance PappaAppearance;
+	TestTrue(
+		TEXT("Pappa appearance resolves"),
+		Catalog.Resolve(260, NpcLook, PappaAppearance, Error));
+	TestEqual(
+		TEXT("Pappa requests reference pose"),
+		PappaAppearance.AnimationPolicy,
+		ECorsairsAnimationPolicy::StaticReferencePose);
+	TestTrue(
+		TEXT("Pappa reference pose applied"),
+		Actor->ApplyAppearance(PappaAppearance));
+	TestEqual(
+		TEXT("Pappa mesh"),
+		Actor->GetMesh()->GetSkeletalMeshAsset(),
+		Cast<USkeletalMesh>(PappaAppearance.StaticMesh.TryLoad()));
+	UAnimSingleNodeInstance* PappaAnimation =
+		Actor->GetMesh()->GetSingleNodeInstance();
+	TestNotNull(TEXT("Pappa single-node state"), PappaAnimation);
+	if (PappaAnimation != nullptr)
+	{
+		TestNull(
+			TEXT("Pappa incompatible animation is cleared"),
+			PappaAnimation->GetCurrentAsset());
+		TestFalse(TEXT("Pappa reference pose is not playing"),
+			PappaAnimation->IsPlaying());
+	}
+	const FVector PappaScale = Actor->GetMesh()->GetRelativeScale3D();
+	TestTrue(
+		TEXT("Pappa scale remains finite"),
+		!PappaScale.ContainsNaN());
+	TestTrue(
+		TEXT("Pappa scale remains plausible"),
+		PappaScale.GetAbsMax() < 10.0);
+
 	World->DestroyWorld(false);
 	return true;
 }

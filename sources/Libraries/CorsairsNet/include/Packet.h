@@ -15,16 +15,20 @@
 #include <stdexcept>
 #include <string>
 
+#ifndef CORSAIRSNET_API
+#define CORSAIRSNET_API
+#endif
+
 namespace Corsairs::Net {
 
 // Forward declaration
-class RPacket;
+class CORSAIRSNET_API RPacket;
 
 // 
 //  WPacket    (msgpack payload)
 // 
 
-class WPacket {
+class CORSAIRSNET_API WPacket {
 public:
     explicit WPacket(int payloadCapacity = 0);
     explicit WPacket(const RPacket& rpk);
@@ -103,7 +107,7 @@ private:
 //  RPacket    (msgpack payload)
 // 
 
-class RPacket {
+class CORSAIRSNET_API RPacket {
 public:
     RPacket(uint8_t* data, int dataLen, bool ownsBuffer = false);
     RPacket();

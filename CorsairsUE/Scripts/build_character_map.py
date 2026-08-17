@@ -10,6 +10,9 @@ ANIMATION_ROOT = "/Game/Animations"
 PLAYER_MODAL_TYPE = 1
 VISIBLE_PART_COUNT = 5
 MODULE_COLUMNS = ("module_1", "module_2", "module_3", "module_4")
+# У 0223 импортированная анимация содержит несовместимые дальние pivot-ы и
+# разрывает King Penguin. Оригинальная модель остаётся корректной в bind pose.
+STATIC_REFERENCE_POSE_MODELS = frozenset({223})
 
 
 def mesh_path(module):
@@ -62,6 +65,10 @@ def build_catalog(db_path):
         characters[str(row["id"])] = {
             "animation": (
                 f"{ANIMATION_ROOT}/{bone}/SkeletalMeshes/{bone}_Anim"),
+            "animationPolicy": (
+                "staticReferencePose"
+                if model in STATIC_REFERENCE_POSE_MODELS
+                else "loop"),
             "defaultItemIds": parse_item_ids(row["skin_info"]),
             "driverMesh": (
                 f"{ANIMATION_ROOT}/{bone}/SkeletalMeshes/{bone}"),
