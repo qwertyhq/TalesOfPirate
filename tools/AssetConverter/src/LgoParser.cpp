@@ -2,6 +2,7 @@
 
 #include "Corsairs/Tools/AssetConverter/BinaryReader.h"
 
+#include <algorithm>
 #include <format>
 
 namespace Corsairs::Tools::AssetConverter {
