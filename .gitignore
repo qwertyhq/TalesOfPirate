@@ -33,6 +33,22 @@ sources/Libraries/LuaJIT/src/host/buildvm
 # клиента библиотеки лежат в src/x86 и src/x64 и остаются трекаемыми.
 sources/Libraries/LuaJIT/src/lua51.lib
 
+# LuaJIT: генерируемые файлы — их пересоздают minilua/buildvm при каждой
+# сборке (Makefile, цели lj_bcdef.h..lj_folddef.h, buildvm_arch.h, lj_vm.S,
+# jit/vmdef.lua; msvcbuild.bat тоже генерирует их сам и удаляет в конце).
+# НЕ сюда: host/buildvm_libbc.h остаётся трекаемым — buildvm_lib.c
+# инклюдит его безусловно, а регенерируется он только через уже собранный
+# luajit (make libbc), т.е. курица-и-яйцо; без закоммиченной копии чистый
+# клон не соберётся.
+sources/Libraries/LuaJIT/src/host/buildvm_arch.h
+sources/Libraries/LuaJIT/src/lj_bcdef.h
+sources/Libraries/LuaJIT/src/lj_ffdef.h
+sources/Libraries/LuaJIT/src/lj_libdef.h
+sources/Libraries/LuaJIT/src/lj_recdef.h
+sources/Libraries/LuaJIT/src/lj_folddef.h
+sources/Libraries/LuaJIT/src/lj_vm.S
+sources/Libraries/LuaJIT/src/jit/vmdef.lua
+
 # Unreal Engine
 CorsairsUE/Binaries/
 CorsairsUE/Build/
