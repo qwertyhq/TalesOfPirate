@@ -13,7 +13,7 @@ using Corsairs::Net::WPacket;
 namespace
 {
 	/** Заголовок пакета: размер (uint16), счётчик (uint32), команда (uint16). */
-	constexpr int32 HeaderSize = 8;
+	constexpr int32 PacketHeaderSize = 8;
 
 	/** Сколько байт вычитывать за один вызов recv. */
 	constexpr int32 ChunkSize = 64 * 1024;
@@ -204,10 +204,10 @@ void UCorsairsConnection::DispatchComplete()
 {
 	int32 Offset = 0;
 
-	while (Incoming.Num() - Offset >= HeaderSize)
+	while (Incoming.Num() - Offset >= PacketHeaderSize)
 	{
 		const uint16 PacketSize = ReadPacketSize(Incoming.GetData() + Offset);
-		if (PacketSize < HeaderSize)
+		if (PacketSize < PacketHeaderSize)
 		{
 			// Заявленный размер меньше заголовка — поток рассинхронизирован, и
 			// продолжать разбор бессмысленно: дальше пойдёт мусор.

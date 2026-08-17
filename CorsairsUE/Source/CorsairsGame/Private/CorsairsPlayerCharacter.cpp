@@ -107,8 +107,8 @@ bool ACorsairsPlayerCharacter::SetBodyMesh(const FString& AssetPath)
 		return false;
 	}
 
-	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *AssetPath);
-	if (Mesh == nullptr)
+	USkeletalMesh* LoadedMesh = LoadObject<USkeletalMesh>(nullptr, *AssetPath);
+	if (LoadedMesh == nullptr)
 	{
 		UE_LOG(LogCorsairsCharacter, Warning, TEXT("модель не загрузилась: %s"), *AssetPath);
 		return false;
@@ -125,7 +125,7 @@ bool ACorsairsPlayerCharacter::SetBodyMesh(const FString& AssetPath)
 	}
 	BodyParts.Reset();
 
-	GetMesh()->SetSkeletalMesh(Mesh);
+	GetMesh()->SetSkeletalMesh(LoadedMesh);
 
 	// Масштаб и наведение камеры откладываются: рост считается по всей
 	// сборке, а сюда приходит только первая часть — голова.
@@ -139,8 +139,8 @@ bool ACorsairsPlayerCharacter::AddBodyPart(const FString& AssetPath)
 		return false;
 	}
 
-	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *AssetPath);
-	if (Mesh == nullptr)
+	USkeletalMesh* LoadedMesh = LoadObject<USkeletalMesh>(nullptr, *AssetPath);
+	if (LoadedMesh == nullptr)
 	{
 		UE_LOG(LogCorsairsCharacter, Warning, TEXT("часть тела не загрузилась: %s"), *AssetPath);
 		return false;
@@ -154,7 +154,7 @@ bool ACorsairsPlayerCharacter::AddBodyPart(const FString& AssetPath)
 
 	Part->SetupAttachment(GetMesh());
 	Part->RegisterComponent();
-	Part->SetSkeletalMesh(Mesh);
+	Part->SetSkeletalMesh(LoadedMesh);
 
 	// Поза берётся у основной части: скелет у всех кусков один, и анимировать
 	// каждый отдельно значило бы получить рассыпающегося персонажа.
