@@ -20,6 +20,7 @@
 #endif
 #include <windows.h>
 #include <tchar.h>
+#include <string>
 
 #else // POSIX
 
