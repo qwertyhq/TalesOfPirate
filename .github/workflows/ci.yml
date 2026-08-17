@@ -1,0 +1,177 @@
+# ---------------------------------------------------------------------------
+# CI: проверки, которые реально проходят на Linux.
+#
+# ЗАЧЕМ. Три независимых проверки на каждый пуш в ветку агента и на каждый PR
+# в main: .NET (сборка всех проектов + xUnit), AssetConverter (cmake + ctest
+# на реальных ассетах из Client/) и GameServer (нативная сборка). Смысл —
+# ловить регрессии сборки до ревью, а не в момент мержа. Job'ы намеренно не
+# связаны через needs: падение одной не должна скрывать результат остальных.
+#
+# ПОЧЕМУ SELF-HOSTED. Весь тулчейн уже установлен на нашей машине: .NET SDK 10,
+# g++-14 (g++-13 не умеет <print>, который тянет stdafx.h при C++23),
+# cmake + ninja. На GitHub-hosted раннере это пришлось бы ставить в каждом
+# прогоне — минуты на скачивание и вечно плавающие версии. Поэтому здесь нет
+# ни actions/setup-dotnet, ни аналогов: компиляторы и SDK берутся из PATH
+# машины. actions/checkout использовать можно — он не тянет ничего сверх
+# самого репозитория.
+#
+# ВНИМАНИЕ, ФОРКИ. Репозиторий публичный, а раннер — наш собственный. Поэтому
+# каждая job начинается с условия:
+#
+#   if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+#
+# Оно отсекает pull_request из форков. Без него любой человек с гитхаба
+# открывает PR со своим кодом шагов и выполняет его на нашей ВМ — с доступом
+# к рабочим каталогам раннера. Условие обязательно копировать в каждую новую
+# job этого файла: не удалять, не «упрощать», не выносить на уровень workflow
+# (на уровне workflow ключа if нет). Дополнительно в настройках Actions стоит
+# держать «Require approval for all external contributors»: условие ниже
+# отсекает выполнение job, а настройка — сам запуск прогона.
+# ---------------------------------------------------------------------------
+
+name: CI
+
+on:
+  push:
+    branches:
+      - 'agent/**'
+      - 'ci/**'
+  pull_request:
+    branches:
+      - main
+
+# Новый пуш в тот же ref отменяет предыдущий прогон: раннер один, очередь
+# из устаревших прогонов никому не нужна.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1. .NET: сборка и тесты. Базу данных тесты не требуют, MSSQL в пайплайн
+  #    не тащим.
+  # -------------------------------------------------------------------------
+  dotnet:
+    name: .NET — сборка и тесты
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, x64, corsairs]
+    timeout-minutes: 25
+    steps:
+      - name: Чекаут
+        uses: actions/checkout@v4
+
+      - name: Версия SDK
+        run: dotnet --info
+
+      - name: Сборка проектов sources/Dotnet поштучно
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Общего .sln в репозитории нет — собираем каждый проект отдельно.
+          mapfile -t projects < <(find sources/Dotnet -name '*.csproj' -o -name '*.fsproj' | sort)
+          if [ "${#projects[@]}" -eq 0 ]; then
+            echo "В sources/Dotnet не найдено ни одного проекта — проверь путь" >&2
+            exit 1
+          fi
+          echo "Проектов к сборке: ${#projects[@]}"
+          for proj in "${projects[@]}"; do
+            echo "::group::build ${proj}"
+            dotnet build "${proj}" --configuration Debug --nologo
+            echo "::endgroup::"
+          done
+
+      - name: Тесты по проектам *Tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tests < <(find sources/Dotnet -name '*Tests.csproj' -o -name '*Tests.fsproj' | sort)
+          if [ "${#tests[@]}" -eq 0 ]; then
+            echo "Не найдено ни одного тест-проекта — проверь маску *Tests" >&2
+            exit 1
+          fi
+          echo "Тест-проектов: ${#tests[@]}"
+          for proj in "${tests[@]}"; do
+            echo "::group::test ${proj}"
+            dotnet test "${proj}" --configuration Debug --nologo
+            echo "::endgroup::"
+          done
+
+  # -------------------------------------------------------------------------
+  # 2. AssetConverter: cmake + ninja, затем ctest.
+  #    Тестам нужен CORSAIRS_REPO_ROOT — они читают реальные ассеты из Client/.
+  #    Свой --timeout здесь сознательно НЕ выставляем: первый набор идёт больше
+  #    двух минут, весь прогон около 180 секунд, и оборванный ctest даёт
+  #    ложный FAILED. Дефолта ctest (1500 c на тест) с запасом хватает.
+  # -------------------------------------------------------------------------
+  assetconverter:
+    name: AssetConverter — cmake + ctest
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, x64, corsairs]
+    timeout-minutes: 20
+    steps:
+      - name: Чекаут
+        uses: actions/checkout@v4
+
+      - name: Конфигурация cmake
+        run: >
+          cmake -S tools/AssetConverter -B tools/AssetConverter/build-linux
+          -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Сборка
+        run: cmake --build tools/AssetConverter/build-linux -- -j "$(nproc)"
+
+      - name: ctest
+        env:
+          CORSAIRS_REPO_ROOT: ${{ github.workspace }}
+        run: ctest --test-dir tools/AssetConverter/build-linux --output-on-failure
+
+  # -------------------------------------------------------------------------
+  # 3. GameServer: нативная сборка сервера.
+  #
+  #    JOB ИНФОРМАЦИОННАЯ — стоит continue-on-error: true. На сегодня в дереве
+  #    есть незакрытые проблемы портируемости под Linux, и сборка может падать
+  #    не по вине конкретного PR. Если снять флаг сейчас, CI станет красным
+  #    всегда, и его перестанут читать — вместе с двумя проверками выше, которые
+  #    приносят реальную пользу. Флаг снять (и сделать job блокирующей) после
+  #    закрытия задач по портированию.
+  #
+  #    Порядок шагов строгий. В репозитории закоммичены объектники LuaJIT,
+  #    собранные на macOS: без make clean линковка падает с
+  #    «host/minilua.o: file format not recognized». cmake требует именно
+  #    статическую libluajit.a. Чекаут перед каждым прогоном возвращает
+  #    macOS-объектники обратно, поэтому clean нужен каждый раз, а не однажды.
+  # -------------------------------------------------------------------------
+  gameserver:
+    name: GameServer — сборка (информационно)
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, x64, corsairs]
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Чекаут
+        uses: actions/checkout@v4
+
+      - name: LuaJIT — make clean (в дереве лежат объектники с macOS)
+        run: make -C sources/Libraries/LuaJIT clean
+
+      - name: LuaJIT — сборка под Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C sources/Libraries/LuaJIT -j "$(nproc)"
+          # cmake ниже линкуется именно со статической библиотекой.
+          test -f sources/Libraries/LuaJIT/src/libluajit.a
+          ls -l sources/Libraries/LuaJIT/src/libluajit.a
+
+      - name: Конфигурация cmake
+        run: >
+          cmake -S sources/Server/GameServer -B build-linux -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=gcc-14
+          -DCMAKE_CXX_COMPILER=g++-14
+
+      - name: Сборка
+        run: cmake --build build-linux -- -j "$(nproc)"
