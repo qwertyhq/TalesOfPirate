@@ -3,6 +3,7 @@
 
 #include "TestHarness.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 
