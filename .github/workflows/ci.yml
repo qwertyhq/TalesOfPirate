@@ -102,9 +102,10 @@ jobs:
   # -------------------------------------------------------------------------
   # 2. AssetConverter: cmake + ninja, затем ctest.
   #    Тестам нужен CORSAIRS_REPO_ROOT — они читают реальные ассеты из Client/.
-  #    Свой --timeout здесь сознательно НЕ выставляем: первый набор идёт больше
-  #    двух минут, весь прогон около 180 секунд, и оборванный ctest даёт
-  #    ложный FAILED. Дефолта ctest (1500 c на тест) с запасом хватает.
+  #    Свой --timeout здесь сознательно НЕ выставляем: оборванный ctest даёт
+  #    ложный FAILED. Дефолта ctest (1500 c на тест) с запасом хватает —
+  #    замерено на раннере: 4 набора, весь прогон 59 c, самый долгий
+  #    (TerrainPageBudget) 48 c.
   # -------------------------------------------------------------------------
   assetconverter:
     name: AssetConverter — cmake + ctest
@@ -123,10 +124,22 @@ jobs:
       - name: Сборка
         run: cmake --build tools/AssetConverter/build-linux -- -j "$(nproc)"
 
+      # TMPDIR — не косметика. Тесты кладут временные файлы в
+      # std::filesystem::temp_directory_path() / "corsairs-*-tests". На общем
+      # /tmp эти каталоги остаются от того, кто запустил тесты руками первым:
+      # если их создал юзер agent (drwxrwxr-x agent:agent), то ci-runner уже не
+      # может создать внутри подкаталог, и тесты падают с
+      # «filesystem error: cannot create directories: Permission denied
+      # [/tmp/corsairs-gltf-tests/...]». Свой TMPDIR на прогон снимает вопрос
+      # навсегда: каталог принадлежит ci-runner и чистится вместе с job.
       - name: ctest
         env:
           CORSAIRS_REPO_ROOT: ${{ github.workspace }}
-        run: ctest --test-dir tools/AssetConverter/build-linux --output-on-failure
+          TMPDIR: ${{ runner.temp }}/actest-tmp
+        run: |
+          set -euo pipefail
+          mkdir -p "${TMPDIR}"
+          ctest --test-dir tools/AssetConverter/build-linux --output-on-failure
 
   # -------------------------------------------------------------------------
   # 3. GameServer: нативная сборка сервера.
