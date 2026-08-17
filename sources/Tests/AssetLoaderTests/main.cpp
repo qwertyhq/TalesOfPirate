@@ -36,6 +36,8 @@
 //                      Файлы с trailer-warning, load-fail, save-fail и
 //                      round-trip-diff остаются на диске.
 
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <Windows.h>
 
 #include <algorithm>

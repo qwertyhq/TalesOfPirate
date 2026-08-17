@@ -95,7 +95,7 @@ std::vector<std::uint8_t> PlayerMapMask::SerializeLegacyWire(std::string_view ma
 
     std::vector<std::uint8_t> buf(kHeaderSize + map->Bits.size(), std::uint8_t{0});
 
-    const auto nameCopyLen = std::min(map->Name.size(), kNameLen - 1);
+    const auto nameCopyLen = (std::min)(map->Name.size(), kNameLen - 1);
     std::memcpy(buf.data(), map->Name.data(), nameCopyLen);
 
     auto writeI32 = [&](std::size_t offset, std::int32_t value) {
